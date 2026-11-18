@@ -74,6 +74,10 @@ export async function run(bytes) {
   } catch (e) {
     if (e instanceof Halt) return { stdout: stdout(), code: e.code };
     if (e instanceof RunnerError) throw e;
+    if (e instanceof RangeError) {
+      out.push(Buffer.from("Runtime error 202\n"));
+      return { stdout: stdout(), code: 202 };
+    }
     if (e instanceof WebAssembly.RuntimeError) throw fail(`trap: ${e.message}`);
     throw e;
   }

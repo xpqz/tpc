@@ -41,6 +41,7 @@ defines a "distinct 'not supported' error" but no numbers.
 | Typed and untyped files (`file of T`, `file`) | "not supported" error (number TBD) |
 | `Seg`, `Ofs`, `Ptr` | "not supported" error (number TBD) |
 | Binary `.TPU` | "not supported" error (number TBD) |
+| Untyped `var` parameters (`procedure P(var a)`) | error 200 "Feature not supported" |
 | `Chain`, `Execute` | "not supported" error (number TBD) |
 
 Error numbers and wording for omitted features are an open item for the Phase 1

@@ -300,9 +300,7 @@ impl Parser {
         if self.sym(b"(") {
             let mut list = Vec::new();
             loop {
-                if self.is(Tk::Kw, b"VAR") {
-                    return Err(self.err(200));
-                }
+                let byref = self.kw(b"VAR");
                 let mut names = Vec::new();
                 loop {
                     let (line, col) = self.pos();
@@ -311,10 +309,13 @@ impl Parser {
                         break;
                     }
                 }
+                if byref && !self.is(Tk::Sym, b":") {
+                    return Err(self.err(200));
+                }
                 self.expect_sym(b":", 86)?;
                 let ty = self.type_name()?;
                 for (name, line, col) in names {
-                    list.push(self.ast.add(Kind::Param(name, ty), line, col));
+                    list.push(self.ast.add(Kind::Param(name, ty, byref), line, col));
                 }
                 if !self.sym(b";") {
                     break;
@@ -541,6 +542,9 @@ impl Parser {
                 self.at += 1;
                 let e = self.expr()?;
                 self.expect_sym(b")", 89)?;
+                if matches!(self.ast.nodes[e as usize].kind, Kind::Name(_)) {
+                    return Ok(self.ast.add(Kind::Paren(e), line, col));
+                }
                 return Ok(e);
             }
             Tk::Kw if t.text == b"NOT" => {

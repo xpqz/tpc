@@ -48,6 +48,8 @@ pub enum Kind {
     Call(Id, List),
     /// A checked call of the routine with that index; the type is the result type.
     Invoke(u32, List),
+    /// A parenthesised name: not a variable reference for a `var` argument.
+    Paren(Id),
     Exit,
     /// The result variable of the function being compiled.
     Result,
@@ -84,8 +86,8 @@ pub enum Kind {
     /// Name, parameter list (None when omitted), result type name (`NO_NAME` when
     /// omitted), function, block (None for `forward`). Stamped after the header.
     Routine(u32, Option<List>, u32, bool, Option<Id>),
-    /// Parameter name, type name.
-    Param(u32, u32),
+    /// Parameter name, type name, passed by reference (`var`).
+    Param(u32, u32, bool),
     /// Declarations and body, stamped where the declarations start.
     Block(List, Id),
     /// Variable name, type name.

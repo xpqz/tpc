@@ -13,7 +13,10 @@ filled. Section 4.8 does not exist in the plan and is not defined here.
 | after static | Heap, grows up (`HeapPtr`, `HeapEnd`) |
 | top of memory | Shadow stack, grows down |
 
-- WASM global 0 is `sp` (mutable i32).
+- WASM global 0 is `sp` (mutable i32), always exported as `sp`.
+- The shadow stack may use the top 64 KB (`1,048,576 - 65,536` is the limit, TP5's maximum
+  `{$M}` stack). A prologue that would put `fp` below the limit raises runtime error 202.
+  A frame is the only thing that consumes shadow stack.
 - Memory is 1 MB to start.
 - The runtime may call `memory.grow` when the heap is exhausted. Runtime error 203 is
   raised when growth fails.
@@ -72,6 +75,11 @@ epilogue:  sp = fp + framesize
   hidden `result_ptr` that the caller supplies.
 - Every routine body is wrapped as `block $exit ... end` followed by the epilogue.
 - `Exit` is `br` to that outer block, so the epilogue always runs.
+- Frame layout: slots in declaration order (address-taken locals and value parameters passed
+  as `var` arguments; value parameters are copied in after the prologue), no padding. The
+  static link slot, when it exists, comes first and shifts the others by 4.
+- `var` parameter: an i32 address held in its WASM local; reads and writes use the
+  parameter type's width and sign.
 - `Halt` calls `host.halt`.
 - Invariant (ABI suite): `sp` at program end equals its initial value.
 
@@ -145,6 +153,8 @@ Compiler API exported from `compiler.wasm` (`plan.md` §3): `alloc(n) -> ptr`,
   `halt(code)`. fpc writes to stderr; TP5 writes to the console.
 - Exit codes: program code when output matches (or none is expected), 1 on output mismatch,
   2 on runner error (stderr prefix `run.mjs:`). A program `halt(2)` is indistinguishable by code.
+- A host `RangeError` (engine stack exhausted by recursion in routines without a frame) is
+  reported as `Runtime error 202`, exit code 202, the same as the shadow-stack overflow.
 - Imports other than `write`, `halt` and `rterror` are stubs that fail with
   `host import X not available in test runner`; unknown imports fail instantiation.
 
@@ -159,6 +169,7 @@ Compiler API exported from `compiler.wasm` (`plan.md` §3): `alloc(n) -> ptr`,
 | 106 | invalid numeric format |
 | 200 | divide by zero |
 | 201 | range check |
+| 202 | stack overflow |
 | 203 | heap overflow |
 | 204 | invalid pointer operation |
 

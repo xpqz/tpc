@@ -52,6 +52,10 @@ pub enum SymKind {
     Var,
     /// `val` is the index of the local; parameters and the result come first.
     Local,
+    /// A local that lives in the frame; `val` is its offset from `fp`.
+    Frame,
+    /// A `var` parameter; `val` is the index of the local holding the address.
+    Ref,
     /// `val` is the index into the routine table.
     Routine,
     /// Write 0, WriteLn 1, Ord 2, Chr 3, Succ 4, Pred 5, Odd 6, Abs 7, Sqr 8, Exit 9.
@@ -63,11 +67,26 @@ pub struct Symbol {
     pub kind: SymKind,
     pub ty: Ty,
     pub val: i64,
+    /// Passed as a `var` argument; such a local moves to the frame once its routine is checked.
+    pub taken: bool,
+}
+
+impl Symbol {
+    pub fn new(kind: SymKind, ty: Ty, val: i64) -> Self {
+        Symbol {
+            kind,
+            ty,
+            val,
+            taken: false,
+        }
+    }
 }
 
 /// A declared procedure or function.
 pub struct Routine {
     pub params: Vec<Ty>,
+    /// Per parameter: passed by reference.
+    pub byref: Vec<bool>,
     pub names: Vec<u32>,
     /// `Ty::NONE` for a procedure.
     pub result: Ty,
@@ -77,6 +96,10 @@ pub struct Routine {
     pub body: Id,
     /// Locals after the parameters, the function result included.
     pub nlocals: u32,
+    /// Frame size in bytes; 0 when no variable lives in memory.
+    pub frame: u32,
+    /// Value parameters moved to the frame: (parameter local, offset, type).
+    pub copies: Vec<(u32, u32, Ty)>,
 }
 
 pub struct Types {
