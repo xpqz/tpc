@@ -119,3 +119,109 @@ begin
   if i < 1 then i := 1;
   StrInsert := Copy(s, 1, i - 1) + src + Copy(s, i, 255)
 end;
+
+{ Heap (decision 18): from HeapOrg up to the stack limit, 8-byte blocks. HeapOrg and HeapPtr are
+  adjacent and both set to the end of static data by the compiler. A free block holds its size
+  and the address of the next free block; the list is first-fit and unordered. }
+const HeapLimit = 983040;
+type PLong = ^LongInt;
+var HeapOrg, HeapPtr, FreeList: LongInt;
+
+procedure HeapUnlink(prev, next: LongInt);
+begin
+  if prev = 0 then FreeList := next else PLong(prev + 4)^ := next
+end;
+
+function HeapSize(n: LongInt): LongInt;
+begin
+  n := (n + 7) and -8;
+  if n = 0 then n := 8;
+  HeapSize := n
+end;
+
+{ New and GetMem. }
+function HeapGet(n: LongInt): Pointer;
+var cur, prev: LongInt;
+begin
+  n := HeapSize(n);
+  prev := 0;
+  cur := FreeList;
+  while cur <> 0 do
+  begin
+    if PLong(cur)^ >= n then
+    begin
+      if PLong(cur)^ > n then
+      begin
+        PLong(cur + n)^ := PLong(cur)^ - n;
+        PLong(cur + n + 4)^ := PLong(cur + 4)^;
+        HeapUnlink(prev, cur + n)
+      end
+      else HeapUnlink(prev, PLong(cur + 4)^);
+      HeapGet := Pointer(cur);
+      Exit
+    end;
+    prev := cur;
+    cur := PLong(cur + 4)^
+  end;
+  if HeapLimit - HeapPtr < n then RunError(203);
+  HeapGet := Pointer(HeapPtr);
+  HeapPtr := HeapPtr + n
+end;
+
+{ Dispose and FreeMem: nil, addresses outside the used heap and misaligned ones are error 204. }
+procedure HeapPut(p: Pointer; n: LongInt);
+var a: LongInt;
+begin
+  a := LongInt(p);
+  n := HeapSize(n);
+  if (a < HeapOrg) or (a + n > HeapPtr) or (((a - HeapOrg) and 7) <> 0) then RunError(204);
+  PLong(a)^ := n;
+  PLong(a + 4)^ := FreeList;
+  FreeList := a
+end;
+
+function HeapMark: Pointer;
+begin
+  HeapMark := Pointer(HeapPtr)
+end;
+
+{ Resets the bump pointer and drops the free blocks above the mark. }
+procedure HeapRelease(p: Pointer);
+var mark, cur, prev: LongInt;
+begin
+  mark := LongInt(p);
+  HeapPtr := mark;
+  prev := 0;
+  cur := FreeList;
+  while cur <> 0 do
+  begin
+    if cur >= mark then HeapUnlink(prev, PLong(cur + 4)^) else prev := cur;
+    cur := PLong(cur + 4)^
+  end
+end;
+
+function MemAvail: LongInt;
+var cur, n: LongInt;
+begin
+  n := HeapLimit - HeapPtr;
+  cur := FreeList;
+  while cur <> 0 do
+  begin
+    n := n + PLong(cur)^;
+    cur := PLong(cur + 4)^
+  end;
+  MemAvail := n
+end;
+
+function MaxAvail: LongInt;
+var cur, n: LongInt;
+begin
+  n := HeapLimit - HeapPtr;
+  cur := FreeList;
+  while cur <> 0 do
+  begin
+    if PLong(cur)^ > n then n := PLong(cur)^;
+    cur := PLong(cur + 4)^
+  end;
+  MaxAvail := n
+end;

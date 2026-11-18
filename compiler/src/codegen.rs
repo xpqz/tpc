@@ -204,6 +204,9 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
     m.export("memory", MEM, 0);
     m.data(HEADER, b"\n FALSETRUE");
     m.data(info.data_end, &layout.lits);
+    // The heap starts, 8-aligned, after the literals: `HeapOrg` and `HeapPtr` both hold it.
+    let start = ((info.data_end + layout.lits.len() as u32 + 7) & !7).to_le_bytes();
+    m.data(info.heap, &[start, start].concat());
     m.finish()
 }
 
@@ -594,6 +597,10 @@ impl Gen<'_> {
                 let s = self.symbol(e);
                 self.base(s)
             }
+            Kind::Deref(p) => {
+                self.expr(p);
+                0
+            }
             Kind::Field(base, offset) => self.addr(base) + offset,
             Kind::Index(base, index, _) => {
                 let offset = self.addr(base);
@@ -782,6 +789,10 @@ impl Gen<'_> {
                 self.invoke(r, args);
             }
             Kind::Indirect(callee, args) => self.indirect(callee, args),
+            Kind::RunErr(code) => {
+                self.expr(code);
+                self.code.idx(CALL, HOST_RTERROR);
+            }
             Kind::Exit => {
                 self.code.br(self.exit);
             }
@@ -946,7 +957,8 @@ impl Gen<'_> {
             Kind::IntLit(v) => {
                 self.code.i32_const(v as i32);
             }
-            Kind::Var(_) | Kind::Index(..) | Kind::Field(..) => self.get(e),
+            Kind::Var(_) | Kind::Index(..) | Kind::Field(..) | Kind::Deref(_) => self.get(e),
+            Kind::AddrOf(a) => self.address_of(a),
             Kind::ProcRef(r) => {
                 self.code.i32_const(self.layout.slots[r as usize] as i32);
             }

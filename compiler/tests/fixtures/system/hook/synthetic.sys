@@ -30,3 +30,18 @@ function StrInsert(src, s: String; i: Integer): String;
 begin
   StrInsert := s
 end;
+var HeapOrg, HeapPtr: LongInt;
+function HeapGet(n: LongInt): Pointer;
+begin
+  HeapGet := nil
+end;
+procedure HeapPut(p: Pointer; n: LongInt);
+begin
+end;
+function HeapMark: Pointer;
+begin
+  HeapMark := nil
+end;
+procedure HeapRelease(p: Pointer);
+begin
+end;

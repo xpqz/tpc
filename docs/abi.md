@@ -10,7 +10,7 @@ filled. Section 4.8 does not exist in the plan and is not defined here.
 |---|---|
 | `0 .. 255` | Reserved (null guard, scratch) |
 | `256 ..` | Static data: typed constants, string literals, globals |
-| after static | Heap, grows up (`HeapPtr`, `HeapEnd`) |
+| after static | Heap, grows up (`HeapPtr`, limit 983,040) |
 | top of memory | Shadow stack, grows down |
 
 - WASM global 0 is `sp` (mutable i32), always exported as `sp`.
@@ -18,8 +18,12 @@ filled. Section 4.8 does not exist in the plan and is not defined here.
   `{$M}` stack). A prologue that would put `fp` below the limit raises runtime error 202.
   A frame is the only thing that consumes shadow stack.
 - Memory is 1 MB to start.
-- The runtime may call `memory.grow` when the heap is exhausted. Runtime error 203 is
-  raised when growth fails.
+- The heap is fixed (decision 18): from the end of static data, rounded up to 8, to the stack
+  limit (983,040); there is no `memory.grow`. Runtime error 203 is raised when a block does
+  not fit. System holds `HeapOrg`, `HeapPtr` (bump pointer) and `FreeList` as Pascal globals;
+  the compiler writes the heap origin into `HeapOrg` and `HeapPtr` (adjacent) in the data
+  segment. Blocks are multiples of 8 bytes; a free block stores its size and the next free
+  block's address.
 - `nil` is 0; pointers are 32-bit offsets into linear memory.
 
 ## 2. Type layout
@@ -254,8 +258,7 @@ Measurements use Free Pascal 3.2.2 (aarch64, macOS) with `fpc -Mtp -v0`, program
     unspecified.
 14. **Table layout beyond index 0.** Whether the element section assigns indices in
     declaration order or by address-taken order; not specified.
-15. **Heap helper contracts** (`HeapPtr`, `HeapEnd` as Pascal globals in `System` or WASM
-    globals?). §4.1 names them in the memory map only; WASM global 0 is the only global
-    defined.
+15. **Heap helper contracts.** Settled: Pascal globals in `System` (`HeapOrg`, `HeapPtr`,
+    `FreeList`) and the helpers `HeapGet`, `HeapPut`, `HeapMark`, `HeapRelease` bound by handle.
 16. **`{$R}` default.** Plan lists `{$R}` as supported but not whether the default is `+` or
     `-`. TP default is `{$R-}`; assumed, to be confirmed.

@@ -14,6 +14,8 @@ impl Ty {
     pub const LONGINT: Ty = Ty(6);
     pub const BOOLEAN: Ty = Ty(7);
     pub const CHAR: Ty = Ty(8);
+    /// The untyped `Pointer`, also the type of `nil` and `@x`.
+    pub const POINTER: Ty = Ty(9);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -35,6 +37,8 @@ pub enum Type {
         params: Vec<(Ty, bool)>,
         result: Ty,
     },
+    /// A pointer to the type (`Ty::NONE` for the untyped `Pointer`): 4 bytes, unsigned.
+    Ptr(Ty),
     /// One dimension; `a[i, j]` is an array of arrays. `size` saturates at u32::MAX.
     Array {
         index: Ty,
@@ -169,6 +173,7 @@ impl Types {
                 ord(-(1 << 31), (1 << 31) - 1, 4, true, Tag::Int, 6),
                 ord(0, 1, 1, false, Tag::Bool, 7),
                 ord(0, 255, 1, false, Tag::Char, 8),
+                Type::Ptr(Ty::NONE),
             ],
         }
     }
@@ -185,7 +190,7 @@ impl Types {
         match &self.v[t.0 as usize] {
             Type::Array { size, .. } | Type::Record { size, .. } => *size,
             Type::Str(n) => *n as u32 + 1,
-            Type::Proc { .. } => 4,
+            Type::Proc { .. } | Type::Ptr(_) => 4,
             Type::Ord { size, .. } => *size as u32,
             Type::None => 0,
         }
@@ -197,6 +202,24 @@ impl Types {
             self.v[t.0 as usize],
             Type::Array { .. } | Type::Record { .. }
         )
+    }
+
+    pub fn is_ptr(&self, t: Ty) -> bool {
+        matches!(self.v[t.0 as usize], Type::Ptr(_))
+    }
+
+    /// A new pointer type to `to`.
+    pub fn pointer(&mut self, to: Ty) -> Ty {
+        self.v.push(Type::Ptr(to));
+        Ty(self.v.len() as u32 - 1)
+    }
+
+    /// What a pointer type points to (`Ty::NONE` for `Pointer`).
+    pub fn target(&self, t: Ty) -> Option<Ty> {
+        match self.v[t.0 as usize] {
+            Type::Ptr(to) => Some(to),
+            _ => None,
+        }
     }
 
     pub fn is_str(&self, t: Ty) -> bool {
@@ -268,11 +291,14 @@ impl Types {
         }
     }
 
-    /// Ordinal types of one family; enumerations must also be the same enumeration.
+    /// Ordinal types of one family (enumerations must also be the same enumeration), or
+    /// pointers of one type or with the untyped `Pointer`.
     pub fn compat(&self, a: Ty, b: Ty) -> bool {
         match (self.tag(a), self.tag(b)) {
             (Some(x), Some(y)) => x == y && (x != Tag::Enum || self.base(a) == self.base(b)),
-            _ => false,
+            _ => {
+                self.is_ptr(a) && self.is_ptr(b) && (a == b || a == Ty::POINTER || b == Ty::POINTER)
+            }
         }
     }
 
@@ -334,11 +360,11 @@ impl Types {
         }
     }
 
-    /// (lo, hi, size, signed) of an ordinal type; a procedural value is a 4-byte table
-    /// index loaded and stored like an unsigned ordinal.
+    /// (lo, hi, size, signed) of an ordinal type; a procedural value (a table index) and a
+    /// pointer are 4 bytes loaded and stored like an unsigned ordinal.
     pub fn ord(&self, t: Ty) -> (i64, i64, u8, bool) {
         match self.v[t.0 as usize] {
-            Type::Proc { .. } => (0, u32::MAX as i64, 4, false),
+            Type::Proc { .. } | Type::Ptr(_) => (0, u32::MAX as i64, 4, false),
             Type::Ord {
                 lo,
                 hi,
@@ -377,6 +403,13 @@ impl Types {
     pub fn binary(&self, op: Op, a: Ty, b: Ty) -> Result<Ty, u16> {
         if self.is_agg(a) || self.is_agg(b) {
             return Err(41);
+        }
+        if self.is_ptr(a) || self.is_ptr(b) {
+            return match (self.compat(a, b), op) {
+                (false, _) => Err(26),
+                (_, Op::Eq | Op::Ne) => Ok(Ty::BOOLEAN),
+                _ => Err(41),
+            };
         }
         let text = |t: Ty| self.is_str(t) || self.tag(t) == Some(Tag::Char);
         let compare = matches!(op, Op::Eq | Op::Ne | Op::Lt | Op::Gt | Op::Le | Op::Ge);

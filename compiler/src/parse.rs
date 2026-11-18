@@ -376,6 +376,16 @@ impl Parser {
     fn type_spec(&mut self) -> R<Id> {
         let (line, col) = self.pos();
         let func = self.is(Tk::Kw, b"FUNCTION");
+        // `^T` with a one-letter name is lexed as a control character.
+        let ctrl = self.tok().kind == Tk::Ctrl && self.tok().text[0].is_ascii_alphabetic();
+        if ctrl || self.sym(b"^") {
+            let name = match ctrl {
+                true => self.ast.intern(&self.toks[self.at].text),
+                false => self.type_name()?,
+            };
+            self.at += ctrl as usize;
+            return Ok(self.ast.add(Kind::PtrType(name), line, col));
+        }
         if self.sym(b"(") {
             let mut names = Vec::new();
             loop {
@@ -643,6 +653,8 @@ impl Parser {
                     }
                 }
                 self.expect_sym(b"]", 93)?;
+            } else if self.sym(b"^") {
+                e = self.ast.add(Kind::Deref(e), line, col);
             } else if self.sym(b".") {
                 if self.tok().kind != Tk::Ident {
                     return Err(self.err(44));
@@ -684,7 +696,15 @@ impl Parser {
                 return Err(self.err(91));
             }
             let list = self.ast.list(&args);
-            return Ok(Some(self.ast.add(Kind::Call(target, list), at.0, at.1)));
+            let call = self.ast.add(Kind::Call(target, list), at.0, at.1);
+            if self.is(Tk::Sym, b"^") {
+                // A typecast designator: `T(x)^ := v`.
+                let target = self.selectors(call)?;
+                self.expect_sym(b":=", 113)?;
+                let value = self.expr()?;
+                return Ok(Some(self.after(Kind::Assign(target, value))));
+            }
+            return Ok(Some(call));
         }
         if self.kw(b"BEGIN") {
             return self.compound().map(Some);
@@ -778,7 +798,12 @@ impl Parser {
                 }
                 let (args, at) = self.arguments()?;
                 let list = self.ast.list(&args);
-                return Ok(self.ast.add(Kind::Call(callee, list), at.0, at.1));
+                let call = self.ast.add(Kind::Call(callee, list), at.0, at.1);
+                return if self.is(Tk::Sym, b"^") {
+                    self.selectors(call)
+                } else {
+                    Ok(call)
+                };
             }
             Tk::IntLit if t.int > i32::MAX as i64 => return Err(self.err(7)),
             Tk::IntLit => {
@@ -813,6 +838,12 @@ impl Parser {
                 self.at += 1;
                 let e = self.factor()?;
                 return Ok(self.ast.add(Kind::AddrOf(e), line, col));
+            }
+            Tk::Kw if t.text == b"NIL" => {
+                self.at += 1;
+                let nil = self.ast.intern(b"NIL");
+                let e = self.ast.add(Kind::Name(nil), line, col);
+                return self.selectors(e);
             }
             Tk::Kw if t.text == b"NOT" => {
                 self.at += 1;

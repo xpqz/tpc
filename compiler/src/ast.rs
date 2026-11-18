@@ -53,8 +53,14 @@ pub enum Kind {
     /// A call through the procedural value of the node, with arguments; the type is the
     /// result type.
     Indirect(Id, List),
-    /// `@x`; always an error for now.
+    /// `@x`: the address of a variable.
     AddrOf(Id),
+    /// `p^`.
+    Deref(Id),
+    /// `^name` in a type position.
+    PtrType(u32),
+    /// `RunError(code)`.
+    RunErr(Id),
     /// A parenthesised name: not a variable reference for a `var` argument.
     Paren(Id),
     Exit,
