@@ -28,6 +28,8 @@ const RUN: &[(&str, &str, &str)] = &[
     ("writeln_empty_string", "program B; begin WriteLn(''); Write('') end.", "\n"),
     ("empty_body", "program E; begin end.", ""),
     ("write_empty_string_only", "program Z; begin Write('') end.", ""),
+    ("header_input_output", "program P(Input, Output); begin WriteLn('p') end.", "p\n"),
+    ("header_output", "program P(Output); begin WriteLn('q') end.", "q\n"),
     ("no_header", "begin WriteLn('x') end.", "x\n"),
     ("begin_end_only", "begin end.", ""),
     (
