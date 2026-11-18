@@ -21,7 +21,6 @@ array_sieve_of_eratosthenes
 array_three_dim
 array_types_of_each_element
 boolean_array_flags_and_enum_counts
-char_ord_chr_succ_pred
 enum_as_array_index_and_const
 enum_byte_sized_in_records
 enum_case_selector
