@@ -120,6 +120,8 @@ pub struct Ast {
     /// Interned identifiers, uppercase.
     pub names: Vec<Vec<u8>>,
     pub strs: Vec<Vec<u8>>,
+    /// Number of leading declarations of the program that come from System.
+    pub system: usize,
 }
 
 impl Ast {

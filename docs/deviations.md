@@ -45,3 +45,9 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
 | D11 | `{$F+}` for procedural values | A routine can be assigned to a procedural variable or passed as a procedural argument only if it was declared under `{$F+}`; otherwise error 143 | `{$F+}` and `{$F-}` are accepted and ignored; every global routine can be assigned | Accepts programs TP5 rejects; no valid TP5 program changes meaning. Any other directive is error 200 until the directives phase |
+
+## System unit (Phase 3)
+
+| # | Deviation | TP5 | This compiler | Notes |
+|---|---|---|---|---|
+| D12 | Names of implicit System helpers are visible | `AbsLong` is not a declared identifier (error 3) | `AbsLong`, the helper `Abs` calls, is a System routine a program can call or redeclare | Only a program using an undeclared identifier of that name changes (accepted instead of 3); redeclaring it never affects `Abs` (decision 11) |
