@@ -1,0 +1,4 @@
+n=3 avg=33
+n=2 avg=50
+n=1 avg=100
+n=0 avg=Runtime error 200

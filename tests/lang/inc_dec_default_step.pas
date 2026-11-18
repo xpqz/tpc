@@ -1,0 +1,41 @@
+program IncDec;
+var i: Integer; l: LongInt; b: Byte; c: Char; w: Word; sh: ShortInt;
+begin
+  i := 5;
+  Inc(i);
+  Inc(i);
+  Dec(i);
+  WriteLn(i);
+  i := -1;
+  Inc(i);
+  WriteLn(i);
+  Dec(i);
+  Dec(i);
+  WriteLn(i);
+  l := 2147483646;
+  Inc(l);
+  WriteLn(l);
+  l := -100000;
+  Dec(l);
+  WriteLn(l);
+  b := 254;
+  Inc(b);
+  WriteLn(b);
+  b := 1;
+  Dec(b);
+  WriteLn(b);
+  c := 'a';
+  Inc(c);
+  WriteLn(c);
+  Dec(c);
+  Dec(c);
+  WriteLn(c);
+  w := 0;
+  Dec(w);
+  WriteLn(w);
+  Inc(w);
+  WriteLn(w);
+  sh := 127;
+  Dec(sh);
+  WriteLn(sh)
+end.

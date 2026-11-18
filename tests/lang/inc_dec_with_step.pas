@@ -1,0 +1,44 @@
+program IncDecStep;
+var i, k: Integer; l: LongInt; b: Byte; c: Char; w: Word;
+begin
+  i := 10;
+  Inc(i, 5);
+  WriteLn(i);
+  Dec(i, 20);
+  WriteLn(i);
+  Inc(i, -3);
+  WriteLn(i);
+  Dec(i, -3);
+  WriteLn(i);
+  k := 7;
+  Inc(i, k * 2);
+  WriteLn(i);
+  Inc(i, 0);
+  WriteLn(i);
+  l := 100000;
+  Inc(l, 100000);
+  WriteLn(l);
+  Dec(l, 300000);
+  WriteLn(l);
+  Inc(l, i);
+  WriteLn(l);
+  b := 250;
+  Inc(b, 10);
+  WriteLn(b);
+  Dec(b, 20);
+  WriteLn(b);
+  c := 'A';
+  Inc(c, 25);
+  WriteLn(c);
+  Dec(c, 25);
+  WriteLn(c);
+  w := 65000;
+  Inc(w, 1000);
+  WriteLn(w);
+  i := 32767;
+  Inc(i, 2);
+  WriteLn(i);
+  i := -32768;
+  Dec(i, 3);
+  WriteLn(i)
+end.

@@ -1,4 +1,4 @@
-//! Batch drivers for tests/lang and tests/neg (decision 7). Each returns one message per
+//! Batch drivers for tests/lang, tests/rt and tests/neg (decision 7). Each returns one message per
 //! failing program so a run reports every failure.
 #![allow(dead_code)]
 use crate::common::CALL;
@@ -158,6 +158,38 @@ pub fn check_lang(dir: &Path, compile: Compile) -> Vec<String> {
             .output()
             .expect("node must be installed");
         expect_ok(&res(o), "run")
+    })
+}
+
+/// Every `STEM.pas` compiles and runs under tests/run.mjs, prints exactly `STEM.out` and
+/// exits with the code N of the final `Runtime error N` line of `STEM.out`.
+pub fn check_rt(dir: &Path, compile: Compile) -> Vec<String> {
+    sweep(dir, &|stem| {
+        let out = dir.join(format!("{stem}.out"));
+        let text =
+            std::fs::read_to_string(&out).map_err(|e| format!("cannot read {stem}.out: {e}"))?;
+        let want: i32 = text
+            .lines()
+            .last()
+            .and_then(|l| l.strip_prefix("Runtime error "))
+            .and_then(|n| n.parse().ok())
+            .ok_or("last line of .out is not `Runtime error N`")?;
+        let wasm = scratch(&format!("{stem}.wasm"));
+        expect_ok(&compile(&dir.join(format!("{stem}.pas")), &wasm), "compile")?;
+        let o = Command::new("node")
+            .arg(root().join("tests/run.mjs"))
+            .arg(&wasm)
+            .arg(&out)
+            .output()
+            .expect("node must be installed");
+        match res(o) {
+            r if r.code == want => Ok(()),
+            r => Err(format!(
+                "run exited {}, want {want}: {}",
+                r.code,
+                r.stderr.trim()
+            )),
+        }
     })
 }
 
