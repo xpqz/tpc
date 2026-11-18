@@ -93,3 +93,13 @@ reports errors as `NAME.pas(LINE,COL): Error N: MESSAGE` on stderr, exit code 1.
 The Phase 1 exit test "sieve" needs arrays, which arrive in Phase 3; it moves to the
 Phase 3 exit tests. Phase 1 uses a trial-division prime listing instead.
 **Reason.** Test-first corpus without blocking on later phases; arrays are Phase 3 scope.
+
+## 8. Front-end contract
+
+**Decision.** `docs/design/ast.md`: one `Vec<Node>` arena with `u32` handles and child
+lists as ranges into a shared `Vec<u32>`; the checker resolves names in place, sets
+`Node::ty`, and inserts only `IntToReal` / `CharToStr` conversion nodes by returning a
+(possibly new) handle that the caller stores; integers stay normalised i32 so widening
+needs no node and narrowing is driven by `ty` in codegen.
+**Reason.** Smallest design meeting plan §8 (arenas, no Box/Rc, no IR) and §4.6.
+**Rejected.** A separate typed IR (lines); coercion nodes for every widening (no-ops).
