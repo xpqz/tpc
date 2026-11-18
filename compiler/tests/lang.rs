@@ -12,7 +12,10 @@ fn has(fails: &[String], parts: &[&str]) -> bool {
 
 #[test]
 fn corpus_has_no_unexpected_results() {
-    let fails = check_lang(&root().join("tests/lang"), &real_compile);
+    let fails: Vec<String> = ["lang", "abi"]
+        .iter()
+        .flat_map(|d| check_lang(&root().join("tests").join(d), &real_compile))
+        .collect();
     assert!(fails.is_empty(), "{}", fails.join("\n"));
 }
 

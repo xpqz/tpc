@@ -66,8 +66,11 @@ export async function run(bytes) {
   }
   const instance = await WebAssembly.instantiate(module, { host });
   memory = instance.exports.memory;
+  const sp = instance.exports.sp;
+  const sp0 = sp?.value;
   try {
     instance.exports.main();
+    if (sp && sp.value !== sp0) throw fail(`sp not restored: ${sp0} before main, ${sp.value} after`);
   } catch (e) {
     if (e instanceof Halt) return { stdout: stdout(), code: e.code };
     if (e instanceof RunnerError) throw e;
