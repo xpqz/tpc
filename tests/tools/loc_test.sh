@@ -85,6 +85,14 @@ L="$FX/literals"
 check "literals: comment openers inside strings do not start comments" "$L" "$BUD/literals.txt" 0 \
     "Rust: 6 / 100" "Pascal: 8 / 100" "JS: 4 / 100" "total: 18 / 300"
 
+# Rust lexing: lifetimes versus char literals, nested block comments, raw strings.
+check "rust: lifetimes and char literals are code" "$FX" "$BUD/rustlex.txt" 0 \
+    "Lifetimes: 9 / 100" "Nested: 2 / 100" "Raw: 5 / 100" "total: 16 / 300"
+
+# A {$...} directive line right after a multi-line comment closed on the previous line counts.
+check "pascal: directive after multi-line comment" "$FX" "$BUD/pasdir.txt" 0 \
+    "Directive: 4 / 100" "total: 4 / 100"
+
 # Rust is counted after rustfmt (max_width = 100); the source file is left untouched.
 # unformatted.rs formats to 25 counted lines (pick 7, two 4, wide 11, lead 3); its raw
 # non-comment line count is 4, so a counter that skips formatting cannot pass.
@@ -99,7 +107,7 @@ else fail "fmt: source file not modified" "$before -> $after"; fi
 
 # Fixture precondition: the 'formatted' Rust fixtures are already rustfmt-clean.
 if rustfmt --check --edition 2021 --config max_width=100 \
-    "$C/rs/a.rs" "$C/rs/nested/b.rs" "$C/rs/nested/only_comments.rs" "$L/l.rs" >/dev/null 2>&1
+    "$C/rs/a.rs" "$C/rs/nested/b.rs" "$C/rs/nested/only_comments.rs" "$L/l.rs" "$FX"/rustlex/*.rs >/dev/null 2>&1
 then pass "fixtures: formatted Rust is rustfmt-clean"
 else fail "fixtures: formatted Rust is rustfmt-clean" "rustfmt --check failed"; fi
 

@@ -1,0 +1,2 @@
+Directive|100|pasdir
+TOTAL|100
