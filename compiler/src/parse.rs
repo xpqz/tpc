@@ -278,11 +278,18 @@ impl Parser {
         self.ast.add(kind, line, col)
     }
 
-    /// A type name; `String` is not supported yet.
-    fn type_name(&mut self) -> R<u32> {
-        if self.is(Tk::Kw, b"STRING") {
+    /// Error 200 at the lookahead if it is one of the omitted keywords `words`.
+    fn unsupported(&self, words: &[&[u8]]) -> R<()> {
+        let t = self.tok();
+        if t.kind == Tk::Kw && words.contains(&&t.text[..]) {
             return Err(self.err(200));
         }
+        Ok(())
+    }
+
+    /// A type name; `String` is not supported yet.
+    fn type_name(&mut self) -> R<u32> {
+        self.unsupported(&[b"STRING", b"FILE"])?;
         self.ident()
     }
 
@@ -325,6 +332,7 @@ impl Parser {
         let placeholder = Kind::Compound(self.ast.list(&[]));
         let id = self.after(placeholder);
         self.expect_sym(b";", 85)?;
+        self.unsupported(&[b"INLINE", b"INTERRUPT"])?;
         let block = if self.kw(b"FORWARD") {
             None
         } else {
@@ -367,6 +375,7 @@ impl Parser {
                     }
                     self.expect_sym(b":", 86)?;
                     let ty = self.type_name()?;
+                    self.unsupported(&[b"ABSOLUTE"])?;
                     self.expect_sym(b";", 85)?;
                     for (name, line, col) in names {
                         out.push(self.ast.add(Kind::VarDecl(name, ty), line, col));
@@ -379,6 +388,7 @@ impl Parser {
                 let func = self.toks[self.at - 1].text == b"FUNCTION";
                 out.push(self.routine(func)?);
             } else {
+                self.unsupported(&[b"LABEL"])?;
                 return Ok(out);
             }
         }
@@ -432,6 +442,7 @@ impl Parser {
         if t.kind == Tk::Kw && stops || self.is(Tk::Sym, b";") {
             return Ok(None);
         }
+        self.unsupported(&[b"GOTO", b"ASM", b"INLINE"])?;
         Err(self.err(113))
     }
 

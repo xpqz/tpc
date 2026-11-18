@@ -29,6 +29,9 @@ const PREDEFINED: &[(&[u8], SymKind, Ty, i64)] = &[
     (b"DOUBLE", SymKind::Omitted, Ty::NONE, 0),
     (b"EXTENDED", SymKind::Omitted, Ty::NONE, 0),
     (b"COMP", SymKind::Omitted, Ty::NONE, 0),
+    (b"SEG", SymKind::Omitted, Ty::NONE, 0),
+    (b"OFS", SymKind::Omitted, Ty::NONE, 0),
+    (b"PTR", SymKind::Omitted, Ty::NONE, 0),
     (b"FALSE", SymKind::Const, Ty::BOOLEAN, 0),
     (b"TRUE", SymKind::Const, Ty::BOOLEAN, 1),
     (b"WRITE", SymKind::Intrinsic, Ty::NONE, 0),
@@ -338,7 +341,11 @@ impl Cx<'_> {
 
     fn resolve(&self, id: Id, name: u32) -> R<(Sym, Symbol)> {
         let s = self.lookup(name).ok_or(self.err(id, 3))?;
-        Ok((s, self.syms[s.0 as usize]))
+        let sym = self.syms[s.0 as usize];
+        match sym.kind {
+            SymKind::Omitted => Err(self.err(id, 200)),
+            _ => Ok((s, sym)),
+        }
     }
 
     fn stmt(&mut self, id: Id) -> R<()> {
