@@ -1,1 +1,1 @@
-begin writeln('hi') end.
+begin nosuch end.

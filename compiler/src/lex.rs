@@ -265,6 +265,9 @@ pub fn lex(src: &[u8]) -> Result<Vec<Tok>, LexErr> {
             _ => Some(lx.symbol()?),
         };
         out.extend(tok);
+        if out.len() > 1 && out[out.len() - 2].text == b"END" && out[out.len() - 1].text == b"." {
+            break;
+        }
     }
     (lx.tl, lx.tc) = (lx.line, (lx.i - lx.ls + 1) as u32);
     out.push(lx.tok(Tk::Eof, Vec::new()));

@@ -1,1 +1,1 @@
-begin end.
+begin Foo end.

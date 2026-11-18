@@ -112,12 +112,12 @@ fn render_unknown_code_still_has_a_message() {
 }
 
 #[test]
-fn compile_without_front_end_reports_200_at_1_1() {
+fn compile_reports_diagnostic_position() {
     let want = Err(Diag {
-        code: 200,
+        code: 3,
         line: 1,
-        col: 1,
+        col: 7,
     });
-    assert_eq!(compile(b""), want);
-    assert_eq!(compile(b"program p; begin end."), want);
+    assert_eq!(compile(b"begin Foo end."), want);
+    assert!(compile(b"program p; begin end.").is_ok());
 }
