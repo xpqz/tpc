@@ -12,6 +12,8 @@ pub struct Info {
     pub routines: Vec<Routine>,
     /// First address after the globals.
     pub data_end: u32,
+    /// The routine index of System's `AbsLong`, which `Abs` calls.
+    pub abs: u32,
 }
 
 type R<T> = Result<T, Diag>;
@@ -88,14 +90,36 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
         let name = cx.ast.intern(name);
         cx.push(name, Symbol::new(kind, ty, val));
     }
-    cx.user = cx.scope.len();
     let Kind::Program(name, decls, body) = cx.ast.nodes[root as usize].kind else {
         unreachable!("the parser's root is a program")
     };
+    let decls = cx.ast.items(decls).to_vec();
+    let (system, program) = decls.split_at(cx.ast.system);
+    for &d in system {
+        cx.decl(d)?;
+    }
+    // Implicit helpers are bound here, before any program declaration can shadow them.
+    let in_system = Diag {
+        code: 3,
+        line: 0,
+        col: 0,
+    };
+    let abs = cx.ast.intern(b"ABSLONG");
+    let abs = match cx.lookup(abs).map(|s| cx.syms[s.0 as usize]) {
+        Some(s) if s.kind == SymKind::Routine => s.val as u32,
+        _ => return Err(in_system),
+    };
+    if cx.routines.iter().any(|r| !r.defined) {
+        return Err(Diag {
+            code: 59,
+            ..in_system
+        });
+    }
+    cx.user = cx.scope.len();
     if name != NO_NAME {
         cx.declare(root, name, Symbol::new(SymKind::Prog, Ty::NONE, 0))?;
     }
-    for d in cx.ast.items(decls).to_vec() {
+    for &d in program {
         cx.decl(d)?;
     }
     if cx.routines.iter().any(|r| !r.defined) {
@@ -107,6 +131,7 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
         syms: cx.syms,
         routines: cx.routines,
         data_end: cx.end,
+        abs,
     })
 }
 

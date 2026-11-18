@@ -34,14 +34,21 @@ fn drop_directives(toks: Vec<Tok>) -> R<Vec<Tok>> {
         .collect())
 }
 
-pub fn parse(toks: Vec<Tok>) -> R<(Ast, Id)> {
-    let toks = drop_directives(toks)?;
+/// The System declaration part `system`, then the program `toks`; the program's declaration list
+/// starts with System's (`Ast::system` of them).
+pub fn parse(system: Vec<Tok>, toks: Vec<Tok>) -> R<(Ast, Id)> {
     let mut p = Parser {
-        toks,
+        toks: drop_directives(system)?,
         at: 0,
         ast: Ast::default(),
         stops: 0,
     };
+    let mut sys = p.declarations()?;
+    if p.tok().kind != Tk::Eof {
+        return Err(p.err(36));
+    }
+    p.ast.system = sys.len();
+    (p.toks, p.at) = (drop_directives(toks)?, 0);
     let mut name = NO_NAME;
     if p.kw(b"PROGRAM") {
         name = p.ident()?;
@@ -56,11 +63,11 @@ pub fn parse(toks: Vec<Tok>) -> R<(Ast, Id)> {
         }
         p.expect_sym(b";", 85)?;
     }
-    let decls = p.declarations()?;
+    sys.extend(p.declarations()?);
     let (line, col) = p.pos();
     let body = p.begin()?;
     p.expect_sym(b".", 94)?;
-    let decls = p.ast.list(&decls);
+    let decls = p.ast.list(&sys);
     let root = p.ast.add(Kind::Program(name, decls, body), line, col);
     Ok((p.ast, root))
 }

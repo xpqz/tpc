@@ -12,4 +12,4 @@ pub mod parse;
 pub mod types;
 pub mod wasm;
 
-pub use driver::{compile, Diag};
+pub use driver::{compile, compile_with, Diag};
