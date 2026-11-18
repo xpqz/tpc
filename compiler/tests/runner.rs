@@ -502,3 +502,84 @@ fn importing_the_module_does_not_run_the_cli() {
     assert!(o.status.success(), "{}", stderr(&o));
     assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "imported");
 }
+
+/// Module exporting mutable global `sp` (initial 65536) when `export_sp`. `main` adds
+/// `delta` to it, writes "done", then calls `halt(code)` if given.
+fn sp_module(export_sp: bool, delta: i32, halt: Option<i32>) -> Vec<u8> {
+    let mut m = Module::new();
+    let write = m.ty(&[I32, I32, I32], &[]);
+    let halt_ty = m.ty(&[I32], &[]);
+    let main_ty = m.ty(&[], &[]);
+    let write_f = m.import_func("host", "write", write);
+    let halt_f = m.import_func("host", "halt", halt_ty);
+    m.memory(1);
+    m.data(256, b"done\n");
+    let sp = m.global_i32(true, 65536);
+    let mut c = Code::new();
+    c.idx(GLOBAL_GET, sp)
+        .i32_const(delta)
+        .op(I32_ADD)
+        .idx(GLOBAL_SET, sp);
+    c.i32_const(1)
+        .i32_const(256)
+        .i32_const(5)
+        .idx(CALL, write_f);
+    if let Some(code) = halt {
+        c.i32_const(code).idx(CALL, halt_f);
+    }
+    let f = m.func(main_ty, &[], c);
+    m.export("memory", MEM, 0);
+    m.export("main", FUNC, f);
+    if export_sp {
+        m.export("sp", GLOBAL, sp);
+    }
+    let w = m.finish();
+    assert!(validates(&w), "fixture module must be valid wasm");
+    w
+}
+
+#[test]
+fn sp_restored_by_main_passes() {
+    let w = sp_module(true, 0, None);
+    let o = run_with("sp_same", &w, Some(b"done\n"));
+    assert_eq!(o.status.code(), Some(0), "stderr: {}", stderr(&o));
+    assert!(o.stderr.is_empty());
+}
+
+#[test]
+fn sp_not_restored_is_a_runner_error() {
+    for (name, delta) in [("sp_down", -16), ("sp_up", 4)] {
+        let w = sp_module(true, delta, None);
+        let o = run_with(name, &w, Some(b"done\n"));
+        assert_eq!(o.status.code(), Some(2), "{name}: {}", stderr(&o));
+        assert!(
+            stderr(&o).contains("run.mjs: sp not restored"),
+            "{name}: {}",
+            stderr(&o)
+        );
+        assert_eq!(
+            o.stdout, b"done\n",
+            "{name}: output before the error is kept"
+        );
+    }
+}
+
+#[test]
+fn sp_not_restored_is_an_error_in_print_mode_too() {
+    let o = run_with("sp_print", &sp_module(true, -8, None), None);
+    assert_eq!(o.status.code(), Some(2), "stderr: {}", stderr(&o));
+    assert!(stderr(&o).contains("sp not restored"), "{}", stderr(&o));
+}
+
+#[test]
+fn sp_is_not_checked_after_halt() {
+    let o = run_with("sp_halt", &sp_module(true, -16, Some(3)), Some(b"done\n"));
+    assert_eq!(o.status.code(), Some(3), "stderr: {}", stderr(&o));
+    assert!(o.stderr.is_empty(), "{}", stderr(&o));
+}
+
+#[test]
+fn module_without_sp_export_is_not_checked() {
+    let o = run_with("sp_absent", &sp_module(false, -16, None), Some(b"done\n"));
+    assert_eq!(o.status.code(), Some(0), "stderr: {}", stderr(&o));
+}
