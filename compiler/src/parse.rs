@@ -24,7 +24,6 @@ pub fn parse(toks: Vec<Tok>) -> R<(Ast, Id)> {
         ast: Ast::default(),
         stops: 0,
     };
-    let (line, col) = (p.tok().line, p.tok().col);
     let mut name = NO_NAME;
     if p.kw(b"PROGRAM") {
         name = p.ident()?;
@@ -40,10 +39,8 @@ pub fn parse(toks: Vec<Tok>) -> R<(Ast, Id)> {
         p.expect_sym(b";", 85)?;
     }
     let decls = p.declarations()?;
-    if !p.kw(b"BEGIN") {
-        return Err(p.err(36));
-    }
-    let body = p.compound()?;
+    let (line, col) = p.pos();
+    let body = p.begin()?;
     p.expect_sym(b".", 94)?;
     let decls = p.ast.list(&decls);
     let root = p.ast.add(Kind::Program(name, decls, body), line, col);
@@ -137,6 +134,12 @@ impl Parser {
             return Err(self.err(85));
         }
         Ok(items)
+    }
+
+    /// `BEGIN statements END`.
+    fn begin(&mut self) -> R<Id> {
+        self.expect_kw(b"BEGIN", 36)?;
+        self.compound()
     }
 
     /// After `BEGIN`.
@@ -275,7 +278,68 @@ impl Parser {
         self.ast.add(kind, line, col)
     }
 
-    /// `CONST` and `VAR` sections, in any order and number.
+    /// A type name; `String` is not supported yet.
+    fn type_name(&mut self) -> R<u32> {
+        if self.is(Tk::Kw, b"STRING") {
+            return Err(self.err(200));
+        }
+        self.ident()
+    }
+
+    /// After `PROCEDURE` or `FUNCTION`.
+    fn routine(&mut self, func: bool) -> R<Id> {
+        let name = self.ident()?;
+        let mut params = None;
+        if self.sym(b"(") {
+            let mut list = Vec::new();
+            loop {
+                if self.is(Tk::Kw, b"VAR") {
+                    return Err(self.err(200));
+                }
+                let mut names = Vec::new();
+                loop {
+                    let (line, col) = self.pos();
+                    names.push((self.ident()?, line, col));
+                    if !self.sym(b",") {
+                        break;
+                    }
+                }
+                self.expect_sym(b":", 86)?;
+                let ty = self.type_name()?;
+                for (name, line, col) in names {
+                    list.push(self.ast.add(Kind::Param(name, ty), line, col));
+                }
+                if !self.sym(b";") {
+                    break;
+                }
+            }
+            self.expect_sym(b")", 89)?;
+            params = Some(self.ast.list(&list));
+        }
+        let mut result = NO_NAME;
+        if func && self.sym(b":") {
+            result = self.type_name()?;
+        } else if func && !self.is(Tk::Sym, b";") {
+            return Err(self.err(86));
+        }
+        let placeholder = Kind::Compound(self.ast.list(&[]));
+        let id = self.after(placeholder);
+        self.expect_sym(b";", 85)?;
+        let block = if self.kw(b"FORWARD") {
+            None
+        } else {
+            let (line, col) = self.pos();
+            let decls = self.declarations()?;
+            let body = self.begin()?;
+            let decls = self.ast.list(&decls);
+            Some(self.ast.add(Kind::Block(decls, body), line, col))
+        };
+        self.expect_sym(b";", 85)?;
+        self.ast.nodes[id as usize].kind = Kind::Routine(name, params, result, func, block);
+        Ok(id)
+    }
+
+    /// `CONST`, `VAR`, `PROCEDURE` and `FUNCTION` sections, in any order and number.
     fn declarations(&mut self) -> R<Vec<Id>> {
         let mut out = Vec::new();
         loop {
@@ -302,7 +366,7 @@ impl Parser {
                         }
                     }
                     self.expect_sym(b":", 86)?;
-                    let ty = self.ident()?;
+                    let ty = self.type_name()?;
                     self.expect_sym(b";", 85)?;
                     for (name, line, col) in names {
                         out.push(self.ast.add(Kind::VarDecl(name, ty), line, col));
@@ -311,36 +375,48 @@ impl Parser {
                         break;
                     }
                 }
+            } else if self.kw(b"PROCEDURE") || self.kw(b"FUNCTION") {
+                let func = self.toks[self.at - 1].text == b"FUNCTION";
+                out.push(self.routine(func)?);
             } else {
                 return Ok(out);
             }
         }
     }
 
+    /// Arguments after `(`, up to and including `)`; also the position of the `)`, where TP
+    /// reports argument errors.
+    fn arguments(&mut self) -> R<(Vec<Id>, (u32, u32))> {
+        let mut args = Vec::new();
+        loop {
+            args.push(self.argument()?);
+            if !self.sym(b",") {
+                break;
+            }
+        }
+        let close = self.pos();
+        self.expect_sym(b")", 89)?;
+        Ok((args, close))
+    }
+
     fn statement(&mut self) -> R<Option<Id>> {
         let (line, col) = self.pos();
         if self.tok().kind == Tk::Ident {
             let name = self.ident()?;
+            let target = self.ast.add(Kind::Name(name), line, col);
             if self.sym(b":=") {
-                let target = self.ast.add(Kind::Name(name), line, col);
                 let value = self.expr()?;
                 return Ok(Some(self.after(Kind::Assign(target, value))));
             }
-            let mut args = Vec::new();
+            let (mut args, mut at) = (Vec::new(), self.pos());
             if self.sym(b"(") {
-                loop {
-                    args.push(self.argument()?);
-                    if !self.sym(b",") {
-                        break;
-                    }
-                }
-                self.expect_sym(b")", 89)?;
+                (args, at) = self.arguments()?;
             } else if self.is(Tk::Sym, b"=") {
                 // TP takes the identifier for a variable and wants `:=`.
                 return Err(self.err(91));
             }
             let list = self.ast.list(&args);
-            return Ok(Some(self.ast.add(Kind::Call(name, list), line, col)));
+            return Ok(Some(self.ast.add(Kind::Call(target, list), at.0, at.1)));
         }
         if self.kw(b"BEGIN") {
             return self.compound().map(Some);
@@ -424,7 +500,16 @@ impl Parser {
         let (line, col) = self.pos();
         let t = self.tok();
         let kind = match t.kind {
-            Tk::Ident => Kind::Name(self.ident()?),
+            Tk::Ident => {
+                let name = self.ident()?;
+                let callee = self.ast.add(Kind::Name(name), line, col);
+                if !self.sym(b"(") {
+                    return Ok(callee);
+                }
+                let (args, at) = self.arguments()?;
+                let list = self.ast.list(&args);
+                return Ok(self.ast.add(Kind::Call(callee, list), at.0, at.1));
+            }
             Tk::IntLit if t.int > i32::MAX as i64 => return Err(self.err(7)),
             Tk::IntLit => {
                 let v = t.int;

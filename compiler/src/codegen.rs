@@ -1,9 +1,9 @@
 //! Walks the checked AST and emits the module (docs/abi.md).
 //! Static data: a fixed header, the globals (`check::GLOBALS`..), then string literals.
-use crate::ast::{Ast, Id, Kind, Op};
+use crate::ast::{Ast, Id, Kind, List, Op};
 use crate::check::Info;
-use crate::types::{Tag, Ty};
-use crate::wasm::{Code, Module, FUNC, I32, MEM, VOID};
+use crate::types::{SymKind, Tag, Ty};
+use crate::wasm::{Code, Label, Module, FUNC, I32, MEM, VOID};
 
 const PAGES: u32 = 16;
 const HEADER: u32 = 256;
@@ -34,6 +34,7 @@ const I32_GE_S: u8 = 0x4E;
 const I32_GT_S: u8 = 0x4A;
 const I32_LT_S: u8 = 0x48;
 const I32_ADD: u8 = 0x6A;
+const I32_MUL: u8 = 0x6C;
 const I32_SUB: u8 = 0x6B;
 const I32_DIV_S: u8 = 0x6D;
 const I32_DIV_U: u8 = 0x6E;
@@ -50,15 +51,20 @@ const HOST_RTERROR: u32 = 1;
 const WSTR: u32 = 2;
 const WINT: u32 = 3;
 const QUOT: u32 = 4;
+/// Index of the first user routine; the main program follows the last.
+const ROUTINES: u32 = 5;
 
 struct Gen<'a> {
     ast: &'a Ast,
     info: &'a Info,
     code: Code,
     /// Address of each string literal.
-    addr: Vec<u32>,
-    /// WASM locals of `main` in use; local 0 is the Boolean scratch.
+    addr: &'a [u32],
+    /// Number of WASM locals in use: parameters, the result, declared locals, temporaries.
     locals: u32,
+    nparams: u32,
+    /// The block around the routine body; `Exit` branches to it.
+    exit: Label,
 }
 
 pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
@@ -68,20 +74,8 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
         addr.push(info.data_end + lits.len() as u32);
         lits.extend_from_slice(s);
     }
-    let mut g = Gen {
-        ast,
-        info,
-        code: Code::new(),
-        addr,
-        locals: 1,
-    };
-    let Kind::Program(_, _, body) = ast.nodes[root as usize].kind else {
-        unreachable!("the root is a program")
-    };
-    g.stmt(body);
     let mut m = Module::new();
     let write = m.ty(&[I32, I32, I32], &[]);
-    let main = m.ty(&[], &[]);
     let rterror = m.ty(&[I32], &[]);
     m.import_func("host", "write", write);
     m.import_func("host", "rterror", rterror);
@@ -92,12 +86,60 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
     m.func(two, &[I32, I32, I32], write_integer());
     let three = m.ty(&[I32, I32, I32], &[I32]);
     m.func(three, &[], quotient());
-    let f = m.func(main, &vec![I32; g.locals as usize], g.code);
+    for r in &info.routines {
+        let results: &[u8] = if r.func { &[I32] } else { &[] };
+        let ty = m.ty(&vec![I32; r.params.len()], results);
+        let (code, locals) = body(
+            ast,
+            info,
+            &addr,
+            r.params.len() as u32,
+            r.nlocals,
+            r.func,
+            r.body,
+        );
+        m.func(ty, &vec![I32; locals], code);
+    }
+    let Kind::Program(_, _, main) = ast.nodes[root as usize].kind else {
+        unreachable!("the root is a program")
+    };
+    let (code, locals) = body(ast, info, &addr, 0, 0, false, main);
+    let ty = m.ty(&[], &[]);
+    let f = m.func(ty, &vec![I32; locals], code);
     m.export("main", FUNC, f);
     m.export("memory", MEM, 0);
     m.data(HEADER, b"\n FALSETRUE");
     m.data(info.data_end, &lits);
     m.finish()
+}
+
+/// A routine body wrapped in `block $exit`, followed by the result read for a function.
+/// Returns the code and the number of locals after the parameters.
+fn body(
+    ast: &Ast,
+    info: &Info,
+    addr: &[u32],
+    nparams: u32,
+    nlocals: u32,
+    func: bool,
+    stmt: Id,
+) -> (Code, usize) {
+    let mut g = Gen {
+        ast,
+        info,
+        code: Code::new(),
+        addr,
+        locals: nparams + nlocals,
+        nparams,
+        exit: Label(0),
+    };
+    g.exit = g.code.block(VOID);
+    g.stmt(stmt);
+    g.code.end();
+    if func {
+        g.code.idx(LOCAL_GET, nparams);
+    }
+    (g.code, (g.locals - nparams) as usize)
 }
 
 /// `wstr(ptr, len, width)`: right-justified in `width`.
@@ -218,14 +260,14 @@ fn binary_op(op: Op) -> u8 {
         Op::Gt => I32_GT_S,
         Op::Le => I32_LE_S,
         Op::Ge => I32_GE_S,
-        Op::Neg | Op::Not => unreachable!("unary"),
+        _ => unreachable!("unary"),
     }
 }
 
 impl Gen<'_> {
     /// Re-normalises the i32 on the stack to the integer type `ty` (plan §4.6).
     fn narrow(&mut self, ty: Ty) {
-        if self.info.types.tag(ty) != Some(Tag::Int) {
+        if !matches!(self.info.types.tag(ty), Some(Tag::Int | Tag::Char)) {
             return;
         }
         let (_, _, size, signed) = self.info.types.ord(ty);
@@ -245,16 +287,21 @@ impl Gen<'_> {
         }
     }
 
-    fn var_addr(&mut self, v: Id) {
+    fn new_local(&mut self) -> u32 {
+        self.locals += 1;
+        self.locals - 1
+    }
+
+    /// Pushes the value of a variable.
+    fn get(&mut self, v: Id) {
         let Kind::Var(sym) = self.ast.nodes[v as usize].kind else {
             unreachable!("checked variable")
         };
-        self.code
-            .i32_const(self.info.syms[sym.0 as usize].val as i32);
-    }
-
-    /// Replaces the address on the stack by the variable's value.
-    fn load(&mut self, v: Id) {
+        let s = self.info.syms[sym.0 as usize];
+        if s.kind == SymKind::Local {
+            self.code.idx(LOCAL_GET, s.val as u32);
+            return;
+        }
         let (_, _, size, signed) = self.info.types.ord(self.ast.nodes[v as usize].ty);
         let op = match (size, signed) {
             (1, true) => 0x2C,
@@ -263,14 +310,90 @@ impl Gen<'_> {
             (2, false) => 0x2F,
             _ => I32_LOAD,
         };
+        self.code.i32_const(s.val as i32);
         self.code.mem(op, 0, 0);
     }
 
-    /// Stores the value on the stack at the address below it, truncating to the type.
-    fn store(&mut self, v: Id) {
-        let size = self.info.types.ord(self.ast.nodes[v as usize].ty).2;
-        self.code
-            .mem([I32_STORE8, 0x3B, 0, I32_STORE][size as usize - 1], 0, 0);
+    /// Assigns the value that `value` pushes to the variable or function result `v`,
+    /// truncated to its type: a store truncates in memory, a local is narrowed.
+    fn put(&mut self, v: Id, value: impl FnOnce(&mut Self)) {
+        let n = self.ast.nodes[v as usize];
+        let sym = match n.kind {
+            Kind::Var(sym) => Some(self.info.syms[sym.0 as usize]),
+            _ => None,
+        };
+        match sym {
+            Some(s) if s.kind != SymKind::Local => {
+                self.code.i32_const(s.val as i32);
+                value(self);
+                let size = self.info.types.ord(n.ty).2;
+                self.code
+                    .mem([I32_STORE8, 0x3B, 0, I32_STORE][size as usize - 1], 0, 0);
+            }
+            _ => {
+                value(self);
+                self.narrow(n.ty);
+                let local = sym.map_or(self.nparams, |s| s.val as u32);
+                self.code.idx(LOCAL_SET, local);
+            }
+        }
+    }
+
+    /// A call of routine `r`: arguments converted to the parameter types.
+    fn invoke(&mut self, r: u32, args: List) {
+        let info = self.info;
+        for (&a, &ty) in self
+            .ast
+            .items(args)
+            .iter()
+            .zip(&info.routines[r as usize].params)
+        {
+            self.expr(a);
+            self.narrow(ty);
+        }
+        self.code.idx(CALL, ROUTINES + r);
+    }
+
+    /// A unary operator or intrinsic of result type `ty`.
+    fn unary(&mut self, op: Op, a: Id, ty: Ty) {
+        if op == Op::Neg {
+            self.code.i32_const(0);
+        }
+        self.expr(a);
+        match op {
+            Op::Not if ty == Ty::BOOLEAN => {
+                self.code.op(I32_EQZ);
+            }
+            Op::Neg => {
+                self.code.op(I32_SUB);
+            }
+            Op::Not => {
+                self.code.i32_const(-1).op(I32_XOR);
+            }
+            Op::Chr => {
+                self.code.i32_const(255).op(I32_AND);
+            }
+            Op::Odd => {
+                self.code.i32_const(1).op(I32_AND);
+            }
+            Op::Succ | Op::Pred => {
+                let step = if op == Op::Succ { 1 } else { -1 };
+                self.code.i32_const(step).op(I32_ADD);
+            }
+            Op::Abs | Op::Sqr => {
+                let t = self.new_local();
+                self.code.idx(LOCAL_SET, t);
+                if op == Op::Sqr {
+                    self.code.idx(LOCAL_GET, t).idx(LOCAL_GET, t).op(I32_MUL);
+                } else {
+                    self.code.i32_const(0).idx(LOCAL_GET, t).op(I32_SUB);
+                    self.code.idx(LOCAL_GET, t).idx(LOCAL_GET, t);
+                    self.code.i32_const(0).op(I32_LT_S).op(SELECT);
+                }
+            }
+            _ => {}
+        }
+        self.narrow(ty);
     }
 
     fn width(&mut self, w: Option<Id>) {
@@ -285,10 +408,10 @@ impl Gen<'_> {
     fn stmt(&mut self, id: Id) {
         match self.ast.nodes[id as usize].kind {
             Kind::Compound(l) => self.ast.items(l).iter().for_each(|&s| self.stmt(s)),
-            Kind::Assign(target, value) => {
-                self.var_addr(target);
-                self.expr(value);
-                self.store(target);
+            Kind::Assign(target, value) => self.put(target, |g| g.expr(value)),
+            Kind::Invoke(r, args) => self.invoke(r, args),
+            Kind::Exit => {
+                self.code.br(self.exit);
             }
             Kind::If(cond, then, other) => {
                 self.expr(cond);
@@ -316,8 +439,7 @@ impl Gen<'_> {
             }
             Kind::Case(selector, arms, other) => {
                 // The selector is converted to Integer; each arm is a chain of range tests.
-                let local = self.locals;
-                self.locals += 1;
+                let local = self.new_local();
                 self.expr(selector);
                 self.narrow(Ty::INTEGER);
                 self.code.idx(LOCAL_SET, local);
@@ -358,30 +480,24 @@ impl Gen<'_> {
             Kind::For(var, first, last, body, down) => {
                 // The last value is compared for equality before stepping, so the
                 // control variable never passes its type's limit.
-                let end = self.locals;
-                self.locals += 1;
-                self.var_addr(var);
-                self.expr(first);
-                self.store(var);
+                let end = self.new_local();
+                self.put(var, |g| g.expr(first));
                 self.expr(last);
                 self.code.idx(LOCAL_SET, end);
                 let exit = self.code.block(VOID);
-                self.var_addr(var);
-                self.load(var);
+                self.get(var);
                 self.code.idx(LOCAL_GET, end);
                 self.code
                     .op(if down { I32_LT_S } else { I32_GT_S })
                     .br_if(exit);
                 let top = self.code.loop_(VOID);
                 self.stmt(body);
-                self.var_addr(var);
-                self.load(var);
+                self.get(var);
                 self.code.idx(LOCAL_GET, end).op(I32_EQ).br_if(exit);
-                self.var_addr(var);
-                self.var_addr(var);
-                self.load(var);
-                self.code.i32_const(if down { -1 } else { 1 }).op(I32_ADD);
-                self.store(var);
+                self.put(var, |g| {
+                    g.get(var);
+                    g.code.i32_const(if down { -1 } else { 1 }).op(I32_ADD);
+                });
                 self.code.br(top).end().end();
             }
             Kind::Write(args, ln) => {
@@ -423,17 +539,18 @@ impl Gen<'_> {
                 self.code.idx(CALL, WSTR);
             }
             _ => {
+                let t = self.new_local();
                 self.expr(e);
-                self.code.idx(LOCAL_SET, 0);
+                self.code.idx(LOCAL_SET, t);
                 self.code
                     .i32_const(TRUE)
                     .i32_const(FALSE)
-                    .idx(LOCAL_GET, 0)
+                    .idx(LOCAL_GET, t)
                     .op(SELECT);
                 self.code
                     .i32_const(4)
                     .i32_const(5)
-                    .idx(LOCAL_GET, 0)
+                    .idx(LOCAL_GET, t)
                     .op(SELECT);
                 self.width(w);
                 self.code.idx(CALL, WSTR);
@@ -447,10 +564,8 @@ impl Gen<'_> {
             Kind::IntLit(v) => {
                 self.code.i32_const(v as i32);
             }
-            Kind::Var(_) => {
-                self.var_addr(e);
-                self.load(e);
-            }
+            Kind::Var(_) => self.get(e),
+            Kind::Invoke(r, args) => self.invoke(r, args),
             Kind::Binary(op @ (Op::And | Op::Or), a, b) if n.ty == Ty::BOOLEAN => {
                 // `{$B-}`: the right operand is evaluated only when it can matter.
                 self.expr(a);
@@ -464,22 +579,7 @@ impl Gen<'_> {
                 }
                 self.code.end();
             }
-            Kind::Unary(Op::Not, a) if n.ty == Ty::BOOLEAN => {
-                self.expr(a);
-                self.code.op(I32_EQZ);
-            }
-            Kind::Unary(op, a) => {
-                if op == Op::Neg {
-                    self.code.i32_const(0);
-                }
-                self.expr(a);
-                if op == Op::Neg {
-                    self.code.op(I32_SUB);
-                } else {
-                    self.code.i32_const(-1).op(I32_XOR);
-                }
-                self.narrow(n.ty);
-            }
+            Kind::Unary(op, a) => self.unary(op, a, n.ty),
             Kind::Binary(op, a, b) => {
                 self.expr(a);
                 if op == Op::Shr && n.ty == Ty::INTEGER {
