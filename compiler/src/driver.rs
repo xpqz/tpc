@@ -35,6 +35,9 @@ pub fn run(args: &[String]) -> i32 {
 }
 
 fn fail(msg: &str, code: i32) -> i32 {
-    eprintln!("{msg}");
+    use std::io::Write;
+    let mut e = std::io::stderr();
+    let _ = e.write_all(msg.as_bytes());
+    let _ = e.write_all(b"\n");
     code
 }
