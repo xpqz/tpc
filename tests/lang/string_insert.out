@@ -1,0 +1,10 @@
+1 [XYabcdef] 8
+3 [abXYcdef] 8
+6 [abcdeXYf] 8
+7 [abcdefXY] 8
+20 [abcdefXY] 8
+3 [abcdef] 6
+255 [abcdefX] 7
+abc
+aZbc
+<aZbc

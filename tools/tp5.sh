@@ -6,6 +6,7 @@
 # see docs/references.md. TP5_HOME overrides their location. A run is killed after
 # TP5_TIMEOUT seconds (default 60) and reported as a timeout (exit 3).
 set -e
+export LC_ALL=C
 home=${TP5_HOME:-/Users/stefan/work/crust/tp5-oracle/c}
 [ -f "$home/TPC.EXE" ] || { echo "tools/tp5.sh: no TPC.EXE in $home" >&2; exit 2; }
 w=$(mktemp -d "${TMPDIR:-/tmp}/tp5.XXXXXX")
