@@ -187,8 +187,9 @@ impl Lx<'_> {
     }
 
     fn string(&mut self) -> R<Tok> {
-        let mut t = Vec::new();
+        let (mut t, mut pieces, st) = (Vec::new(), 0, self.i);
         loop {
+            pieces += 1;
             match self.at(0) {
                 b'\'' => {
                     self.i += 1;
@@ -221,6 +222,9 @@ impl Lx<'_> {
                 b'^' if self.control().is_some() => {
                     t.extend(self.control());
                     self.i += 2;
+                }
+                _ if pieces == 2 && self.s[st] == b'^' => {
+                    return Ok(self.tok(Tk::Ctrl, vec![self.s[st + 1]]));
                 }
                 _ => return Ok(self.tok(Tk::StrLit, t)),
             }
