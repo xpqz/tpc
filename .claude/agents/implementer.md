@@ -12,15 +12,17 @@ Read before starting: the brief, `CLAUDE.md`, the `plan.md` sections the brief n
 `docs/reviews/{id}.md` if it exists. `skis issue view {id}` shows the issue. Use the
 `skis` CLI only; never touch `.skis/issues.db`.
 
-Check `echo $CARGO_TARGET_DIR` prints `/Volumes/Space2/tpa/target-shared` (or
-`<repo>/target-shared` when the SSD is absent). If it is empty, run
-`export CARGO_TARGET_DIR=$(scripts/cargo-target.sh)` in each shell command. Never build
-into `target/`.
+If the brief names a worktree (`worktrees/{id}-{slug}`), work only there; the lead has
+created it with your branch. Run builds and tests through `make`, which routes build output
+via `scripts/cargo-target.sh`. For direct `cargo`, prefix with
+`export CARGO_TARGET_DIR=$(scripts/cargo-target.sh);` run from your checkout's root. Never
+build into `target/`.
 
 ## Stage 1: RED
 
-1. From an up-to-date `main`, create branch `{id}-{slug-from-issue-title}` (lowercase,
-   alphanumeric words joined by hyphens). If the branch exists, check it out.
+1. Unless working in a worktree, create branch `{id}-{slug-from-issue-title}` (lowercase,
+   alphanumeric words joined by hyphens) from an up-to-date `main`; if it exists, check it
+   out.
 2. Write the tests the acceptance criteria describe. Test richly: positive, boundary and
    negative cases. Tests do not count towards the LOC budget.
    - Expected program output comes from `fpc -Mtp -v0` (build in `tmp/`), never written by
@@ -58,8 +60,8 @@ response section to `docs/prs/{id}.md`, commit, and report.
 
 ## Rules
 
-- Never merge, rebase `main`, delete branches, close or create issues, or edit
-  `docs/reviews/`. The lead does that.
+- Never merge, rebase `main`, delete branches or worktrees, close or create issues, or
+  edit `docs/reviews/`. The lead does that.
 - Never use `--no-verify`. Never mention Claude, Anthropic or AI in commits or docs.
 - Comments state the invariant, never narrative, never skis ids.
 - Scratch files go in `tmp/` in the repo, never `/tmp`.

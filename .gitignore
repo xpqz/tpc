@@ -4,3 +4,4 @@ tmp/
 *.wasm
 .DS_Store
 target-shared/
+worktrees/

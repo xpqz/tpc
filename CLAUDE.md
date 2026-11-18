@@ -69,17 +69,18 @@ budgets are in `plan.md` §1. The 500-line margin is not spent before Phase 7.
     `tests/lang/` and `tests/diff/`. Build in `tmp/`. The macOS `ld` warnings are harmless.
   - Before writing a test's expected output by hand, run it through fpc. Hand-written
     expectations for arithmetic, promotion or formatting are not accepted.
-  - Runtime and IDE Pascal must also compile under `fpc -Mtp`. That checks the source is
-    valid TP before our compiler supports it, and lets `Buffer` logic be unit-tested natively.
+  - Pure-logic Pascal modules (such as the IDE's `Buffer`) must also compile under
+    `fpc -Mtp`, so they can be checked and unit-tested natively before our compiler supports
+    them. `System`, `Crt` and other host-bound units are exempt.
   - fpc diverges from TP5 in places (`Real` formatting, some error numbers). Record each
     divergence found in `docs/deviations.md` and trust the TP5 manual over fpc there.
 - Target `wasm32-unknown-unknown` is installed.
 - Scratch files go in `tmp/` in the repo (git-ignored), never `/tmp`.
-- Build artefacts go to `/Volumes/Space2/tpa/target-shared` (or `target-shared/` when the
-  SSD is absent), never `target/`. `scripts/cargo-target.sh` decides; `scripts/zshenv.zsh`,
-  appended to `~/.zshenv`, exports `CARGO_TARGET_DIR` for shells in this repo. If
-  `$CARGO_TARGET_DIR` is empty, prefix commands with
-  `export CARGO_TARGET_DIR=$(scripts/cargo-target.sh);`. The Makefile sets it itself.
+- Build artefacts go to `/Volumes/Space2/tpa/<checkout name>` (or `<checkout>/target-shared`
+  when the SSD is absent), never `target/`. `scripts/cargo-target.sh` decides. The Makefile
+  exports `CARGO_TARGET_DIR` from it, so run builds and tests through `make`. For direct
+  `cargo` use, `scripts/zshenv.zsh` (to be appended to `~/.zshenv` by the user) exports it;
+  if `$CARGO_TARGET_DIR` is empty, prefix with `export CARGO_TARGET_DIR=$(scripts/cargo-target.sh);`.
 
 ## Testing
 
@@ -117,8 +118,16 @@ Use the `skis` CLI only. Never read, write, query or copy `.skis/issues.db` dire
 sqlite3 or anything else. It is git-ignored. Epics map to the phases in `plan.md` §5; a
 phase's exit test is its epic's acceptance criterion.
 
-No worktrees unless unavoidable. Everyone shares one checkout, so one implementer works at
-a time. The lead does not edit files on an implementer's branch while it is working.
+### Parallel implementers and worktrees
+
+One implementer works in the main checkout. Additional implementers run in parallel only
+on issues that are independent (no shared files beyond append-only docs), each in its own
+worktree: `git worktree add worktrees/{id}-{slug} -b {id}-{slug} main` (`worktrees/` is
+git-ignored). Each worktree builds into its own target directory (`scripts/cargo-target.sh`
+keys it by checkout name), so parallel builds never share a cargo lock. Nobody edits files
+on an implementer's branch while it is working. After merge, the lead removes the worktree
+(`git worktree remove`) along with the branch. Do not start more parallel units than the
+lead can review promptly.
 
 ### Per-issue loop
 
@@ -132,14 +141,14 @@ a time. The lead does not edit files on an implementer's branch while it is work
 4. **RED verdict.** The lead checks the tests: do they cover the acceptance criteria, fail
    for the right reason (run them), come from `fpc -Mtp` where applicable, and include
    negative and boundary cases? The lead creates or appends to `docs/reviews/{id}.md`
-   with the verdict (`red-approved` or `changes`) and numbered points, and tells the
-   implementer to read it.
+   with the verdict (`red-approved` or `changes`) and numbered points, commits it on the
+   branch, and tells the implementer (same agent, via SendMessage) to read it.
 5. **GREEN.** The implementer implements until the tests pass, appends to the PR doc,
    commits, and reports.
 6. **GREEN verdict.** The lead re-runs the full checks itself, reviews the diff for
-   correctness, budget and conciseness, and appends `approve` or `changes` to the review.
-7. **Merge.** On `approve`: commit the review doc on the branch, merge into `main`
-   (`--no-ff`), delete the local branch, `skis issue close {id}`, proceed to the next issue.
+   correctness, budget and conciseness, and appends and commits `approve` or `changes`.
+7. **Merge.** On `approve`: merge into `main`
+   (`--no-ff`), delete the local branch (and its worktree, if any), `skis issue close {id}`, proceed to the next issue.
 8. **Epic end.** When an epic's issues are closed and its exit test passes: tag the commit,
    update `docs/size.md`, close the epic, summarise to the user, continue.
 
