@@ -25,9 +25,16 @@ pub enum Op {
     Gt,
     Le,
     Ge,
-    /// Unary only.
+    /// Unary only; the intrinsics Ord, Chr, Succ, Pred, Odd, Abs and Sqr are unary operators.
     Neg,
     Not,
+    Ord,
+    Chr,
+    Succ,
+    Pred,
+    Odd,
+    Abs,
+    Sqr,
 }
 
 /// Nodes made by operators, assignments and `:` carry the position of the token after
@@ -36,8 +43,14 @@ pub enum Op {
 pub enum Kind {
     /// Parser output for an identifier; the checker overwrites it.
     Name(u32),
-    /// `name` or `name(args)` used as a statement; the checker resolves it.
-    Call(u32, List),
+    /// A `Name` callee and its arguments, as a statement or an expression; the checker
+    /// resolves it (the node is stamped after the arguments, the callee at the name).
+    Call(Id, List),
+    /// A checked call of the routine with that index; the type is the result type.
+    Invoke(u32, List),
+    Exit,
+    /// The result variable of the function being compiled.
+    Result,
     Assign(Id, Id),
     Compound(List),
     /// Condition, then-branch, else-branch.
@@ -68,6 +81,13 @@ pub enum Kind {
     /// Header name (`NO_NAME` when absent), declarations, body.
     Program(u32, List, Id),
     ConstDecl(u32, Id),
+    /// Name, parameter list (None when omitted), result type name (`NO_NAME` when
+    /// omitted), function, block (None for `forward`). Stamped after the header.
+    Routine(u32, Option<List>, u32, bool, Option<Id>),
+    /// Parameter name, type name.
+    Param(u32, u32),
+    /// Declarations and body, stamped where the declarations start.
+    Block(List, Id),
     /// Variable name, type name.
     VarDecl(u32, u32),
 }

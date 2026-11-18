@@ -32,3 +32,10 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | # | Deviation | Reference | This compiler | Notes |
 |---|---|---|---|---|
 | D8 | Intermediate integer width | fpc evaluates at native width (`(i+i2) div 2` with 30000+30000 is 30000) | TP5 common-type rule: 16-bit `Integer` arithmetic wraps (-2768) | Not a deviation from TP5 (measured, decision 10); fpc is not the oracle |
+
+## Routines (Phase 1)
+
+| # | Deviation | TP5 | This compiler | Notes |
+|---|---|---|---|---|
+| D9 | Order of operand evaluation | The right operand of a binary operator is evaluated first when it contains calls (`Show(1) + Show(2) * Show(3)` runs 3, 2, 1) | Left to right (arguments of calls and of `Write` are left to right in both) | Observable only through side effects inside one expression; Pascal leaves it undefined |
+| D10 | Order of reported errors | One pass: the first error in source order, syntax or semantic | Parse of the whole program, then check: a syntax error anywhere precedes a semantic error before it | Only for programs with two errors; tests use single-error programs |

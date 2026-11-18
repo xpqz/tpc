@@ -1,5 +1,5 @@
 //! Types, symbols and the operator typing rules (decisions 5 and 10).
-use crate::ast::Op;
+use crate::ast::{Id, Op};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Ty(pub u32);
@@ -50,7 +50,11 @@ pub enum SymKind {
     Const,
     /// `val` is the static-data address.
     Var,
-    /// `Write` (val 0) and `WriteLn` (val 1).
+    /// `val` is the index of the local; parameters and the result come first.
+    Local,
+    /// `val` is the index into the routine table.
+    Routine,
+    /// Write 0, WriteLn 1, Ord 2, Chr 3, Succ 4, Pred 5, Odd 6, Abs 7, Sqr 8, Exit 9.
     Intrinsic,
 }
 
@@ -59,6 +63,20 @@ pub struct Symbol {
     pub kind: SymKind,
     pub ty: Ty,
     pub val: i64,
+}
+
+/// A declared procedure or function.
+pub struct Routine {
+    pub params: Vec<Ty>,
+    pub names: Vec<u32>,
+    /// `Ty::NONE` for a procedure.
+    pub result: Ty,
+    pub func: bool,
+    pub defined: bool,
+    /// Body statement, once defined.
+    pub body: Id,
+    /// Locals after the parameters, the function result included.
+    pub nlocals: u32,
 }
 
 pub struct Types {
@@ -155,12 +173,22 @@ impl Types {
         }
     }
 
+    /// Result type of a unary operator or intrinsic, or the TP error number.
     pub fn unary(&self, op: Op, a: Ty) -> Result<Ty, u16> {
-        match (self.tag(a), op) {
-            (Some(Tag::Int), Op::Neg) if a == Ty::WORD || a == Ty::LONGINT => Ok(Ty::LONGINT),
-            (Some(Tag::Int), Op::Neg) => Ok(Ty::INTEGER),
+        let tag = self.tag(a);
+        let wide = a == Ty::WORD || a == Ty::LONGINT;
+        match (tag, op) {
+            (Some(Tag::Int), Op::Neg | Op::Abs | Op::Sqr) if wide => Ok(Ty::LONGINT),
+            (Some(Tag::Int), Op::Neg | Op::Abs | Op::Sqr) => Ok(Ty::INTEGER),
             (Some(Tag::Int | Tag::Bool), Op::Not) => Ok(a),
-            _ => Err(41),
+            (_, Op::Neg | Op::Not) => Err(41),
+            (_, Op::Abs | Op::Sqr) => Err(79),
+            (Some(Tag::Int), Op::Odd) => Ok(Ty::BOOLEAN),
+            (Some(Tag::Int), Op::Chr) => Ok(Ty::CHAR),
+            (Some(Tag::Int), Op::Ord) => Ok(a),
+            (Some(_), Op::Ord) => Ok(Ty::INTEGER),
+            (Some(_), Op::Succ | Op::Pred) => Ok(a),
+            _ => Err(38),
         }
     }
 

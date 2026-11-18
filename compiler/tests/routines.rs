@@ -115,7 +115,12 @@ const ERR: &[(&str, &str, u16, u32)] = &[
     ("procedure_in_expression", "program E;\nvar i: Integer;\nprocedure Q;\nbegin\nend;\nbegin\n  i := Q\nend.", 143, 7),
     ("function_as_statement", "program E;\nfunction F: Integer;\nbegin\n  F := 1\nend;\nbegin\n  F\nend.", 122, 8),
     ("duplicate_param", "program E;\nprocedure Q(a, a: Integer);\nbegin\nend;\nbegin\nend.", 4, 3),
-    ("call_before_declaration", "program E;\nbegin\n  Q\nend;\nprocedure Q;\nbegin\nend;\nbegin\nend.", 3, 3),
+    (
+        "call_before_declaration",
+        "program E;\nprocedure A;\nbegin\n  Q\nend;\nprocedure Q;\nbegin\nend;\nbegin\nend.",
+        3,
+        4,
+    ),
     ("call_undeclared_with_args", "program E;\nbegin\n  Frob(1, 2)\nend.", 3, 3),
     ("abs_char", "program E;\nvar c: Char;\nbegin\n  WriteLn(Abs(c))\nend.", 79, 4),
     ("odd_boolean", "program E;\nvar b: Boolean;\nbegin\n  WriteLn(Odd(b))\nend.", 38, 4),
