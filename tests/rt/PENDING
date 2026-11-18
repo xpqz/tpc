@@ -1,5 +1,3 @@
-div_by_zero_after_partial_line
-div_by_zero_inside_nested_calls
 div_by_zero_real_slash
 heap_overflow_after_release_succeeds_then_fails_again
 heap_overflow_getmem_until_exhausted
