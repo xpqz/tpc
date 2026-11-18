@@ -1,1 +1,1 @@
-ignored
+fn x() {}
