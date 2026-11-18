@@ -30,19 +30,19 @@ budgets are in `plan.md` §1. The 500-line margin is not spent before Phase 7.
 - Because tests are free, test richly. Thin coverage is never a way to save lines.
 - Checker + codegen are budgeted at 4,700 (2,200 + 2,500); 5,200 is the Phase 4
   stop-and-cut ceiling, not an allowance. Other checkpoints: Rust total 6,500 at Phase 3,
-  IDE 2,200 at feature-complete. At a checkpoint breach, stop and
-  discuss with the user.
+  IDE 2,200 at feature-complete. At a checkpoint breach, stop feature work, cut scope or
+  simplify (with the advisor), and record the decision in `docs/decisions.md`.
 - Do not game the count: no long lines to dodge rustfmt, no stuffing logic into strings,
   macros or data tables to hide it, no moving production code into `tools/` or tests.
   Write straight, readable Rust.
-- If a feature cannot fit, stop and propose a scope or algorithmic reduction. Cut
+- If a feature cannot fit, the lead decides a scope or algorithmic reduction. Cut
   features, not the cap. Do not contort code to squeeze it in.
 - Before adding code, look for existing code to reuse. Every issue ends with a pass asking
   whether the change can be shorter while staying clear.
 
 ## Engineering rules (from `plan.md` §8)
 
-- `[dependencies]` in the compiler stays empty. Dev-dependencies too unless the user agrees.
+- `[dependencies]` in the compiler stays empty. Dev-dependencies too, unless the lead records a decision.
 - `#![forbid(unsafe_code)]`, except the two-line FFI exports.
 - No `format!` or `std::fmt` in the compiler; diagnostics come from static tables plus a
   small integer-to-string routine.
@@ -74,6 +74,10 @@ budgets are in `plan.md` §1. The 500-line margin is not spent before Phase 7.
     them. `System`, `Crt` and other host-bound units are exempt.
   - fpc diverges from TP5 in places (`Real` formatting, some error numbers). Record each
     divergence found in `docs/deviations.md` and trust the TP5 manual over fpc there.
+  - fpc evaluates integer intermediates at native width and truncates only on assignment,
+    so it is not an oracle for TP5 expression result types (e.g. `Byte + Byte`, `Integer`
+    overflow before `div`). Those follow the decision in `docs/decisions.md`; differential
+    tests avoid intermediate overflow or note the decision they rely on.
 - Target `wasm32-unknown-unknown` is installed.
 - Scratch files go in `tmp/` in the repo (git-ignored), never `/tmp`.
 - Build artefacts go to `/Volumes/Space2/tpa/<checkout name>` (or `<checkout>/target-shared`
@@ -102,7 +106,8 @@ behaviour they check, never after an issue id, phase or date.
 
 Never change a test to make it pass. A test may change only if it is provably wrong
 (logic error, contradicts `plan.md` or TP5 behaviour as shown by `fpc -Mtp`, or a typo),
-and then only with a written justification in `docs/prs/{id}.md` and the user's approval.
+and then only with a written justification in `docs/prs/{id}.md` and the lead's approval
+in `docs/reviews/{id}.md`.
 Forbidden: adjusting expected output to match actual output, shrinking scope, removing
 assertions.
 
@@ -159,12 +164,18 @@ success (and no external blocker), the lead stops delegating it, consults the ad
 finishes the issue itself on the same branch, recording that in the review doc. Review
 points are concrete and complete in one round; do not drip-feed.
 
-### Stop and ask the user
+### Autonomy and design decisions
 
-- A checkpoint or budget breach, or a feature that cannot fit.
-- A departure from `plan.md` or TP5 behaviour not already recorded.
-- A test the implementer claims is wrong and the lead agrees.
-- Anything irreversible beyond the local repo (push, publishing).
+The lead works autonomously. The budget is locked and the target is defined by `plan.md`;
+the lead settles questions itself, consulting the advisor when a decision is non-trivial,
+and documents every design decision in `docs/decisions.md` (numbered, one paragraph each:
+the question, the decision, the reason, alternatives rejected). Deviations from TP5 also go
+in `docs/deviations.md`. When a feature cannot fit the budget, the lead cuts scope, records
+the cut as a decision, and continues.
+
+Stop and ask the user only for actions outside the local repo (push, publishing, changes to
+the user's machine configuration) or a contradiction in `plan.md` that blocks progress and
+that the advisor cannot resolve.
 
 ### Review artefacts
 
