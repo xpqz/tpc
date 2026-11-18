@@ -103,3 +103,11 @@ lists as ranges into a shared `Vec<u32>`; the checker resolves names in place, s
 needs no node and narrowing is driven by `ty` in codegen.
 **Reason.** Smallest design meeting plan §8 (arenas, no Box/Rc, no IR) and §4.6.
 **Rejected.** A separate typed IR (lines); coercion nodes for every widening (no-ops).
+
+## 9. Keyword and operator tokens carry text, not enum variants
+
+**Decision.** The lexer emits `Kw` and `Sym` token kinds whose uppercase / canonical text
+identifies the keyword or operator; the parser matches on text.
+**Reason.** One variant per keyword and operator cost ~100 lexer lines plus a mapping
+table; a packed keyword array is ~10 lines.
+**Rejected.** Per-keyword enum variants.
