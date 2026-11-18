@@ -1,0 +1,2 @@
+LongExact|100|exact
+TOTAL|100
