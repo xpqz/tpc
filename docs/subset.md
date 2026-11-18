@@ -12,7 +12,7 @@ against the TP5 manual and `fpc -Mtp`; every deviation is recorded in `docs/devi
 | Statements | `begin/end`, `if`, `case`, `while`, `repeat`, `for`, `with`, assignment, procedure call, `Exit`, `Halt` |
 | Declarations | `const`, typed `const`, `type`, `var`, nested procedures and functions, `forward`, units (`interface` / `implementation` / `initialization`) |
 | Text files only | `Assign`, `Reset`, `Rewrite`, `Append`, `Close`, `Read`, `ReadLn`, `Write`, `WriteLn`, `Eof`, `Eoln`, `IOResult`, `{$I+/-}` |
-| Directives | `{$R}`, `{$I file}` (include), `{$IFDEF}`, `{$IFNDEF}`, `{$ELSE}`, `{$ENDIF}`, `{$DEFINE}` |
+| Directives | `{$F+}` / `{$F-}` (accepted, no effect, deviation D11), `{$R}`, `{$I file}` (include), `{$IFDEF}`, `{$IFNDEF}`, `{$ELSE}`, `{$ENDIF}`, `{$DEFINE}` |
 
 Intrinsics and runtime routines named in later phases of `plan.md` §5 (not part of §2):
 `Ord`, `Chr`, `Succ`, `Pred`, `Odd`, `Abs`, `Sqr`, `Sqrt`, `Round`, `Trunc`, `Inc`, `Dec`,

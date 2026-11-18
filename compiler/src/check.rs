@@ -198,10 +198,38 @@ impl Cx<'_> {
                 };
                 self.declare(d, name, sym)?;
             }
+            Kind::TypeDecl(name, spec) => {
+                let ty = self.spec(spec, name)?;
+                self.declare(d, name, Symbol::new(SymKind::Type, ty, 0))?;
+            }
             Kind::Routine(..) => self.routine(d)?,
             _ => unreachable!("declarations only"),
         }
         Ok(())
+    }
+
+    /// The type a declaration `name = spec` defines; `type T = T` is error 21.
+    fn spec(&mut self, spec: Id, name: u32) -> R<Ty> {
+        match self.ast.nodes[spec as usize].kind {
+            Kind::Name(n) if n == name => Err(self.err(spec, 21)),
+            Kind::Name(n) => self.type_of(spec, n),
+            Kind::ProcType(params, result, _) => {
+                let mut sig = Vec::new();
+                for p in params.map_or(Vec::new(), |l| self.ast.items(l).to_vec()) {
+                    let Kind::Param(_, t, byref) = self.ast.nodes[p as usize].kind else {
+                        unreachable!("the parser lists parameters")
+                    };
+                    sig.push((self.type_of(p, t)?, byref));
+                }
+                let result = if result == NO_NAME {
+                    Ty::NONE
+                } else {
+                    self.type_of(spec, result)?
+                };
+                Ok(self.types.proc(sig, result))
+            }
+            _ => unreachable!("the parser builds type specs"),
+        }
     }
 
     fn type_of(&self, at: Id, name: u32) -> R<Ty> {
@@ -258,6 +286,7 @@ impl Cx<'_> {
                     framed: false,
                     frame: 0,
                     result_sym: Sym(0),
+                    addressed: false,
                     copies: Vec::new(),
                 });
                 if let Some(&parent) = self.chain.last() {
@@ -440,6 +469,48 @@ impl Cx<'_> {
         Ok(())
     }
 
+    /// The routine's signature as a procedural type.
+    fn signature(&mut self, r: usize) -> Ty {
+        let r = &self.routines[r];
+        let sig = r.params.iter().copied().zip(r.byref.iter().copied());
+        let (sig, result) = (sig.collect(), r.result);
+        self.types.proc(sig, result)
+    }
+
+    /// `e` where a value of procedural type `want` is expected (assignment source, value
+    /// argument): a global routine of that signature or a variable of that type. `at` is the
+    /// statement or call.
+    fn proc_value(&mut self, at: Id, want: Ty, e: Id) -> R<()> {
+        let Kind::Name(name) = self.ast.nodes[e as usize].kind else {
+            return Err(self.err(e, 20));
+        };
+        let (sym, s) = self.resolve(e, name)?;
+        let kind = match s.kind {
+            SymKind::Routine => {
+                let r = s.val as usize;
+                if self.routines[r].depth > 1 {
+                    return Err(self.err(at, 143));
+                }
+                if self.signature(r) != want {
+                    return Err(self.err(at, 26));
+                }
+                self.routines[r].addressed = true;
+                Kind::ProcRef(r as u32)
+            }
+            SymKind::Var | SymKind::Local | SymKind::Ref => {
+                if s.ty != want {
+                    return Err(self.err(at, 26));
+                }
+                self.capture(sym, false);
+                Kind::Var(sym)
+            }
+            _ => return Err(self.err(e, 20)),
+        };
+        self.ast.nodes[e as usize].kind = kind;
+        self.ast.nodes[e as usize].ty = want;
+        Ok(())
+    }
+
     fn resolve(&self, id: Id, name: u32) -> R<(Sym, Symbol)> {
         let s = self.lookup(name).ok_or(self.err(id, 3))?;
         let sym = self.syms[s.0 as usize];
@@ -497,7 +568,10 @@ impl Cx<'_> {
                 };
                 let (sym, s) = self.resolve(var, name)?;
                 let outer = s.depth < self.chain.len() as u32;
-                if s.kind == SymKind::Ref || s.kind == SymKind::Local && outer {
+                if s.kind == SymKind::Ref
+                    || s.kind == SymKind::Local && outer
+                    || self.types.sig(s.ty).is_some()
+                {
                     return Err(self.err(var, 97));
                 }
                 if !matches!(s.kind, SymKind::Var | SymKind::Local) {
@@ -537,8 +611,12 @@ impl Cx<'_> {
                 };
                 self.ast.nodes[target as usize].kind = kind;
                 self.ast.nodes[target as usize].ty = ty;
-                self.expr(value)?;
-                self.assignable(id, ty, value)?;
+                if self.types.sig(ty).is_some() {
+                    self.proc_value(id, ty, value)?;
+                } else {
+                    self.expr(value)?;
+                    self.assignable(id, ty, value)?;
+                }
             }
             Kind::Call(callee, args) => {
                 let Kind::Name(name) = self.ast.nodes[callee as usize].kind else {
@@ -559,13 +637,17 @@ impl Cx<'_> {
                         Kind::Exit
                     }
                     SymKind::Routine if !self.routines[s.val as usize].func => {
-                        self.arguments(id, s.val as usize, args, false)?;
+                        let (params, refs) = self.routine_params(s.val as usize);
+                        self.arguments(id, params, refs, args, false)?;
                         Kind::Invoke(s.val as u32, args)
                     }
                     SymKind::Routine => return Err(self.err(id, 122)),
-                    SymKind::Var | SymKind::Local | SymKind::Ref => {
-                        return Err(self.err(callee, 91));
-                    }
+                    SymKind::Var | SymKind::Local | SymKind::Ref => match self.types.sig(s.ty) {
+                        Some((params, refs, Ty::NONE)) => {
+                            self.indirect(id, callee, params, refs, args, false)?
+                        }
+                        _ => return Err(self.err(id, 91)),
+                    },
                     _ => return Err(self.err(callee, 113)),
                 };
                 self.ast.nodes[id as usize].kind = kind;
@@ -577,10 +659,15 @@ impl Cx<'_> {
 
     /// Checks the arguments of a call of routine `r` against its parameters; `at` is the
     /// call. A routine without parameters takes no parentheses.
-    fn arguments(&mut self, at: Id, r: usize, args: List, in_expr: bool) -> R<()> {
+    fn arguments(
+        &mut self,
+        at: Id,
+        params: Vec<Ty>,
+        refs: Vec<bool>,
+        args: List,
+        in_expr: bool,
+    ) -> R<()> {
         let items = self.ast.items(args).to_vec();
-        let params = self.routines[r].params.clone();
-        let refs = self.routines[r].byref.clone();
         let code = match (params.len(), items.len()) {
             (0, 0) => 0,
             (0, _) => 85 + 4 * in_expr as u16,
@@ -600,10 +687,43 @@ impl Cx<'_> {
                 self.var_arg(at, arg, ty)?;
                 continue;
             }
+            if self.types.sig(ty).is_some() {
+                self.proc_value(at, ty, arg)?;
+                continue;
+            }
             self.expr(arg)?;
             self.assignable(at, ty, arg)?;
         }
         Ok(())
+    }
+
+    fn routine_params(&self, r: usize) -> (Vec<Ty>, Vec<bool>) {
+        (
+            self.routines[r].params.clone(),
+            self.routines[r].byref.clone(),
+        )
+    }
+
+    /// A call through the variable named by `callee` with the signature `params`/`refs`:
+    /// the variable becomes the callee value of the call node `at`.
+    fn indirect(
+        &mut self,
+        at: Id,
+        callee: Id,
+        params: Vec<Ty>,
+        refs: Vec<bool>,
+        args: List,
+        in_expr: bool,
+    ) -> R<Kind> {
+        let Kind::Name(name) = self.ast.nodes[callee as usize].kind else {
+            unreachable!("the parser names the callee")
+        };
+        let (sym, s) = self.resolve(callee, name)?;
+        self.arguments(at, params, refs, args, in_expr)?;
+        self.capture(sym, false);
+        self.ast.nodes[callee as usize].kind = Kind::Var(sym);
+        self.ast.nodes[callee as usize].ty = s.ty;
+        Ok(Kind::Indirect(callee, args))
     }
 
     /// A case label range: constants of the selector's family, within Integer.
@@ -685,10 +805,19 @@ impl Cx<'_> {
                 match s.kind {
                     SymKind::Const if s.ty == Ty::STRING => (Kind::StrLit(s.val as u32), s.ty),
                     SymKind::Const => (Kind::IntLit(s.val), s.ty),
-                    SymKind::Var | SymKind::Local | SymKind::Ref => {
-                        self.capture(sym, false);
-                        (Kind::Var(sym), s.ty)
-                    }
+                    SymKind::Var | SymKind::Local | SymKind::Ref => match self.types.sig(s.ty) {
+                        // A procedural variable in an expression is called.
+                        Some((_, _, Ty::NONE)) => return Err(self.err(e, 143)),
+                        Some((params, refs, result)) => {
+                            let callee = self.ast.add(Kind::Name(name), n.line, n.col);
+                            let none = self.ast.list(&[]);
+                            (self.indirect(e, callee, params, refs, none, true)?, result)
+                        }
+                        None => {
+                            self.capture(sym, false);
+                            (Kind::Var(sym), s.ty)
+                        }
+                    },
                     SymKind::Routine => {
                         let r = &self.routines[s.val as usize];
                         let (func, result) = (r.func, r.result);
@@ -696,7 +825,8 @@ impl Cx<'_> {
                             return Err(self.err(e, 143));
                         }
                         let none = self.ast.list(&[]);
-                        self.arguments(e, s.val as usize, none, true)?;
+                        let (params, refs) = self.routine_params(s.val as usize);
+                        self.arguments(e, params, refs, none, true)?;
                         (Kind::Invoke(s.val as u32, none), result)
                     }
                     SymKind::Intrinsic if (2..=8).contains(&s.val) => {
@@ -717,9 +847,17 @@ impl Cx<'_> {
                         if !func {
                             return Err(self.err(callee, 143));
                         }
-                        self.arguments(e, s.val as usize, args, true)?;
+                        let (params, refs) = self.routine_params(s.val as usize);
+                        self.arguments(e, params, refs, args, true)?;
                         (Kind::Invoke(s.val as u32, args), result)
                     }
+                    SymKind::Var | SymKind::Local | SymKind::Ref => match self.types.sig(s.ty) {
+                        Some((_, _, Ty::NONE)) => return Err(self.err(callee, 143)),
+                        Some((params, refs, result)) => {
+                            (self.indirect(e, callee, params, refs, args, true)?, result)
+                        }
+                        None => return Err(self.err(e, 89)),
+                    },
                     SymKind::Intrinsic if (2..=8).contains(&s.val) => {
                         let items = self.ast.items(args).to_vec();
                         if items.len() > 1 {
@@ -731,6 +869,7 @@ impl Cx<'_> {
                     _ => return Err(self.err(e, 89)),
                 }
             }
+            Kind::AddrOf(_) => return Err(self.err(e, 200)),
             Kind::Paren(a) => {
                 self.expr(a)?;
                 let inner = self.ast.nodes[a as usize];

@@ -39,3 +39,9 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 |---|---|---|---|---|
 | D9 | Order of operand evaluation | The right operand of a binary operator is evaluated first when it contains calls (`Show(1) + Show(2) * Show(3)` runs 3, 2, 1) | Left to right (arguments of calls and of `Write` are left to right in both) | Observable only through side effects inside one expression; Pascal leaves it undefined |
 | D10 | Order of reported errors | One pass: the first error in source order, syntax or semantic | Parse of the whole program, then check: a syntax error anywhere precedes a semantic error before it | Only for programs with two errors; tests use single-error programs |
+
+## Procedural types (Phase 2)
+
+| # | Deviation | TP5 | This compiler | Notes |
+|---|---|---|---|---|
+| D11 | `{$F+}` for procedural values | A routine can be assigned to a procedural variable or passed as a procedural argument only if it was declared under `{$F+}`; otherwise error 143 | `{$F+}` and `{$F-}` are accepted and ignored; every global routine can be assigned | Accepts programs TP5 rejects; no valid TP5 program changes meaning. Any other directive is error 200 until the directives phase |

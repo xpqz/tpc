@@ -263,14 +263,18 @@ fn compile(src: &str) -> Vec<u8> {
 fn one_wasm_type_per_signature() {
     let one = "program Prog;\ntype TA = function(x: Integer): Integer;\nvar f: TA;\nfunction A(x: Integer): Integer;\nbegin\n  A := x\nend;\nbegin\n  f := A;\n  WriteLn(f(1))\nend.\n";
     let same = "program Prog;\ntype TA = function(x: Integer): Integer;\ntype TB = function(y: Integer): Integer;\nvar f: TA; g: TB; h: TA;\nfunction A(x: Integer): Integer;\nbegin\n  A := x\nend;\nfunction B(z: Integer): Integer;\nbegin\n  B := z + 1\nend;\nbegin\n  f := A; g := B; h := f;\n  WriteLn(f(1), g(2), h(3))\nend.\n";
-    let other = "program Prog;\ntype TA = function(x: Integer): Integer;\ntype TC = function(x: Integer): Boolean;\nvar f: TA; c: TC;\nfunction A(x: Integer): Integer;\nbegin\n  A := x\nend;\nfunction C(x: Integer): Boolean;\nbegin\n  C := True\nend;\nbegin\n  f := A; c := C;\n  WriteLn(f(1), c(2))\nend.\n";
+    let other = "program Prog;\ntype TA = function(x: Integer): Integer;\ntype TC = function(x, y: Integer): Integer;\nvar f: TA; cb: TC;\nfunction A(x: Integer): Integer;\nbegin\n  A := x\nend;\nfunction C(x, y: Integer): Integer;\nbegin\n  C := x + y\nend;\nbegin\n  f := A; cb := C;\n  WriteLn(f(1), cb(2, 3))\nend.\n";
     let (one, same, other) = (
         type_count(&compile(one)),
         type_count(&compile(same)),
         type_count(&compile(other)),
     );
     assert_eq!(one, same, "same signature, same WASM type");
-    assert_eq!(other, one + 1, "a second signature adds exactly one type");
+    assert_eq!(
+        other,
+        one + 1,
+        "a signature with another WASM shape adds exactly one type"
+    );
 }
 
 /// Table index 0 is a trap stub: an unassigned procedural variable fails cleanly.

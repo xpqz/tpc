@@ -48,6 +48,13 @@ pub enum Kind {
     Call(Id, List),
     /// A checked call of the routine with that index; the type is the result type.
     Invoke(u32, List),
+    /// A checked reference to a global routine as a procedural value: its table index.
+    ProcRef(u32),
+    /// A call through the procedural value of the node, with arguments; the type is the
+    /// result type.
+    Indirect(Id, List),
+    /// `@x`; always an error for now.
+    AddrOf(Id),
     /// A parenthesised name: not a variable reference for a `var` argument.
     Paren(Id),
     Exit,
@@ -90,6 +97,10 @@ pub enum Kind {
     Block(List, Id),
     /// Variable name, type name.
     VarDecl(u32, u32),
+    /// Type name and its definition: `Name` or `ProcType`.
+    TypeDecl(u32, Id),
+    /// Parameters (None when omitted), result type name (`NO_NAME` for a procedure), function.
+    ProcType(Option<List>, u32, bool),
 }
 
 pub const NO_NAME: u32 = u32::MAX;

@@ -92,9 +92,13 @@ epilogue:  sp = fp + framesize
 
 - A procedural value is a WASM table index (i32).
 - Nested routines may not be assigned to procedural variables (compile error).
-- The checker interns one WASM function type per signature; calls use `call_indirect` with
-  that type.
-- Table index 0 is a trap stub, so a `nil` call fails cleanly.
+- The checker interns procedural types by content (parameter types, by-reference flags,
+  result), so equal signatures are one type; the emitter interns one WASM function type per
+  WASM shape; calls push the arguments, then the index, then `call_indirect` with that type.
+- Only global routines can be assigned or passed (a nested routine is error 143). Table
+  layout: index 0 is a trap stub (a function that executes `unreachable`, so calling an
+  unassigned variable or `nil` traps), then the routines whose address is taken, in routine
+  order. The table is always emitted.
 - DCE roots include every address-taken routine (conservatively, every routine with a
   compatible signature that is address-taken); see `plan.md` §3.
 
