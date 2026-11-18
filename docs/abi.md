@@ -135,6 +135,19 @@ Compiler API exported from `compiler.wasm` (`plan.md` §3): `alloc(n) -> ptr`,
 `compile(src_ptr, src_len, flags) -> status`, `out_ptr()`, `out_len()`, `err_line()`,
 `err_col()`, `err_code()`.
 
+### Test runner contract (`tests/run.mjs`)
+
+- The module exports `main` (`() -> ()`) and `memory`; both are required.
+- `write(fd, ptr, len)`: fd 1 is stdout, fd 2 is stderr, other fds are a runner error. Bytes are
+  copied raw from `memory`; no text decoding.
+- `halt(code)` stops execution; the exit code is `code`.
+- `rterror(code)` writes `Runtime error N` and LF to stdout (no address), then behaves as
+  `halt(code)`. fpc writes to stderr; TP5 writes to the console.
+- Exit codes: program code when output matches (or none is expected), 1 on output mismatch,
+  2 on runner error (stderr prefix `run.mjs:`). A program `halt(2)` is indistinguishable by code.
+- Imports other than `write`, `halt` and `rterror` are stubs that fail with
+  `host import X not available in test runner`; unknown imports fail instantiation.
+
 ## 9. Runtime errors
 
 (Plan §4.10.) Report `Runtime error N`.
