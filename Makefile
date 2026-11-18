@@ -7,7 +7,7 @@ build:
 	cargo build
 
 test:
-	cargo test
+	cargo test --no-fail-fast
 	sh tests/tools/loc_test.sh
 
 fmt:
