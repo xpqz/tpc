@@ -12,30 +12,27 @@ Read before starting: the brief, `CLAUDE.md`, the `plan.md` sections the brief n
 `docs/reviews/{id}.md` if it exists. `skis issue view {id}` shows the issue. Use the
 `skis` CLI only; never touch `.skis/issues.db`.
 
-If the brief names a worktree (`worktrees/{id}-{slug}`), work only there; the lead has
-created it with your branch. Run builds and tests through `make`, which routes build output
-via `scripts/cargo-target.sh`. For direct `cargo`, prefix with
+You work only in the worktree the brief names (`worktrees/{id}-{slug}`), which the lead has
+created on your branch. Never touch the main checkout or other worktrees. Run builds and
+tests through `make`, which routes build output via `scripts/cargo-target.sh`. For direct `cargo`, prefix with
 `export CARGO_TARGET_DIR=$(scripts/cargo-target.sh);` run from your checkout's root. Never
 build into `target/`.
 
 ## Stage 1: RED
 
-1. Unless working in a worktree, create branch `{id}-{slug-from-issue-title}` (lowercase,
-   alphanumeric words joined by hyphens) from an up-to-date `main`; if it exists, check it
-   out.
-2. Write the tests the acceptance criteria describe. Test richly: positive, boundary and
+1. Write the tests the acceptance criteria describe. Test richly: positive, boundary and
    negative cases. Tests do not count towards the LOC budget.
    - Expected program output comes from `fpc -Mtp -v0` (build in `tmp/`), never written by
      hand. Note any intended deviation and its `docs/deviations.md` entry.
    - Every new construct gets a negative test (expected error number and line).
-3. Run the new tests. Confirm each fails for the stated reason: not a compile error in the
+2. Run the new tests. Confirm each fails for the stated reason: not a compile error in the
    test itself, not an empty-versus-empty comparison, not a path that never reaches the
    code under test. Where an observable could be empty, assert it is not.
-4. Run `tools/loc.sh` (once it exists) and record the numbers.
-5. Append to `docs/prs/{id}.md`: issue id and title, branch, each test and what it checks,
+3. Run `tools/loc.sh` (once it exists) and record the numbers.
+4. Append to `docs/prs/{id}.md`: issue id and title, branch, each test and what it checks,
    how each fails today, intended behaviour, LOC before. Record every command you ran with
    its result.
-6. Commit the tests and the PR doc. Report to the lead and **stop**. Do not implement
+5. Commit the tests and the PR doc. Report to the lead and **stop**. Do not implement
    before the RED verdict.
 
 ## Stage 2: GREEN
