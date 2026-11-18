@@ -9,7 +9,7 @@ pub const TABLE: &[(u16, &str)] = &[
     (6, "Error in real constant"),
     (7, "Error in integer constant"),
     (8, "String constant exceeds line"),
-    (10, "Unexpected end of source"),
+    (10, "Unexpected end of file"),
     (12, "Type identifier expected"),
     (17, "Invalid compiler directive"),
     (20, "Variable identifier expected"),
