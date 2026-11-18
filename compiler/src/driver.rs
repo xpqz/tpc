@@ -1,3 +1,8 @@
+use crate::check::check;
+use crate::codegen::gen;
+use crate::lex::lex;
+use crate::parse::parse;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Diag {
     pub code: u16,
@@ -5,13 +10,29 @@ pub struct Diag {
     pub col: u32,
 }
 
-/// Front end not present yet: every program is reported as unsupported.
-pub fn compile(_src: &[u8]) -> Result<Vec<u8>, Diag> {
-    Err(Diag {
-        code: 200,
-        line: 1,
-        col: 1,
-    })
+/// lex, parse, check, codegen.
+pub fn compile(src: &[u8]) -> Result<Vec<u8>, Diag> {
+    // TP reports end of file on the last line of the file, not after its final newline.
+    let last_line =
+        src.iter().filter(|&&c| c == b'\n').count() as u32 + !src.ends_with(b"\n") as u32;
+    let diag = |d: Diag| Diag {
+        line: if d.code == 10 {
+            last_line.max(1)
+        } else {
+            d.line
+        },
+        ..d
+    };
+    let toks = lex(src).map_err(|e| {
+        diag(Diag {
+            code: e.num,
+            line: e.line,
+            col: e.col,
+        })
+    })?;
+    let (mut ast, root) = parse(toks).map_err(diag)?;
+    check(&mut ast, root)?;
+    Ok(gen(&ast, root))
 }
 
 /// `tp5c in.pas -o out.wasm`; returns the process exit code.

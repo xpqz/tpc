@@ -65,7 +65,7 @@ fn every_failure_is_reported_in_one_run() {
 }
 
 #[test]
-fn unsupported_front_end_fails_real_programs_that_are_not_pending() {
+fn failing_compile_fails_real_programs_that_are_not_pending() {
     let f = check_lang(&fixture("lang/real_unsupported"), &real_compile);
     assert_eq!(f.len(), 1, "{f:?}");
     assert!(
@@ -73,7 +73,7 @@ fn unsupported_front_end_fails_real_programs_that_are_not_pending() {
             &f,
             &[
                 "hello: compile exited 1",
-                "hello.pas(1,1): Error 200: Feature not supported"
+                "hello.pas(1,7): Error 3: Unknown identifier"
             ]
         ),
         "{f:?}"
@@ -81,7 +81,7 @@ fn unsupported_front_end_fails_real_programs_that_are_not_pending() {
 }
 
 #[test]
-fn unsupported_front_end_is_accepted_for_pending_programs() {
+fn failing_compile_is_accepted_for_pending_programs() {
     assert_eq!(
         check_lang(&fixture("lang/real_pending"), &real_compile),
         Vec::<String>::new()

@@ -47,7 +47,6 @@ func_result_assigned_repeatedly
 func_result_narrowed_on_return
 func_result_types
 gcd_and_lcm_loops
-hello_string
 hex_literals
 if_boolean_variable
 if_compound_and_nested

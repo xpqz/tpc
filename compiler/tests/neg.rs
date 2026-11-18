@@ -70,7 +70,7 @@ fn every_failure_is_reported_in_one_run() {
 }
 
 #[test]
-fn real_compiler_reports_200_at_1_1() {
+fn real_compiler_reports_its_diagnostic() {
     assert_eq!(
         check_neg(&fixture("neg/real_200"), &real_compile),
         Vec::<String>::new()
@@ -80,5 +80,5 @@ fn real_compiler_reports_200_at_1_1() {
 #[test]
 fn real_compiler_diagnostic_mismatch_is_reported() {
     let f = check_neg(&fixture("neg/real_wrong"), &real_compile);
-    assert_eq!(f, ["real_wrong: exit 1, got `200 1`, want `5 1`"]);
+    assert_eq!(f, ["real_wrong: exit 1, got `3 1`, want `5 1`"]);
 }
