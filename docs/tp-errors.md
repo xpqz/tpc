@@ -21,7 +21,7 @@ features use a distinct "not supported" code chosen in docs/decisions.md.
 | 7 | Error in integer constant |
 | 8 | String constant exceeds line |
 | 9 | Too many nested files |
-| 10 | Unexpected end of file |
+| 10 | Unexpected end of source |
 | 11 | Line too long |
 | 12 | Type identifier expected |
 | 13 | Too many open files |
