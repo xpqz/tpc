@@ -2,7 +2,7 @@
 //! Static data: a fixed header, the globals (`check::GLOBALS`..), then string literals.
 use crate::ast::{Ast, Id, Kind, List, Op};
 use crate::check::Info;
-use crate::types::{Routine, SymKind, Symbol, Tag, Ty};
+use crate::types::{Routine, SymKind, Symbol, Tag, Ty, Type};
 use crate::wasm::{Code, Label, Module, FUNC, GLOBAL, I32, MEM, VOID};
 
 const PAGES: u32 = 16;
@@ -20,6 +20,7 @@ const STACK_LIMIT: i32 = (TOP - 65536) as i32;
 const SP: u32 = 0;
 const STDOUT: i32 = 1;
 
+const UNREACHABLE: u8 = 0x00;
 const CALL: u8 = 0x10;
 const SELECT: u8 = 0x1B;
 const LOCAL_GET: u8 = 0x20;
@@ -62,12 +63,21 @@ const QUOT: u32 = 4;
 /// Index of the first user routine; the main program follows the last.
 const ROUTINES: u32 = 5;
 
+/// Module-wide numbers the bodies refer to.
+struct Layout {
+    /// Address of each string literal.
+    addr: Vec<u32>,
+    /// WASM type of each procedural type, by `Ty` index.
+    wtypes: Vec<u32>,
+    /// Table index of each routine whose address is taken.
+    slots: Vec<u32>,
+}
+
 struct Gen<'a> {
     ast: &'a Ast,
     info: &'a Info,
     code: Code,
-    /// Address of each string literal.
-    addr: &'a [u32],
+    layout: &'a Layout,
     /// Number of WASM locals in use: parameters, the result, declared locals, temporaries.
     locals: u32,
     /// The local holding the frame pointer, when the routine has a frame.
@@ -87,6 +97,26 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
         lits.extend_from_slice(s);
     }
     let mut m = Module::new();
+    let mut wtypes = vec![0; info.types.v.len()];
+    for (i, t) in info.types.v.iter().enumerate() {
+        if let Type::Proc { params, result } = t {
+            let results: &[u8] = if *result == Ty::NONE { &[] } else { &[I32] };
+            wtypes[i] = m.ty(&vec![I32; params.len()], results);
+        }
+    }
+    // Table index 0 is the trap stub.
+    let mut slots = Vec::new();
+    for r in &info.routines {
+        slots.push(1 + slots.iter().filter(|&&s| s != 0).count() as u32);
+        if !r.addressed {
+            *slots.last_mut().unwrap() = 0;
+        }
+    }
+    let layout = Layout {
+        addr,
+        wtypes,
+        slots,
+    };
     let write = m.ty(&[I32, I32, I32], &[]);
     let rterror = m.ty(&[I32], &[]);
     m.import_func("host", "write", write);
@@ -101,15 +131,30 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
     for r in &info.routines {
         let results: &[u8] = if r.func { &[I32] } else { &[] };
         let ty = m.ty(&vec![I32; r.params.len() + (r.depth > 1) as usize], results);
-        let (code, locals) = body(ast, info, &addr, Some(r), r.body);
+        let (code, locals) = body(ast, info, &layout, Some(r), r.body);
         m.func(ty, &vec![I32; locals], code);
     }
     let Kind::Program(_, _, main) = ast.nodes[root as usize].kind else {
         unreachable!("the root is a program")
     };
-    let (code, locals) = body(ast, info, &addr, None, main);
+    let (code, locals) = body(ast, info, &layout, None, main);
     let ty = m.ty(&[], &[]);
     let f = m.func(ty, &vec![I32; locals], code);
+    let stub = {
+        let mut c = Code::new();
+        c.op(UNREACHABLE);
+        m.func(ty, &[], c)
+    };
+    let mut table = vec![stub];
+    table.extend(
+        info.routines
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.addressed)
+            .map(|(i, _)| ROUTINES + i as u32),
+    );
+    m.table(table.len() as u32);
+    m.elem(0, &table);
     m.export("main", FUNC, f);
     m.export("sp", GLOBAL, SP);
     m.export("memory", MEM, 0);
@@ -124,7 +169,7 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
 fn body(
     ast: &Ast,
     info: &Info,
-    addr: &[u32],
+    layout: &Layout,
     routine: Option<&Routine>,
     stmt: Id,
 ) -> (Code, usize) {
@@ -134,7 +179,7 @@ fn body(
         ast,
         info,
         code: Code::new(),
-        addr,
+        layout,
         locals: nparams + routine.map_or(0, |r| r.nlocals),
         fp: 0,
         depth,
@@ -423,13 +468,13 @@ impl Gen<'_> {
         if routine.depth > 1 {
             self.frame_ptr(self.depth + 1 - routine.depth);
         }
-        for ((&a, &ty), &byref) in self
-            .ast
-            .items(args)
-            .iter()
-            .zip(&routine.params)
-            .zip(&routine.byref)
-        {
+        self.push_args(args, &routine.params, &routine.byref);
+        self.code.idx(CALL, ROUTINES + r);
+    }
+
+    /// Value arguments converted to the parameter types, `var` arguments as addresses.
+    fn push_args(&mut self, args: List, params: &[Ty], refs: &[bool]) {
+        for ((&a, &ty), &byref) in self.ast.items(args).iter().zip(params).zip(refs) {
             if byref {
                 let s = self.symbol(a);
                 let offset = self.base(s);
@@ -441,7 +486,16 @@ impl Gen<'_> {
                 self.narrow(ty);
             }
         }
-        self.code.idx(CALL, ROUTINES + r);
+    }
+
+    /// A call through the procedural value `callee`: arguments, the table index, then
+    /// `call_indirect` with the WASM type of the signature.
+    fn indirect(&mut self, callee: Id, args: List) {
+        let ty = self.ast.nodes[callee as usize].ty;
+        let (params, refs, _) = self.info.types.sig(ty).expect("procedural callee");
+        self.push_args(args, &params, &refs);
+        self.expr(callee);
+        self.code.call_indirect(self.layout.wtypes[ty.0 as usize]);
     }
 
     /// A unary operator or intrinsic of result type `ty`.
@@ -500,6 +554,7 @@ impl Gen<'_> {
             Kind::Compound(l) => self.ast.items(l).iter().for_each(|&s| self.stmt(s)),
             Kind::Assign(target, value) => self.put(target, |g| g.expr(value)),
             Kind::Invoke(r, args) => self.invoke(r, args),
+            Kind::Indirect(callee, args) => self.indirect(callee, args),
             Kind::Exit => {
                 self.code.br(self.exit);
             }
@@ -611,7 +666,7 @@ impl Gen<'_> {
             (None, Kind::StrLit(s)) => {
                 let len = self.ast.strs[s as usize].len();
                 self.code
-                    .i32_const(self.addr[s as usize] as i32)
+                    .i32_const(self.layout.addr[s as usize] as i32)
                     .i32_const(len as i32);
                 self.width(w);
                 self.code.idx(CALL, WSTR);
@@ -655,7 +710,11 @@ impl Gen<'_> {
                 self.code.i32_const(v as i32);
             }
             Kind::Var(_) => self.get(e),
+            Kind::ProcRef(r) => {
+                self.code.i32_const(self.layout.slots[r as usize] as i32);
+            }
             Kind::Invoke(r, args) => self.invoke(r, args),
+            Kind::Indirect(callee, args) => self.indirect(callee, args),
             Kind::Binary(op @ (Op::And | Op::Or), a, b) if n.ty == Ty::BOOLEAN => {
                 // `{$B-}`: the right operand is evaluated only when it can matter.
                 self.expr(a);

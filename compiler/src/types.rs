@@ -27,6 +27,12 @@ pub enum Type {
     None,
     /// `String[n]`.
     Str(u8),
+    /// A procedural type: parameters (type, by reference) and the result (`Ty::NONE` for a
+    /// procedure). Interned by content, so equal signatures are the same type.
+    Proc {
+        params: Vec<(Ty, bool)>,
+        result: Ty,
+    },
     Ord {
         lo: i64,
         hi: i64,
@@ -114,6 +120,8 @@ pub struct Routine {
     pub result_sym: Sym,
     /// Value parameters moved to the frame: (parameter local, offset, type).
     pub copies: Vec<(u32, u32, Ty)>,
+    /// Its address is taken as a procedural value: it has a table slot.
+    pub addressed: bool,
 }
 
 pub struct Types {
@@ -151,9 +159,38 @@ impl Types {
         }
     }
 
-    /// (lo, hi, size, signed) of an ordinal type.
+    pub fn proc(&mut self, params: Vec<(Ty, bool)>, result: Ty) -> Ty {
+        let same = |t: &Type| match t {
+            Type::Proc {
+                params: p,
+                result: r,
+            } => *p == params && *r == result,
+            _ => false,
+        };
+        let at = self.v.iter().position(same).unwrap_or(self.v.len());
+        if at == self.v.len() {
+            self.v.push(Type::Proc { params, result });
+        }
+        Ty(at as u32)
+    }
+
+    /// Parameter types, by-reference flags and result of a procedural type.
+    pub fn sig(&self, t: Ty) -> Option<(Vec<Ty>, Vec<bool>, Ty)> {
+        match &self.v[t.0 as usize] {
+            Type::Proc { params, result } => Some((
+                params.iter().map(|p| p.0).collect(),
+                params.iter().map(|p| p.1).collect(),
+                *result,
+            )),
+            _ => None,
+        }
+    }
+
+    /// (lo, hi, size, signed) of an ordinal type; a procedural value is a 4-byte table
+    /// index loaded and stored like an unsigned ordinal.
     pub fn ord(&self, t: Ty) -> (i64, i64, u8, bool) {
         match self.v[t.0 as usize] {
+            Type::Proc { .. } => (0, u32::MAX as i64, 4, false),
             Type::Ord {
                 lo,
                 hi,

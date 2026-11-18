@@ -1,5 +1,5 @@
 //! Recursive-descent parser: `[program header;] begin statements end .`
-use crate::ast::{Ast, Id, Kind, Op, NO_NAME};
+use crate::ast::{Ast, Id, Kind, List, Op, NO_NAME};
 use crate::driver::Diag;
 use crate::lex::{Tk, Tok};
 
@@ -17,7 +17,25 @@ struct Parser {
 
 type R<T> = Result<T, Diag>;
 
+/// Only the `{$F+}` and `{$F-}` switches are accepted; they have no effect.
+fn drop_directives(toks: Vec<Tok>) -> R<Vec<Tok>> {
+    for t in toks.iter().filter(|t| t.kind == Tk::Directive) {
+        if !t.text.eq_ignore_ascii_case(b"F+") && !t.text.eq_ignore_ascii_case(b"F-") {
+            return Err(Diag {
+                code: 200,
+                line: t.line,
+                col: t.col,
+            });
+        }
+    }
+    Ok(toks
+        .into_iter()
+        .filter(|t| t.kind != Tk::Directive)
+        .collect())
+}
+
 pub fn parse(toks: Vec<Tok>) -> R<(Ast, Id)> {
+    let toks = drop_directives(toks)?;
     let mut p = Parser {
         toks,
         at: 0,
@@ -293,37 +311,61 @@ impl Parser {
         self.ident()
     }
 
-    /// After `PROCEDURE` or `FUNCTION`.
-    fn routine(&mut self, func: bool) -> R<Id> {
-        let name = self.ident()?;
-        let mut params = None;
-        if self.sym(b"(") {
-            let mut list = Vec::new();
+    /// An optional parenthesised parameter list, as `Param` nodes.
+    fn params(&mut self) -> R<Option<List>> {
+        if !self.sym(b"(") {
+            return Ok(None);
+        }
+        let mut list = Vec::new();
+        loop {
+            let byref = self.kw(b"VAR");
+            let mut names = Vec::new();
             loop {
-                let byref = self.kw(b"VAR");
-                let mut names = Vec::new();
-                loop {
-                    let (line, col) = self.pos();
-                    names.push((self.ident()?, line, col));
-                    if !self.sym(b",") {
-                        break;
-                    }
-                }
-                if byref && !self.is(Tk::Sym, b":") {
-                    return Err(self.err(200));
-                }
-                self.expect_sym(b":", 86)?;
-                let ty = self.type_name()?;
-                for (name, line, col) in names {
-                    list.push(self.ast.add(Kind::Param(name, ty, byref), line, col));
-                }
-                if !self.sym(b";") {
+                let (line, col) = self.pos();
+                names.push((self.ident()?, line, col));
+                if !self.sym(b",") {
                     break;
                 }
             }
-            self.expect_sym(b")", 89)?;
-            params = Some(self.ast.list(&list));
+            if byref && !self.is(Tk::Sym, b":") {
+                return Err(self.err(200));
+            }
+            self.expect_sym(b":", 86)?;
+            let ty = self.type_name()?;
+            for (name, line, col) in names {
+                list.push(self.ast.add(Kind::Param(name, ty, byref), line, col));
+            }
+            if !self.sym(b";") {
+                break;
+            }
         }
+        self.expect_sym(b")", 89)?;
+        Ok(Some(self.ast.list(&list)))
+    }
+
+    /// A type: a type name, or `procedure [(params)]` / `function [(params)]: name`.
+    fn type_spec(&mut self) -> R<Id> {
+        let (line, col) = self.pos();
+        let func = self.is(Tk::Kw, b"FUNCTION");
+        if !self.kw(b"PROCEDURE") && !self.kw(b"FUNCTION") {
+            let name = self.type_name()?;
+            return Ok(self.ast.add(Kind::Name(name), line, col));
+        }
+        let params = self.params()?;
+        let mut result = NO_NAME;
+        if func {
+            self.expect_sym(b":", 86)?;
+            result = self.type_name()?;
+        }
+        Ok(self
+            .ast
+            .add(Kind::ProcType(params, result, func), line, col))
+    }
+
+    /// After `PROCEDURE` or `FUNCTION`.
+    fn routine(&mut self, func: bool) -> R<Id> {
+        let name = self.ident()?;
+        let params = self.params()?;
         let mut result = NO_NAME;
         if func && self.sym(b":") {
             result = self.type_name()?;
@@ -364,6 +406,18 @@ impl Parser {
                         break;
                     }
                 }
+            } else if self.kw(b"TYPE") {
+                loop {
+                    let (line, col) = self.pos();
+                    let name = self.ident()?;
+                    self.expect_sym(b"=", 90)?;
+                    let spec = self.type_spec()?;
+                    self.expect_sym(b";", 85)?;
+                    out.push(self.ast.add(Kind::TypeDecl(name, spec), line, col));
+                    if self.tok().kind != Tk::Ident {
+                        break;
+                    }
+                }
             } else if self.kw(b"VAR") {
                 loop {
                     let mut names = Vec::new();
@@ -375,7 +429,18 @@ impl Parser {
                         }
                     }
                     self.expect_sym(b":", 86)?;
-                    let ty = self.type_name()?;
+                    let ty = if self.is(Tk::Kw, b"PROCEDURE") || self.is(Tk::Kw, b"FUNCTION") {
+                        // A hidden type name no identifier can have.
+                        let n = self.ast.names.len() as u32;
+                        let key = [b' ', 0x80 | (n & 0x7F) as u8, 0x80 | (n >> 7) as u8];
+                        let (line, col) = self.pos();
+                        let name = self.ast.intern(&key);
+                        let spec = self.type_spec()?;
+                        out.push(self.ast.add(Kind::TypeDecl(name, spec), line, col));
+                        name
+                    } else {
+                        self.type_name()?
+                    };
                     self.unsupported(&[b"ABSOLUTE"])?;
                     self.expect_sym(b";", 85)?;
                     for (name, line, col) in names {
@@ -546,6 +611,11 @@ impl Parser {
                     return Ok(self.ast.add(Kind::Paren(e), line, col));
                 }
                 return Ok(e);
+            }
+            Tk::Sym if t.text == b"@" => {
+                self.at += 1;
+                let e = self.factor()?;
+                return Ok(self.ast.add(Kind::AddrOf(e), line, col));
             }
             Tk::Kw if t.text == b"NOT" => {
                 self.at += 1;
