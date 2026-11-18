@@ -1,0 +1,13 @@
+# name|limit|paths (files, or directories searched recursively), relative to the repo root
+WASM binary emitter|350|compiler/src/wasm.rs
+Lexer|450|compiler/src/lex.rs
+AST + parser|2000|compiler/src/ast.rs compiler/src/parse.rs
+Types, symbols, frame layout|1400|compiler/src/types.rs
+Checker|2200|compiler/src/check.rs
+Codegen|2500|compiler/src/codegen.rs
+Units, directives, driver, diagnostics, native CLI|1100|compiler/src/lib.rs compiler/src/main.rs compiler/src/driver.rs compiler/src/diag.rs compiler/src/units.rs compiler/build.rs
+System, Crt, Dos subset|1500|runtime
+IDE|2500|ide
+Host glue|500|host
+ROOTS|compiler/src compiler/build.rs runtime ide host
+TOTAL|15000
