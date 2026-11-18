@@ -289,6 +289,17 @@ fn stack_overflow_is_runtime_error_202() {
     assert_eq!(code, 202);
 }
 
+/// The host's own stack runs out first in a routine without a frame; the runner reports it
+/// as the same runtime error.
+#[test]
+fn host_stack_exhaustion_is_runtime_error_202() {
+    let src = "program Prog;\nprocedure R(n: Integer);\nbegin\n  R(n + 1)\nend;\nbegin\n  WriteLn('go');\n  R(0)\nend.\n";
+    let (code, out, err) = run_source("host_stack", src);
+    assert_eq!(err, "");
+    assert_eq!(out, "go\nRuntime error 202\n");
+    assert_eq!(code, 202);
+}
+
 #[test]
 fn deep_recursion_within_the_stack_does_not_overflow() {
     let (code, out, err) = run_source("no_overflow", &dive(1000, 10));

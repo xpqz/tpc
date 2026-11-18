@@ -85,22 +85,14 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
     };
     for &(name, kind, ty, val) in PREDEFINED {
         let name = cx.ast.intern(name);
-        cx.push(name, Symbol { kind, ty, val });
+        cx.push(name, Symbol::new(kind, ty, val));
     }
     cx.user = cx.scope.len();
     let Kind::Program(name, decls, body) = cx.ast.nodes[root as usize].kind else {
         unreachable!("the parser's root is a program")
     };
     if name != NO_NAME {
-        cx.declare(
-            root,
-            name,
-            Symbol {
-                kind: SymKind::Prog,
-                ty: Ty::NONE,
-                val: 0,
-            },
-        )?;
+        cx.declare(root, name, Symbol::new(SymKind::Prog, Ty::NONE, 0))?;
     }
     for d in cx.ast.items(decls).to_vec() {
         cx.decl(d)?;
@@ -188,33 +180,17 @@ impl Cx<'_> {
                     Kind::StrLit(i) => (i as i64, Ty::STRING),
                     _ => return Err(self.err(e, 133)),
                 };
-                self.declare(
-                    d,
-                    name,
-                    Symbol {
-                        kind: SymKind::Const,
-                        ty,
-                        val,
-                    },
-                )?;
+                self.declare(d, name, Symbol::new(SymKind::Const, ty, val))?;
             }
             Kind::VarDecl(name, type_name) => {
                 let ty = self.type_of(d, type_name)?;
                 let sym = if self.cur.is_some() {
                     self.locals += 1;
-                    Symbol {
-                        kind: SymKind::Local,
-                        ty,
-                        val: self.locals as i64 - 1,
-                    }
+                    Symbol::new(SymKind::Local, ty, self.locals as i64 - 1)
                 } else {
                     let val = self.end as i64;
                     self.end += self.types.ord(ty).2 as u32;
-                    Symbol {
-                        kind: SymKind::Var,
-                        ty,
-                        val,
-                    }
+                    Symbol::new(SymKind::Var, ty, val)
                 };
                 self.declare(d, name, sym)?;
             }
@@ -242,13 +218,14 @@ impl Cx<'_> {
         if self.cur.is_some() {
             return Err(self.err(d, 200));
         }
-        let (mut tys, mut names) = (Vec::new(), Vec::new());
+        let (mut tys, mut names, mut refs) = (Vec::new(), Vec::new(), Vec::new());
         for p in params.map_or(Vec::new(), |l| self.ast.items(l).to_vec()) {
-            let Kind::Param(n, t) = self.ast.nodes[p as usize].kind else {
+            let Kind::Param(n, t, byref) = self.ast.nodes[p as usize].kind else {
                 unreachable!("the parser lists parameters")
             };
             tys.push(self.type_of(p, t)?);
             names.push(n);
+            refs.push(byref);
         }
         let rty = if result == NO_NAME {
             None
@@ -268,24 +245,18 @@ impl Cx<'_> {
                 let (params, body, nlocals) = (tys.clone(), 0, 0);
                 self.routines.push(Routine {
                     params,
+                    byref: refs.clone(),
                     names,
                     result,
                     func,
                     defined,
                     body,
                     nlocals,
+                    frame: 0,
+                    copies: Vec::new(),
                 });
                 let val = self.routines.len() as i64 - 1;
-                let kind = SymKind::Routine;
-                self.declare(
-                    d,
-                    name,
-                    Symbol {
-                        kind,
-                        ty: Ty::NONE,
-                        val,
-                    },
-                )?;
+                self.declare(d, name, Symbol::new(SymKind::Routine, Ty::NONE, val))?;
                 self.routines.len() - 1
             }
             Some(s) if s.kind == SymKind::Routine => {
@@ -296,7 +267,9 @@ impl Cx<'_> {
                 if block.is_none() {
                     return Err(self.err(d, 36));
                 }
-                if params.is_some() && tys != r.params || rty.is_some_and(|t| t != r.result) {
+                if params.is_some() && (tys != r.params || refs != r.byref)
+                    || rty.is_some_and(|t| t != r.result)
+                {
                     return Err(self.err(d, 131));
                 }
                 if params.is_some() {
@@ -313,20 +286,22 @@ impl Cx<'_> {
             unreachable!("the parser makes a block")
         };
         self.routines[r].defined = true;
-        let (params, names) = (
+        let (params, names, refs) = (
             self.routines[r].params.clone(),
             self.routines[r].names.clone(),
+            self.routines[r].byref.clone(),
         );
+        let first = self.syms.len();
         let (scope_len, user) = (self.scope.len(), self.user);
         (self.user, self.cur) = (scope_len, Some(r));
         self.locals = params.len() as u32 + func as u32;
         for (i, (&n, &ty)) in names.iter().zip(&params).enumerate() {
-            let sym = Symbol {
-                kind: SymKind::Local,
-                ty,
-                val: i as i64,
+            let kind = if refs[i] {
+                SymKind::Ref
+            } else {
+                SymKind::Local
             };
-            self.declare(block, n, sym)?;
+            self.declare(block, n, Symbol::new(kind, ty, i as i64))?;
         }
         for decl in self.ast.items(decls).to_vec() {
             self.decl(decl)?;
@@ -334,8 +309,81 @@ impl Cx<'_> {
         self.stmt(body)?;
         self.routines[r].body = body;
         self.routines[r].nlocals = self.locals - params.len() as u32;
+        self.place_frame(r, first);
         self.scope.truncate(scope_len);
         (self.user, self.cur) = (user, None);
+        Ok(())
+    }
+
+    /// Moves the routine's address-taken locals (symbols from `first` on) to the frame, in
+    /// declaration order with no padding.
+    fn place_frame(&mut self, r: usize, first: usize) {
+        let nparams = self.routines[r].params.len() as i64;
+        let (mut size, mut copies) = (0, Vec::new());
+        for s in &mut self.syms[first..] {
+            if s.kind == SymKind::Local && s.taken {
+                if s.val < nparams {
+                    copies.push((s.val as u32, size, s.ty));
+                }
+                (s.kind, s.val) = (SymKind::Frame, size as i64);
+                size += self.types.ord(s.ty).2 as u32;
+            }
+        }
+        self.routines[r].frame = size;
+        self.routines[r].copies = copies;
+    }
+
+    /// TP's error for an argument of a `var` parameter that is not a variable, decided by its
+    /// leftmost token; 0 for a variable.
+    fn bad_var_arg(&self, e: Id) -> u16 {
+        let function =
+            |name: u32, call: bool| match self.lookup(name).map(|s| self.syms[s.0 as usize]) {
+                Some(s) if s.kind == SymKind::Routine && self.routines[s.val as usize].func => {
+                    if call || self.routines[s.val as usize].params.is_empty() {
+                        122
+                    } else {
+                        88
+                    }
+                }
+                Some(s) if s.kind == SymKind::Intrinsic && (2..=8).contains(&s.val) => 122,
+                _ => 20,
+            };
+        match self.ast.nodes[e as usize].kind {
+            Kind::Binary(_, a, _) => match self.bad_var_arg(a) {
+                0 => 89,
+                c => c,
+            },
+            Kind::Call(callee, _) => match self.ast.nodes[callee as usize].kind {
+                Kind::Name(name) => function(name, true),
+                _ => 20,
+            },
+            Kind::Name(name) => match self.lookup(name).map(|s| self.syms[s.0 as usize]) {
+                None => 3,
+                Some(s) if s.kind == SymKind::Omitted => 200,
+                Some(s) if matches!(s.kind, SymKind::Var | SymKind::Local | SymKind::Ref) => 0,
+                Some(_) => function(name, false),
+            },
+            _ => 20,
+        }
+    }
+
+    /// An argument of a `var` parameter of type `ty`: a variable of that very type. `at` is
+    /// the call.
+    fn var_arg(&mut self, at: Id, arg: Id, ty: Ty) -> R<()> {
+        match self.bad_var_arg(arg) {
+            0 => {}
+            code => return Err(self.err(arg, code)),
+        }
+        let Kind::Name(name) = self.ast.nodes[arg as usize].kind else {
+            unreachable!("a variable argument is a name")
+        };
+        let (sym, s) = self.resolve(arg, name)?;
+        if s.ty != ty {
+            return Err(self.err(at, 26));
+        }
+        self.syms[sym.0 as usize].taken |= s.kind == SymKind::Local;
+        self.ast.nodes[arg as usize].kind = Kind::Var(sym);
+        self.ast.nodes[arg as usize].ty = ty;
         Ok(())
     }
 
@@ -395,6 +443,9 @@ impl Cx<'_> {
                     unreachable!("the parser names the control variable")
                 };
                 let (sym, s) = self.resolve(var, name)?;
+                if s.kind == SymKind::Ref {
+                    return Err(self.err(var, 97));
+                }
                 if !matches!(s.kind, SymKind::Var | SymKind::Local) {
                     return Err(self.err(var, 20));
                 }
@@ -412,7 +463,7 @@ impl Cx<'_> {
                 };
                 let (sym, s) = self.resolve(target, name)?;
                 let (kind, ty) = match s.kind {
-                    SymKind::Var | SymKind::Local => (Kind::Var(sym), s.ty),
+                    SymKind::Var | SymKind::Local | SymKind::Ref => (Kind::Var(sym), s.ty),
                     SymKind::Routine
                         if self.cur == Some(s.val as usize)
                             && self.routines[s.val as usize].func =>
@@ -453,7 +504,9 @@ impl Cx<'_> {
                         Kind::Invoke(s.val as u32, args)
                     }
                     SymKind::Routine => return Err(self.err(id, 122)),
-                    SymKind::Var | SymKind::Local => return Err(self.err(callee, 91)),
+                    SymKind::Var | SymKind::Local | SymKind::Ref => {
+                        return Err(self.err(callee, 91));
+                    }
                     _ => return Err(self.err(callee, 113)),
                 };
                 self.ast.nodes[id as usize].kind = kind;
@@ -468,6 +521,7 @@ impl Cx<'_> {
     fn arguments(&mut self, at: Id, r: usize, args: List, in_expr: bool) -> R<()> {
         let items = self.ast.items(args).to_vec();
         let params = self.routines[r].params.clone();
+        let refs = self.routines[r].byref.clone();
         let code = match (params.len(), items.len()) {
             (0, 0) => 0,
             (0, _) => 85 + 4 * in_expr as u16,
@@ -479,9 +533,13 @@ impl Cx<'_> {
         if code != 0 {
             return Err(self.err(at, code));
         }
-        for (&arg, &ty) in items.iter().zip(&params) {
+        for ((&arg, &ty), &byref) in items.iter().zip(&params).zip(&refs) {
             if matches!(self.ast.nodes[arg as usize].kind, Kind::Fmt(..)) {
                 return Err(self.err(at, 89));
+            }
+            if byref {
+                self.var_arg(at, arg, ty)?;
+                continue;
             }
             self.expr(arg)?;
             self.assignable(at, ty, arg)?;
@@ -568,7 +626,7 @@ impl Cx<'_> {
                 match s.kind {
                     SymKind::Const if s.ty == Ty::STRING => (Kind::StrLit(s.val as u32), s.ty),
                     SymKind::Const => (Kind::IntLit(s.val), s.ty),
-                    SymKind::Var | SymKind::Local => (Kind::Var(sym), s.ty),
+                    SymKind::Var | SymKind::Local | SymKind::Ref => (Kind::Var(sym), s.ty),
                     SymKind::Routine => {
                         let r = &self.routines[s.val as usize];
                         let (func, result) = (r.func, r.result);
@@ -610,6 +668,11 @@ impl Cx<'_> {
                     SymKind::Intrinsic => return Err(self.err(callee, 42)),
                     _ => return Err(self.err(e, 89)),
                 }
+            }
+            Kind::Paren(a) => {
+                self.expr(a)?;
+                let inner = self.ast.nodes[a as usize];
+                (inner.kind, inner.ty)
             }
             Kind::Unary(op, a) => self.unary(e, op, a)?,
             Kind::Binary(op, a, b) => {

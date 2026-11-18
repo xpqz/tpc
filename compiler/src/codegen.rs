@@ -2,8 +2,8 @@
 //! Static data: a fixed header, the globals (`check::GLOBALS`..), then string literals.
 use crate::ast::{Ast, Id, Kind, List, Op};
 use crate::check::Info;
-use crate::types::{SymKind, Tag, Ty};
-use crate::wasm::{Code, Label, Module, FUNC, I32, MEM, VOID};
+use crate::types::{Routine, SymKind, Symbol, Tag, Ty};
+use crate::wasm::{Code, Label, Module, FUNC, GLOBAL, I32, MEM, VOID};
 
 const PAGES: u32 = 16;
 const HEADER: u32 = 256;
@@ -14,12 +14,19 @@ const TRUE: i32 = 263;
 /// Scratch for digits and single characters.
 const BUF: i32 = 267;
 const BUF_LEN: i32 = 12;
+const TOP: u32 = PAGES * 65536;
+/// The shadow stack may use the top 64 KB of memory (docs/abi.md).
+const STACK_LIMIT: i32 = (TOP - 65536) as i32;
+const SP: u32 = 0;
 const STDOUT: i32 = 1;
 
 const CALL: u8 = 0x10;
 const SELECT: u8 = 0x1B;
 const LOCAL_GET: u8 = 0x20;
 const LOCAL_SET: u8 = 0x21;
+const LOCAL_TEE: u8 = 0x22;
+const GLOBAL_GET: u8 = 0x23;
+const GLOBAL_SET: u8 = 0x24;
 const I32_LOAD: u8 = 0x28;
 const I32_STORE: u8 = 0x36;
 const I32_STORE8: u8 = 0x3A;
@@ -27,6 +34,7 @@ const RETURN: u8 = 0x0F;
 const I32_EQZ: u8 = 0x45;
 const I32_EQ: u8 = 0x46;
 const I32_NE: u8 = 0x47;
+const I32_LT_U: u8 = 0x49;
 const I32_LE_S: u8 = 0x4C;
 const I32_LE_U: u8 = 0x4D;
 const I32_OR: u8 = 0x72;
@@ -63,6 +71,8 @@ struct Gen<'a> {
     /// Number of WASM locals in use: parameters, the result, declared locals, temporaries.
     locals: u32,
     nparams: u32,
+    /// The local holding the frame pointer, when the routine has a frame.
+    fp: u32,
     /// The block around the routine body; `Exit` branches to it.
     exit: Label,
 }
@@ -80,7 +90,7 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
     m.import_func("host", "write", write);
     m.import_func("host", "rterror", rterror);
     m.memory(PAGES);
-    m.global_i32(true, (PAGES * 65536) as i32);
+    m.global_i32(true, TOP as i32);
     m.func(write, &[], write_string());
     let two = m.ty(&[I32, I32], &[]);
     m.func(two, &[I32, I32, I32], write_integer());
@@ -89,54 +99,74 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
     for r in &info.routines {
         let results: &[u8] = if r.func { &[I32] } else { &[] };
         let ty = m.ty(&vec![I32; r.params.len()], results);
-        let (code, locals) = body(
-            ast,
-            info,
-            &addr,
-            r.params.len() as u32,
-            r.nlocals,
-            r.func,
-            r.body,
-        );
+        let (code, locals) = body(ast, info, &addr, Some(r), r.body);
         m.func(ty, &vec![I32; locals], code);
     }
     let Kind::Program(_, _, main) = ast.nodes[root as usize].kind else {
         unreachable!("the root is a program")
     };
-    let (code, locals) = body(ast, info, &addr, 0, 0, false, main);
+    let (code, locals) = body(ast, info, &addr, None, main);
     let ty = m.ty(&[], &[]);
     let f = m.func(ty, &vec![I32; locals], code);
     m.export("main", FUNC, f);
+    m.export("sp", GLOBAL, SP);
     m.export("memory", MEM, 0);
     m.data(HEADER, b"\n FALSETRUE");
     m.data(info.data_end, &lits);
     m.finish()
 }
 
-/// A routine body wrapped in `block $exit`, followed by the result read for a function.
-/// Returns the code and the number of locals after the parameters.
+/// A routine body wrapped in `block $exit`, between the frame prologue and epilogue, followed
+/// by the result read for a function; the main program (`None`) has no frame. Returns the
+/// code and the number of locals after the parameters.
 fn body(
     ast: &Ast,
     info: &Info,
     addr: &[u32],
-    nparams: u32,
-    nlocals: u32,
-    func: bool,
+    routine: Option<&Routine>,
     stmt: Id,
 ) -> (Code, usize) {
+    let nparams = routine.map_or(0, |r| r.params.len() as u32);
+    let frame = routine.map_or(0, |r| r.frame);
     let mut g = Gen {
         ast,
         info,
         code: Code::new(),
         addr,
-        locals: nparams + nlocals,
+        locals: nparams + routine.map_or(0, |r| r.nlocals),
         nparams,
+        fp: 0,
         exit: Label(0),
     };
+    if let Some(r) = routine.filter(|r| r.frame > 0) {
+        g.fp = g.new_local();
+        g.code
+            .idx(GLOBAL_GET, SP)
+            .i32_const(frame as i32)
+            .op(I32_SUB);
+        g.code
+            .idx(LOCAL_TEE, g.fp)
+            .i32_const(STACK_LIMIT)
+            .op(I32_LT_U);
+        g.code.if_(VOID);
+        g.code.i32_const(202).idx(CALL, HOST_RTERROR).end();
+        g.code.idx(LOCAL_GET, g.fp).idx(GLOBAL_SET, SP);
+        for &(local, offset, ty) in &r.copies {
+            g.code.idx(LOCAL_GET, g.fp).idx(LOCAL_GET, local);
+            g.store(ty, offset);
+        }
+    }
     g.exit = g.code.block(VOID);
     g.stmt(stmt);
     g.code.end();
-    if func {
+    if frame > 0 {
+        g.code
+            .idx(LOCAL_GET, g.fp)
+            .i32_const(frame as i32)
+            .op(I32_ADD);
+        g.code.idx(GLOBAL_SET, SP);
+    }
+    if routine.is_some_and(|r| r.func) {
         g.code.idx(LOCAL_GET, nparams);
     }
     (g.code, (g.locals - nparams) as usize)
@@ -292,12 +322,43 @@ impl Gen<'_> {
         self.locals - 1
     }
 
-    /// Pushes the value of a variable.
-    fn get(&mut self, v: Id) {
+    /// Pushes the address base of a variable in memory and returns the offset to add.
+    fn base(&mut self, s: Symbol) -> u32 {
+        match s.kind {
+            SymKind::Var => {
+                self.code.i32_const(s.val as i32);
+            }
+            SymKind::Frame => {
+                self.code.idx(LOCAL_GET, self.fp);
+                return s.val as u32;
+            }
+            _ => {
+                self.code.idx(LOCAL_GET, s.val as u32);
+            }
+        }
+        0
+    }
+
+    /// Stores the i32 on the stack to the address below it, truncated to `ty`.
+    fn store(&mut self, ty: Ty, offset: u32) {
+        let size = self.info.types.ord(ty).2;
+        self.code.mem(
+            [I32_STORE8, 0x3B, 0, I32_STORE][size as usize - 1],
+            0,
+            offset,
+        );
+    }
+
+    fn symbol(&self, v: Id) -> Symbol {
         let Kind::Var(sym) = self.ast.nodes[v as usize].kind else {
             unreachable!("checked variable")
         };
-        let s = self.info.syms[sym.0 as usize];
+        self.info.syms[sym.0 as usize]
+    }
+
+    /// Pushes the value of a variable.
+    fn get(&mut self, v: Id) {
+        let s = self.symbol(v);
         if s.kind == SymKind::Local {
             self.code.idx(LOCAL_GET, s.val as u32);
             return;
@@ -310,25 +371,20 @@ impl Gen<'_> {
             (2, false) => 0x2F,
             _ => I32_LOAD,
         };
-        self.code.i32_const(s.val as i32);
-        self.code.mem(op, 0, 0);
+        let offset = self.base(s);
+        self.code.mem(op, 0, offset);
     }
 
     /// Assigns the value that `value` pushes to the variable or function result `v`,
     /// truncated to its type: a store truncates in memory, a local is narrowed.
     fn put(&mut self, v: Id, value: impl FnOnce(&mut Self)) {
         let n = self.ast.nodes[v as usize];
-        let sym = match n.kind {
-            Kind::Var(sym) => Some(self.info.syms[sym.0 as usize]),
-            _ => None,
-        };
+        let sym = matches!(n.kind, Kind::Var(_)).then(|| self.symbol(v));
         match sym {
             Some(s) if s.kind != SymKind::Local => {
-                self.code.i32_const(s.val as i32);
+                let offset = self.base(s);
                 value(self);
-                let size = self.info.types.ord(n.ty).2;
-                self.code
-                    .mem([I32_STORE8, 0x3B, 0, I32_STORE][size as usize - 1], 0, 0);
+                self.store(n.ty, offset);
             }
             _ => {
                 value(self);
@@ -339,17 +395,28 @@ impl Gen<'_> {
         }
     }
 
-    /// A call of routine `r`: arguments converted to the parameter types.
+    /// A call of routine `r`: value arguments converted to the parameter types, `var`
+    /// arguments passed as addresses.
     fn invoke(&mut self, r: u32, args: List) {
         let info = self.info;
-        for (&a, &ty) in self
+        let routine = &info.routines[r as usize];
+        for ((&a, &ty), &byref) in self
             .ast
             .items(args)
             .iter()
-            .zip(&info.routines[r as usize].params)
+            .zip(&routine.params)
+            .zip(&routine.byref)
         {
-            self.expr(a);
-            self.narrow(ty);
+            if byref {
+                let s = self.symbol(a);
+                let offset = self.base(s);
+                if offset > 0 {
+                    self.code.i32_const(offset as i32).op(I32_ADD);
+                }
+            } else {
+                self.expr(a);
+                self.narrow(ty);
+            }
         }
         self.code.idx(CALL, ROUTINES + r);
     }
