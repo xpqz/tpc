@@ -360,7 +360,10 @@ fn invalid_wasm_exits_2_with_message() {
     for (name, bytes) in [
         ("garbage", b"not a wasm module".to_vec()),
         ("empty", Vec::new()),
-        ("truncated", ok_module()[..20].to_vec()),
+        ("truncated", {
+            let m = ok_module();
+            m[..m.len() - 3].to_vec()
+        }),
     ] {
         let o = run_with(name, &bytes, None);
         assert_eq!(o.status.code(), Some(2), "{name}: {}", stderr(&o));
