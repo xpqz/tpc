@@ -1,0 +1,13 @@
+12100
+eq
+ne
+lt
+gt
+le
+ge
+not gt
+copied
+TRUE FALSE TRUE FALSE
+1203
+1
+0 TRUE
