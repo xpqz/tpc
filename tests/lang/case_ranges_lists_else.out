@@ -1,0 +1,11 @@
+  0: zero
+  1: small odd
+  4: small even
+  9: small odd
+ 10: teens and ten
+ 19: teens and ten
+ 20: medium
+100: medium
+101: other
+ -1: other
+32767: other
