@@ -47,6 +47,7 @@ pub const TABLE: &[(u16, &str)] = &[
     (97, "Invalid FOR control variable"),
     (112, "CASE constant out of range"),
     (113, "Error in statement"),
+    (133, "Cannot evaluate this expression"),
     (200, "Feature not supported"),
 ];
 
