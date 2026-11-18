@@ -6,7 +6,6 @@ heap_overflow_getmem_until_exhausted
 heap_overflow_new_until_exhausted
 pointer_dispose_nil
 pointer_dispose_stack_address
-pointer_dispose_twice
 pointer_dispose_wild_address
 pointer_freemem_nil
 range_array_enum_index

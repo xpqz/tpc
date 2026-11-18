@@ -258,3 +258,19 @@ handle return); `taken` covers both captured and address-taken; only procedural 
 interned; string operators are lowered in codegen; `CharToStr` is the only conversion node
 so far (`IntToReal` arrives with Real). Where the doc and code disagree, the code wins and
 the doc is fixed in the same PR.
+
+## 24. Range checking covers string indexes (corrects decision 20)
+
+**Measured.** Under `{$R+}`, TP 5.0 raises runtime error 201 for a variable string index
+beyond the declared size (`s[4]` on `String[3]`, read or write); `s[0]` .. `s[n]` run;
+a constant index beyond the size is compile error 76. Decision 20's "string indexes are
+not checked" came from a probe where the index appeared inside a comparison; the #39
+corpus pins the general rule. `{$R+}` therefore checks assignments/value arguments to
+subranges and narrower integers, array indexes, and string indexes against the declared
+size.
+
+## 25. Double Dispose is not detected
+
+`Dispose` of a pointer already disposed is runtime error 204 in TP 5.0; detecting it needs
+free-list bookkeeping beyond the plan's allocator. Not detected (deviation D13).
+`Dispose(nil)`, `FreeMem(nil, n)` and pointers outside the heap are 204, as in TP 5.0.
