@@ -66,7 +66,12 @@ prologue:  fp = sp - framesize ; sp = fp
 epilogue:  sp = fp + framesize
 ```
 
-- Frame offset 0 holds the static link (4 bytes). Other frame slots follow.
+- A routine that has an enclosing routine reserves frame offset 0..4 for the static link;
+  other frame slots follow (they start at 0 in routines without a parent). A routine has a
+  frame if it has address-taken or captured variables or nested routines.
+- A captured `var` parameter keeps its address in a 4-byte frame slot (`FrameRef`).
+- The function result is a variable of the function's activation; nested routines may assign
+  it, so it lives in the frame when captured.
 - Variable at lexical depth difference *d*: start at `fp`, load the static link *d* times,
   add the slot offset.
 - Parameter order: `[static_link] [result_ptr] declared params...`.

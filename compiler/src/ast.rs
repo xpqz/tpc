@@ -51,8 +51,6 @@ pub enum Kind {
     /// A parenthesised name: not a variable reference for a `var` argument.
     Paren(Id),
     Exit,
-    /// The result variable of the function being compiled.
-    Result,
     Assign(Id, Id),
     Compound(List),
     /// Condition, then-branch, else-branch.

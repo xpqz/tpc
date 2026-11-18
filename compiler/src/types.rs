@@ -56,6 +56,9 @@ pub enum SymKind {
     Frame,
     /// A `var` parameter; `val` is the index of the local holding the address.
     Ref,
+    /// A `var` parameter captured by a nested routine; `val` is the frame offset of its
+    /// address.
+    FrameRef,
     /// `val` is the index into the routine table.
     Routine,
     /// Write 0, WriteLn 1, Ord 2, Chr 3, Succ 4, Pred 5, Odd 6, Abs 7, Sqr 8, Exit 9.
@@ -69,6 +72,8 @@ pub struct Symbol {
     pub val: i64,
     /// Passed as a `var` argument; such a local moves to the frame once its routine is checked.
     pub taken: bool,
+    /// Lexical depth of the owning routine (0 for the program).
+    pub depth: u32,
 }
 
 impl Symbol {
@@ -78,6 +83,7 @@ impl Symbol {
             ty,
             val,
             taken: false,
+            depth: 0,
         }
     }
 }
@@ -96,8 +102,16 @@ pub struct Routine {
     pub body: Id,
     /// Locals after the parameters, the function result included.
     pub nlocals: u32,
-    /// Frame size in bytes; 0 when no variable lives in memory.
+    /// Lexical depth: top-level routines are 1; deeper ones take the static link as
+    /// parameter 0.
+    pub depth: u32,
+    /// Contains nested routines, which receive its frame pointer.
+    pub children: bool,
+    /// The routine has a frame of `frame` bytes (the static link slot included).
+    pub framed: bool,
     pub frame: u32,
+    /// The symbol of the function result.
+    pub result_sym: Sym,
     /// Value parameters moved to the frame: (parameter local, offset, type).
     pub copies: Vec<(u32, u32, Ty)>,
 }
