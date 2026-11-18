@@ -16,7 +16,7 @@ codegen walks the checked AST.
   names may be redeclared, a duplicate within the program is error 4. A forward routine left
   undefined in System is error 59 at line 0.
 - **Helpers by handle.** Right after System is checked, the checker looks up the names in `HELPERS`
-  (`ABSLONG STRCAT STRCMP STRASSIGN STRDELETE STRINSERT`) and stores their routine indexes in
+  (`ABSLONG STRCAT STRCMP STRASSIGN STRDELETE STRINSERT HEAPGET HEAPPUT HEAPMARK HEAPRELEASE`) and stores their routine indexes in
   `Info::helpers`, addressed by `H_*`. A missing helper is error 3 at line 0. Later code never
   looks helpers up by name, so a user routine with a helper's name cannot capture them.
 - **Whole program.** The checker finishes every routine before codegen starts: storage of a
@@ -51,12 +51,12 @@ Node kinds, by group:
   `Invoke(routine, args)`, `Indirect(callee value, args)`, `ProcRef(routine)`.
 - **Expressions.** `Name`, `IntLit` (Integer, Boolean, Char and enum constants), `StrLit`, `Var(sym)`,
   `Unary`, `Binary`, `Index(base, index, continues)`, `Field(base, name | offset)`, `Fmt(value,
-  width)` (write arguments only), `Paren`, `AddrOf` (always error 200), `CharToStr`.
+  width)` (write arguments only), `Paren`, `AddrOf`, `Deref`, `CharToStr`; `PtrType(name)` is a type definition and `RunErr(code)` a statement.
 
 ## What the checker does to the tree
 
 The checker mutates nodes in place; `expr(e)` and `stmt(s)` return `R<()>`, and a later phase reads
-`nodes[e].kind` and `.ty`. Codegen never sees `Name`, `Call`, `Paren` or `AddrOf`.
+`nodes[e].kind` and `.ty`. Codegen never sees `Name`, `Call`, `Paren` or `PtrType`.
 
 1. **Name resolution in place.** `Name` becomes `Var(sym)`, `IntLit` (constant), `StrLit` (string
    constant), `Invoke` (a parameterless function), `Indirect`, `ProcRef` or `Field` (a field of a
@@ -228,3 +228,23 @@ TP reports at the lookahead token, so the parser does too.
 - A missing argument list (error 88) is reported on the line of the token after the identifier,
   from `Ast::follow` (callee id, line of the following token).
 - Errors in System have line 0.
+
+## Pointers and the heap
+
+`Type::Ptr(to)` (`Ty::NONE` target for the untyped `Pointer`, `Ty::POINTER`) is 4 bytes, loaded and
+stored as an unsigned ordinal (`ord`). `nil` is the predefined constant `NIL` (a keyword the parser turns
+into a name), an `IntLit(0)` of type `Pointer`; `@x` is `AddrOf` of type `Pointer` and `capture`s a
+local so it lives in the frame. Pointer types are compatible when identical or when either is
+`Pointer`; only `=` and `<>` are defined. `p^` is `Deref(p)` typed by the target (a `Pointer`
+dereference has no type and fails at the use). `LongInt(p)` and `PI(l)` casts are `Unary(Ord, x)` of the
+destination type; a typecast may be followed by `^` (parser).
+
+A `^Name` whose `Name` is not yet declared is recorded in `Cx::forward` and resolved by
+`resolve_forward` at the first following declaration that is not a type declaration, or at the
+body; an unresolved name is error 19 at that position.
+
+`New`, `Dispose`, `GetMem`, `FreeMem`, `Mark`, `Release` (intrinsics 14-19) are rewritten by
+`heap_call`: `New(p)` and `GetMem(p, n)` become `p := HeapGet(size)`, `Dispose(p)` and `FreeMem(p, n)`
+become `HeapPut(p, size)` (size is `SizeOf(p^)` for `New`/`Dispose`), `Mark(p)` is `p := HeapMark`,
+`Release(p)` is `HeapRelease(p)`. `RunError(code)` (20) is the statement `RunErr`, a call of
+`host.rterror`. `Info::heap` is the address of System's `HeapOrg`.

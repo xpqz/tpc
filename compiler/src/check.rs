@@ -1,16 +1,20 @@
 //! Whole-program checker: declarations, name resolution, typing and constant folding.
 use crate::ast::{Ast, Id, Kind, List, Op, NO_NAME};
 use crate::driver::Diag;
-use crate::types::{Routine, Sym, SymKind, Symbol, Tag, Ty, Types};
+use crate::types::{Routine, Sym, SymKind, Symbol, Tag, Ty, Type, Types};
 
 /// System routines bound by handle right after System is loaded (decision 11).
-const HELPERS: [&[u8]; 6] = [
+const HELPERS: [&[u8]; 10] = [
     b"ABSLONG",
     b"STRCAT",
     b"STRCMP",
     b"STRASSIGN",
     b"STRDELETE",
     b"STRINSERT",
+    b"HEAPGET",
+    b"HEAPPUT",
+    b"HEAPMARK",
+    b"HEAPRELEASE",
 ];
 pub const H_ABS: usize = 0;
 pub const H_CAT: usize = 1;
@@ -18,6 +22,10 @@ pub const H_CMP: usize = 2;
 pub const H_ASSIGN: usize = 3;
 const H_DELETE: usize = 4;
 const H_INSERT: usize = 5;
+const H_GET: usize = 6;
+const H_PUT: usize = 7;
+const H_MARK: usize = 8;
+const H_RELEASE: usize = 9;
 
 /// The most bytes of one structure, of all globals, or of one routine's locals.
 const MAX_DATA: u32 = 65535;
@@ -33,6 +41,8 @@ pub struct Info {
     pub data_end: u32,
     /// The System routines the compiler calls implicitly, by the `H_*` indexes.
     pub helpers: [u32; HELPERS.len()],
+    /// Address of System's `HeapOrg`; the next 4 bytes are `HeapPtr`.
+    pub heap: u32,
 }
 
 type R<T> = Result<T, Diag>;
@@ -53,6 +63,8 @@ const PREDEFINED: &[(&[u8], SymKind, Ty, i64)] = &[
     (b"SEG", SymKind::Omitted, Ty::NONE, 0),
     (b"OFS", SymKind::Omitted, Ty::NONE, 0),
     (b"PTR", SymKind::Omitted, Ty::NONE, 0),
+    (b"POINTER", SymKind::Type, Ty::POINTER, 0),
+    (b"NIL", SymKind::Const, Ty::POINTER, 0),
     (b"FALSE", SymKind::Const, Ty::BOOLEAN, 0),
     (b"TRUE", SymKind::Const, Ty::BOOLEAN, 1),
     (b"WRITE", SymKind::Intrinsic, Ty::NONE, 0),
@@ -70,6 +82,13 @@ const PREDEFINED: &[(&[u8], SymKind, Ty, i64)] = &[
     (b"DELETE", SymKind::Intrinsic, Ty::NONE, 12),
     (b"INSERT", SymKind::Intrinsic, Ty::NONE, 13),
     (b"STRING", SymKind::Type, Ty::STRING, 0),
+    (b"NEW", SymKind::Intrinsic, Ty::NONE, 14),
+    (b"DISPOSE", SymKind::Intrinsic, Ty::NONE, 15),
+    (b"GETMEM", SymKind::Intrinsic, Ty::NONE, 16),
+    (b"FREEMEM", SymKind::Intrinsic, Ty::NONE, 17),
+    (b"MARK", SymKind::Intrinsic, Ty::NONE, 18),
+    (b"RELEASE", SymKind::Intrinsic, Ty::NONE, 19),
+    (b"RUNERROR", SymKind::Intrinsic, Ty::NONE, 20),
 ];
 
 /// The operators behind the intrinsic functions, by symbol value.
@@ -101,6 +120,8 @@ struct Cx<'a> {
     /// The record designators of the enclosing `with` statements, innermost last.
     withs: Vec<(Id, Ty)>,
     helpers: [u32; HELPERS.len()],
+    /// Pointer types whose target is declared later in the same type section.
+    forward: Vec<(Ty, u32)>,
 }
 
 pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
@@ -117,6 +138,7 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
         local_bytes: 0,
         withs: Vec::new(),
         helpers: [0; HELPERS.len()],
+        forward: Vec::new(),
     };
     for &(name, kind, ty, val) in PREDEFINED {
         let name = cx.ast.intern(name);
@@ -145,6 +167,11 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
         };
     }
     cx.helpers = helpers;
+    let org = cx.ast.intern(b"HEAPORG");
+    let heap = match cx.lookup(org).map(|s| cx.syms[s.0 as usize]) {
+        Some(s) if s.kind == SymKind::Var => s.val as u32,
+        _ => return Err(in_system),
+    };
     if cx.routines.iter().any(|r| !r.defined) {
         return Err(Diag {
             code: 59,
@@ -158,6 +185,7 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
     for &d in program {
         cx.decl(d)?;
     }
+    cx.resolve_forward(body)?;
     if cx.routines.iter().any(|r| !r.defined) {
         return Err(cx.err(root, 59));
     }
@@ -168,6 +196,7 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
         routines: cx.routines,
         data_end: cx.end,
         helpers,
+        heap,
     })
 }
 
@@ -235,7 +264,23 @@ impl Cx<'_> {
         Ok(self.push(name, s))
     }
 
+    /// Resolves the pointer types declared with a target not yet declared. Called where a type
+    /// section ends; TP reports an undefined target at `at`, the next declaration or the body.
+    fn resolve_forward(&mut self, at: Id) -> R<()> {
+        for (ty, name) in std::mem::take(&mut self.forward) {
+            let to = self.type_of(at, name).map_err(|d| match d.code {
+                200 => d,
+                _ => Diag { code: 19, ..d },
+            })?;
+            self.types.v[ty.0 as usize] = Type::Ptr(to);
+        }
+        Ok(())
+    }
+
     fn decl(&mut self, d: Id) -> R<()> {
+        if !matches!(self.ast.nodes[d as usize].kind, Kind::TypeDecl(..)) {
+            self.resolve_forward(d)?;
+        }
         match self.ast.nodes[d as usize].kind {
             Kind::ConstDecl(name, e) => {
                 self.expr(e)?;
@@ -292,6 +337,14 @@ impl Cx<'_> {
                         unreachable!("the parser lists identifiers")
                     };
                     self.declare(id, n, Symbol::new(SymKind::Const, ty, i as i64))?;
+                }
+                Ok(ty)
+            }
+            Kind::PtrType(name) => {
+                let to = self.type_of(spec, name).unwrap_or(Ty::NONE);
+                let ty = self.types.pointer(to);
+                if to == Ty::NONE {
+                    self.forward.push((ty, name));
                 }
                 Ok(ty)
             }
@@ -542,6 +595,7 @@ impl Cx<'_> {
         for decl in self.ast.items(decls).to_vec() {
             self.decl(decl)?;
         }
+        self.resolve_forward(body)?;
         if self.scope[scope_len..].iter().any(|e| {
             let s = self.syms[e.1 .0 as usize];
             s.kind == SymKind::Routine && !self.routines[s.val as usize].defined
@@ -628,6 +682,7 @@ impl Cx<'_> {
                 Kind::Name(name) => function(name, true),
                 _ => 20,
             },
+            Kind::Deref(_) => 0,
             Kind::Index(base, ..) | Kind::Field(base, _) => self.bad_var_arg(base),
             Kind::Name(name) if self.with_field(name).is_some() => 0,
             Kind::Name(name) => match self.lookup(name).map(|s| self.syms[s.0 as usize]) {
@@ -853,6 +908,7 @@ impl Cx<'_> {
                     SymKind::Intrinsic if s.val == 12 || s.val == 13 => {
                         self.edit_string(id, s.val == 13, args)?
                     }
+                    SymKind::Intrinsic if s.val >= 14 => self.heap_call(id, s.val, args)?,
                     SymKind::Intrinsic if s.val == 9 => {
                         if !self.ast.items(args).is_empty() {
                             return Err(self.err(id, 85));
@@ -904,7 +960,7 @@ impl Cx<'_> {
         let items = self.ast.items(args).to_vec();
         let code = match (params.len(), items.len()) {
             (0, 0) => 0,
-            (0, _) => 85 + 4 * in_expr as u16,
+            (0, _) => 85 + 4 * (in_expr && !builtin) as u16,
             (_, 0) => 88,
             (p, a) if a < p => 87,
             (p, a) if a > p => 89,
@@ -1072,7 +1128,8 @@ impl Cx<'_> {
         }
         self.expr(value)?;
         let n = self.ast.nodes[value as usize];
-        if self.types.tag(n.ty) == Some(Tag::Enum) || self.types.is_agg(n.ty) {
+        let text = self.types.is_str(n.ty);
+        if self.types.tag(n.ty) == Some(Tag::Enum) || !text && self.types.tag(n.ty).is_none() {
             return Err(self.err(value, 64));
         }
         Ok(())
@@ -1204,7 +1261,22 @@ impl Cx<'_> {
                     _ => return Err(self.err(e, 89)),
                 }
             }
-            Kind::AddrOf(_) => return Err(self.err(e, 200)),
+            Kind::AddrOf(a) => {
+                self.expr(a)?;
+                match self.ast.nodes[a as usize].kind {
+                    Kind::Var(sym) => self.capture(sym, true),
+                    Kind::Index(..) | Kind::Field(..) | Kind::Deref(_) => {}
+                    _ => return Err(self.err(e, 20)),
+                }
+                (n.kind, Ty::POINTER)
+            }
+            Kind::Deref(p) => {
+                self.expr(p)?;
+                match self.types.target(self.ast.nodes[p as usize].ty) {
+                    Some(to) => (n.kind, to),
+                    None => return Err(self.err(e, 121)),
+                }
+            }
             Kind::Paren(a) => {
                 self.expr(a)?;
                 let inner = self.ast.nodes[a as usize];
@@ -1257,7 +1329,8 @@ impl Cx<'_> {
         };
         self.expr(arg)?;
         let a = self.ast.nodes[arg as usize];
-        if self.types.tag(ty).is_none() || self.types.tag(a.ty).is_none() {
+        let scalar = |t: Ty| self.types.tag(t).is_some() || self.types.is_ptr(t);
+        if !scalar(ty) || !scalar(a.ty) {
             return Err(self.err(at, 200));
         }
         Ok(match a.kind {
@@ -1276,7 +1349,10 @@ impl Cx<'_> {
         let target = items[insert as usize];
         self.expr(target)?;
         let t = self.ast.nodes[target as usize];
-        if !matches!(t.kind, Kind::Var(_) | Kind::Index(..) | Kind::Field(..)) {
+        if !matches!(
+            t.kind,
+            Kind::Var(_) | Kind::Index(..) | Kind::Field(..) | Kind::Deref(_)
+        ) {
             return Err(self.err(target, 20));
         }
         if !self.types.is_str(t.ty) {
@@ -1303,6 +1379,54 @@ impl Cx<'_> {
         let call = self.ast.add(Kind::Invoke(helper, args), line, col);
         self.ast.nodes[call as usize].ty = Ty::STRING;
         Ok(Kind::Assign(target, call))
+    }
+
+    /// `New`, `Dispose`, `GetMem`, `FreeMem`, `Mark`, `Release` and `RunError` (`which` is the
+    /// intrinsic number): calls of the System heap helpers, with `SizeOf(p^)` as the size of
+    /// `New` and `Dispose`. `New`, `GetMem` and `Mark` assign the helper's result to the variable.
+    fn heap_call(&mut self, at: Id, which: i64, args: List) -> R<Kind> {
+        let items = self.ast.items(args).to_vec();
+        let want = [1, 1, 2, 2, 1, 1, 1][which as usize - 14];
+        if items.len() != want {
+            return Err(self.err(at, if items.len() < want { 87 } else { 89 }));
+        }
+        let p = items[0];
+        if which == 20 {
+            self.expr(p)?;
+            self.argument_assignable(at, Ty::INTEGER, p, true)?;
+            return Ok(Kind::RunErr(p));
+        }
+        match self.bad_var_arg(p) {
+            0 => self.expr(p)?,
+            code => return Err(self.err(p, code)),
+        }
+        let to = self.types.target(self.ast.nodes[p as usize].ty);
+        let to = to.ok_or(self.err(p, 65))?;
+        let pos = self.ast.nodes[at as usize];
+        let size = items.get(1).copied().unwrap_or_else(|| {
+            let k = self
+                .ast
+                .add(Kind::IntLit(self.types.size(to) as i64), pos.line, pos.col);
+            self.ast.nodes[k as usize].ty = Ty::LONGINT;
+            k
+        });
+        if let Some(&n) = items.get(1) {
+            self.expr(n)?;
+            self.argument_assignable(at, Ty::LONGINT, n, true)?;
+        }
+        let (helper, args) = match which {
+            14 | 16 => (H_GET, vec![size]),
+            15 | 17 => (H_PUT, vec![p, size]),
+            18 => (H_MARK, vec![]),
+            _ => (H_RELEASE, vec![p]),
+        };
+        let call = Kind::Invoke(self.helpers[helper], self.ast.list(&args));
+        if matches!(which, 15 | 17 | 19) {
+            return Ok(call);
+        }
+        let call = self.ast.add(call, pos.line, pos.col);
+        self.ast.nodes[call as usize].ty = Ty::POINTER;
+        Ok(Kind::Assign(p, call))
     }
 
     /// `Concat(a, b, ...)`: the same as `a + b + ...`.

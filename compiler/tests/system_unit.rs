@@ -19,7 +19,12 @@ procedure StrCat(var d, a, b: String);\nbegin\nend;\n\
 function StrCmp(var a, b: String): Integer;\nbegin\n  StrCmp := 0\nend;\n\
 procedure StrAssign(var d, s: String; max: Integer);\nbegin\nend;\n\
 function StrDelete(s: String; i, n: Integer): String;\nbegin\n  StrDelete := s\nend;\n\
-function StrInsert(src, s: String; i: Integer): String;\nbegin\n  StrInsert := s\nend;\n";
+function StrInsert(src, s: String; i: Integer): String;\nbegin\n  StrInsert := s\nend;\n\
+var HeapOrg, HeapPtr: LongInt;\n\
+function HeapGet(n: LongInt): Pointer;\nbegin\n  HeapGet := nil\nend;\n\
+procedure HeapPut(p: Pointer; n: LongInt);\nbegin\nend;\n\
+function HeapMark: Pointer;\nbegin\n  HeapMark := nil\nend;\n\
+procedure HeapRelease(p: Pointer);\nbegin\nend;\n";
 
 fn fixtures(sub: &str) -> std::path::PathBuf {
     driver::root()

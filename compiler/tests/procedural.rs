@@ -128,18 +128,11 @@ const ACCEPTED: &[(&str, &str)] = &[
 ];
 
 /// TP accepts these; the compiler reports 200 (decision 6) on the given line.
-const UNSUPPORTED: &[(&str, &str, u32)] = &[
-    (
-        "range_check_directive",
-        "program Prog;\n{$R+}\nbegin\nend.",
-        2,
-    ),
-    (
-        "address_operator_in_expression",
-        "program Prog;\nvar n: Integer;\nbegin\n  n := 1;\n  n := @n\nend.",
-        5,
-    ),
-];
+const UNSUPPORTED: &[(&str, &str, u32)] = &[(
+    "range_check_directive",
+    "program Prog;\n{$R+}\nbegin\nend.",
+    2,
+)];
 
 fn tmp_dir() -> PathBuf {
     let d = root().join("tmp/procedural");

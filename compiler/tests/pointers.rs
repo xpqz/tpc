@@ -108,6 +108,14 @@ const RT: &[&str] = &[
 ];
 
 const NEG: &[&str] = &[
+    "pointer_field_access_without_caret",
+    "pointer_forward_type_never_defined",
+    "pointer_unknown_field_through_caret",
+];
+
+/// Corpus negatives whose shared `var` line declares Real variables, which wait for the Real
+/// type: they run here with `r: Real` removed and `pr: ^Real` made `^Byte` (same line, so same diagnostics).
+const NEG_REAL: &[&str] = &[
     "address_of_constant",
     "freemem_missing_size",
     "getmem_non_pointer",
@@ -115,12 +123,9 @@ const NEG: &[&str] = &[
     "pointer_assign_integer",
     "pointer_assign_other_pointer_type",
     "pointer_deref_non_pointer",
-    "pointer_field_access_without_caret",
-    "pointer_forward_type_never_defined",
     "pointer_new_non_pointer",
     "pointer_nil_assigned_to_integer",
     "pointer_ordering_comparison",
-    "pointer_unknown_field_through_caret",
     "pointer_write",
 ];
 
@@ -166,12 +171,30 @@ fn corpus_neg_programs_report_tp5_number_and_line() {
 }
 
 #[test]
+fn corpus_neg_programs_without_real_declarations_report_tp5_number_and_line() {
+    let dir = subset("neg", NEG_REAL, &["err"]);
+    for n in NEG_REAL {
+        let src = std::fs::read_to_string(root().join(format!("tests/neg/{n}.pas"))).unwrap();
+        assert!(
+            src.contains("r: Real; ") && src.contains("pr: ^Real; "),
+            "{n}"
+        );
+        let src = src
+            .replace("r: Real; ", "")
+            .replace("pr: ^Real; ", "pr: ^Byte; ");
+        std::fs::write(dir.join(format!("{n}.pas")), src).unwrap();
+    }
+    assert_clean(check_neg(&dir, &real_compile));
+}
+
+#[test]
 fn corpus_lists_are_sorted_and_name_existing_programs() {
     for (kind, names, ext) in [
         ("lang", LANG, "out"),
         ("abi", ABI, "out"),
         ("rt", RT, "out"),
         ("neg", NEG, "err"),
+        ("neg", NEG_REAL, "err"),
     ] {
         let mut sorted = names.to_vec();
         sorted.sort();
@@ -203,16 +226,16 @@ fn rejected(src: &str) -> (u16, u32) {
 fn allocator_is_emitted_only_when_used() {
     let hello = compile("program Hello;\nbegin\n  WriteLn('hello')\nend.");
     assert!(hello.len() <= 430, "hello-world is {} bytes", hello.len());
-    let plain = compile("program P;\nvar i: Integer;\nbegin\n  i := 1;\n  WriteLn(i)\nend.");
+    let plain = compile("program Prog;\nvar i: Integer;\nbegin\n  i := 1;\n  WriteLn(i)\nend.");
     let dead = compile(
-        "program P;\ntype PI = ^Integer;\nprocedure Dead;\nvar p: PI;\nbegin\n  New(p);\n  p^ := 1;\n  Dispose(p)\nend;\nvar i: Integer;\nbegin\n  i := 1;\n  WriteLn(i)\nend.",
+        "program Prog;\ntype PI = ^Integer;\nprocedure Dead;\nvar p: PI;\nbegin\n  New(p);\n  p^ := 1;\n  Dispose(p)\nend;\nvar i: Integer;\nbegin\n  i := 1;\n  WriteLn(i)\nend.",
     );
     assert_eq!(
         plain, dead,
         "an unused routine using New changed the module"
     );
     let used = compile(
-        "program P;\ntype PI = ^Integer;\nvar p: PI;\nbegin\n  New(p);\n  p^ := 1;\n  WriteLn(p^);\n  Dispose(p)\nend.",
+        "program Prog;\ntype PI = ^Integer;\nvar p: PI;\nbegin\n  New(p);\n  p^ := 1;\n  WriteLn(p^);\n  Dispose(p)\nend.",
     );
     assert!(used.len() > plain.len());
 }
