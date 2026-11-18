@@ -162,7 +162,8 @@ pub fn check_lang(dir: &Path, compile: Compile) -> Vec<String> {
 }
 
 /// Every `STEM.pas` compiles and runs under tests/run.mjs, prints exactly `STEM.out` and
-/// exits with the code N of the final `Runtime error N` line of `STEM.out`.
+/// exits with the code N of the `Runtime error N` that ends `STEM.out` (TP prints it
+/// directly after any unfinished output line).
 pub fn check_rt(dir: &Path, compile: Compile) -> Vec<String> {
     sweep(dir, &|stem| {
         let out = dir.join(format!("{stem}.out"));
@@ -171,7 +172,8 @@ pub fn check_rt(dir: &Path, compile: Compile) -> Vec<String> {
         let want: i32 = text
             .lines()
             .last()
-            .and_then(|l| l.strip_prefix("Runtime error "))
+            .and_then(|l| l.rsplit_once("Runtime error "))
+            .map(|(_, n)| n)
             .and_then(|n| n.parse().ok())
             .ok_or("last line of .out is not `Runtime error N`")?;
         let wasm = scratch(&format!("{stem}.wasm"));
