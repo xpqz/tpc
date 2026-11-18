@@ -70,9 +70,11 @@ struct Gen<'a> {
     addr: &'a [u32],
     /// Number of WASM locals in use: parameters, the result, declared locals, temporaries.
     locals: u32,
-    nparams: u32,
     /// The local holding the frame pointer, when the routine has a frame.
     fp: u32,
+    /// Lexical depth of the routine; a routine of depth 2 or more has its static link in
+    /// local 0.
+    depth: u32,
     /// The block around the routine body; `Exit` branches to it.
     exit: Label,
 }
@@ -98,7 +100,7 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
     m.func(three, &[], quotient());
     for r in &info.routines {
         let results: &[u8] = if r.func { &[I32] } else { &[] };
-        let ty = m.ty(&vec![I32; r.params.len()], results);
+        let ty = m.ty(&vec![I32; r.params.len() + (r.depth > 1) as usize], results);
         let (code, locals) = body(ast, info, &addr, Some(r), r.body);
         m.func(ty, &vec![I32; locals], code);
     }
@@ -126,24 +128,23 @@ fn body(
     routine: Option<&Routine>,
     stmt: Id,
 ) -> (Code, usize) {
-    let nparams = routine.map_or(0, |r| r.params.len() as u32);
-    let frame = routine.map_or(0, |r| r.frame);
+    let depth = routine.map_or(0, |r| r.depth);
+    let nparams = routine.map_or(0, |r| r.params.len() as u32 + (r.depth > 1) as u32);
     let mut g = Gen {
         ast,
         info,
         code: Code::new(),
         addr,
         locals: nparams + routine.map_or(0, |r| r.nlocals),
-        nparams,
         fp: 0,
+        depth,
         exit: Label(0),
     };
-    if let Some(r) = routine.filter(|r| r.frame > 0) {
+    let framed = routine.filter(|r| r.framed);
+    if let Some(r) = framed {
         g.fp = g.new_local();
-        g.code
-            .idx(GLOBAL_GET, SP)
-            .i32_const(frame as i32)
-            .op(I32_SUB);
+        let frame = r.frame as i32;
+        g.code.idx(GLOBAL_GET, SP).i32_const(frame).op(I32_SUB);
         g.code
             .idx(LOCAL_TEE, g.fp)
             .i32_const(STACK_LIMIT)
@@ -151,6 +152,10 @@ fn body(
         g.code.if_(VOID);
         g.code.i32_const(202).idx(CALL, HOST_RTERROR).end();
         g.code.idx(LOCAL_GET, g.fp).idx(GLOBAL_SET, SP);
+        if depth > 1 {
+            g.code.idx(LOCAL_GET, g.fp).idx(LOCAL_GET, 0);
+            g.code.mem(I32_STORE, 0, 0);
+        }
         for &(local, offset, ty) in &r.copies {
             g.code.idx(LOCAL_GET, g.fp).idx(LOCAL_GET, local);
             g.store(ty, offset);
@@ -159,15 +164,15 @@ fn body(
     g.exit = g.code.block(VOID);
     g.stmt(stmt);
     g.code.end();
-    if frame > 0 {
+    if let Some(r) = framed {
         g.code
             .idx(LOCAL_GET, g.fp)
-            .i32_const(frame as i32)
+            .i32_const(r.frame as i32)
             .op(I32_ADD);
         g.code.idx(GLOBAL_SET, SP);
     }
-    if routine.is_some_and(|r| r.func) {
-        g.code.idx(LOCAL_GET, nparams);
+    if let Some(r) = routine.filter(|r| r.func) {
+        g.load(info.syms[r.result_sym.0 as usize], r.result);
     }
     (g.code, (g.locals - nparams) as usize)
 }
@@ -322,6 +327,19 @@ impl Gen<'_> {
         self.locals - 1
     }
 
+    /// Pushes the frame pointer of the routine `up` levels above the current one: the
+    /// own `fp`, else the static link walked `up - 1` times.
+    fn frame_ptr(&mut self, up: u32) {
+        if up == 0 {
+            self.code.idx(LOCAL_GET, self.fp);
+            return;
+        }
+        self.code.idx(LOCAL_GET, 0);
+        for _ in 1..up {
+            self.code.mem(I32_LOAD, 0, 0);
+        }
+    }
+
     /// Pushes the address base of a variable in memory and returns the offset to add.
     fn base(&mut self, s: Symbol) -> u32 {
         match s.kind {
@@ -329,8 +347,12 @@ impl Gen<'_> {
                 self.code.i32_const(s.val as i32);
             }
             SymKind::Frame => {
-                self.code.idx(LOCAL_GET, self.fp);
+                self.frame_ptr(self.depth - s.depth);
                 return s.val as u32;
+            }
+            SymKind::FrameRef => {
+                self.frame_ptr(self.depth - s.depth);
+                self.code.mem(I32_LOAD, 0, s.val as u32);
             }
             _ => {
                 self.code.idx(LOCAL_GET, s.val as u32);
@@ -356,14 +378,13 @@ impl Gen<'_> {
         self.info.syms[sym.0 as usize]
     }
 
-    /// Pushes the value of a variable.
-    fn get(&mut self, v: Id) {
-        let s = self.symbol(v);
+    /// Pushes the value of a variable of type `ty`.
+    fn load(&mut self, s: Symbol, ty: Ty) {
         if s.kind == SymKind::Local {
             self.code.idx(LOCAL_GET, s.val as u32);
             return;
         }
-        let (_, _, size, signed) = self.info.types.ord(self.ast.nodes[v as usize].ty);
+        let (_, _, size, signed) = self.info.types.ord(ty);
         let op = match (size, signed) {
             (1, true) => 0x2C,
             (1, false) => 0x2D,
@@ -375,23 +396,22 @@ impl Gen<'_> {
         self.code.mem(op, 0, offset);
     }
 
-    /// Assigns the value that `value` pushes to the variable or function result `v`,
-    /// truncated to its type: a store truncates in memory, a local is narrowed.
+    fn get(&mut self, v: Id) {
+        self.load(self.symbol(v), self.ast.nodes[v as usize].ty);
+    }
+
+    /// Assigns the value that `value` pushes to the variable `v`, truncated to its type: a
+    /// store truncates in memory, a local is narrowed.
     fn put(&mut self, v: Id, value: impl FnOnce(&mut Self)) {
-        let n = self.ast.nodes[v as usize];
-        let sym = matches!(n.kind, Kind::Var(_)).then(|| self.symbol(v));
-        match sym {
-            Some(s) if s.kind != SymKind::Local => {
-                let offset = self.base(s);
-                value(self);
-                self.store(n.ty, offset);
-            }
-            _ => {
-                value(self);
-                self.narrow(n.ty);
-                let local = sym.map_or(self.nparams, |s| s.val as u32);
-                self.code.idx(LOCAL_SET, local);
-            }
+        let (s, ty) = (self.symbol(v), self.ast.nodes[v as usize].ty);
+        if s.kind == SymKind::Local {
+            value(self);
+            self.narrow(ty);
+            self.code.idx(LOCAL_SET, s.val as u32);
+        } else {
+            let offset = self.base(s);
+            value(self);
+            self.store(ty, offset);
         }
     }
 
@@ -400,6 +420,9 @@ impl Gen<'_> {
     fn invoke(&mut self, r: u32, args: List) {
         let info = self.info;
         let routine = &info.routines[r as usize];
+        if routine.depth > 1 {
+            self.frame_ptr(self.depth + 1 - routine.depth);
+        }
         for ((&a, &ty), &byref) in self
             .ast
             .items(args)

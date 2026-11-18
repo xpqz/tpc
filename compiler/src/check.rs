@@ -66,8 +66,9 @@ struct Cx<'a> {
     user: usize,
     end: u32,
     routines: Vec<Routine>,
-    /// The routine being checked and the next free local index.
-    cur: Option<usize>,
+    /// The routines being checked, outermost first; its length is the current depth.
+    chain: Vec<usize>,
+    /// The next free local index.
     locals: u32,
 }
 
@@ -80,7 +81,7 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
         user: 0,
         end: GLOBALS,
         routines: Vec::new(),
-        cur: None,
+        chain: Vec::new(),
         locals: 0,
     };
     for &(name, kind, ty, val) in PREDEFINED {
@@ -144,7 +145,10 @@ fn fold(op: Op, a: i64, b: i64) -> i64 {
 
 impl Cx<'_> {
     fn push(&mut self, name: u32, s: Symbol) -> Sym {
-        self.syms.push(s);
+        self.syms.push(Symbol {
+            depth: self.chain.len() as u32,
+            ..s
+        });
         let sym = Sym(self.syms.len() as u32 - 1);
         self.scope.push((name, sym));
         sym
@@ -184,7 +188,7 @@ impl Cx<'_> {
             }
             Kind::VarDecl(name, type_name) => {
                 let ty = self.type_of(d, type_name)?;
-                let sym = if self.cur.is_some() {
+                let sym = if !self.chain.is_empty() {
                     self.locals += 1;
                     Symbol::new(SymKind::Local, ty, self.locals as i64 - 1)
                 } else {
@@ -215,9 +219,6 @@ impl Cx<'_> {
         else {
             unreachable!("routine declaration")
         };
-        if self.cur.is_some() {
-            return Err(self.err(d, 200));
-        }
         let (mut tys, mut names, mut refs) = (Vec::new(), Vec::new(), Vec::new());
         for p in params.map_or(Vec::new(), |l| self.ast.items(l).to_vec()) {
             let Kind::Param(n, t, byref) = self.ast.nodes[p as usize].kind else {
@@ -252,9 +253,16 @@ impl Cx<'_> {
                     defined,
                     body,
                     nlocals,
+                    depth: self.chain.len() as u32 + 1,
+                    children: false,
+                    framed: false,
                     frame: 0,
+                    result_sym: Sym(0),
                     copies: Vec::new(),
                 });
+                if let Some(&parent) = self.chain.last() {
+                    self.routines[parent].children = true;
+                }
                 let val = self.routines.len() as i64 - 1;
                 self.declare(d, name, Symbol::new(SymKind::Routine, Ty::NONE, val))?;
                 self.routines.len() - 1
@@ -292,45 +300,90 @@ impl Cx<'_> {
             self.routines[r].byref.clone(),
         );
         let first = self.syms.len();
-        let (scope_len, user) = (self.scope.len(), self.user);
-        (self.user, self.cur) = (scope_len, Some(r));
-        self.locals = params.len() as u32 + func as u32;
+        let (scope_len, user, outer_locals) = (self.scope.len(), self.user, self.locals);
+        self.user = scope_len;
+        self.chain.push(r);
+        let link = self.chain.len() > 1;
+        let nparams = params.len() as u32 + link as u32;
+        self.locals = nparams;
+        if func {
+            let ret = Symbol::new(SymKind::Local, self.routines[r].result, nparams as i64);
+            self.routines[r].result_sym = Sym(self.syms.len() as u32);
+            self.syms.push(Symbol {
+                depth: self.chain.len() as u32,
+                ..ret
+            });
+            self.locals += 1;
+        }
         for (i, (&n, &ty)) in names.iter().zip(&params).enumerate() {
             let kind = if refs[i] {
                 SymKind::Ref
             } else {
                 SymKind::Local
             };
-            self.declare(block, n, Symbol::new(kind, ty, i as i64))?;
+            self.declare(block, n, Symbol::new(kind, ty, (i + link as usize) as i64))?;
         }
         for decl in self.ast.items(decls).to_vec() {
             self.decl(decl)?;
         }
+        if self.scope[scope_len..].iter().any(|e| {
+            let s = self.syms[e.1 .0 as usize];
+            s.kind == SymKind::Routine && !self.routines[s.val as usize].defined
+        }) {
+            return Err(self.err(body, 59));
+        }
         self.stmt(body)?;
         self.routines[r].body = body;
-        self.routines[r].nlocals = self.locals - params.len() as u32;
+        self.routines[r].nlocals = self.locals - nparams;
         self.place_frame(r, first);
+        self.chain.pop();
         self.scope.truncate(scope_len);
-        (self.user, self.cur) = (user, None);
+        (self.user, self.locals) = (user, outer_locals);
         Ok(())
     }
 
-    /// Moves the routine's address-taken locals (symbols from `first` on) to the frame, in
-    /// declaration order with no padding.
+    /// Moves the locals that are captured or passed by reference (symbols of this routine
+    /// from `first` on) to the frame, in declaration order with no padding. A routine with a
+    /// parent keeps the static link in the first 4 bytes. A captured `var` parameter keeps
+    /// its address in the frame.
     fn place_frame(&mut self, r: usize, first: usize) {
-        let nparams = self.routines[r].params.len() as i64;
-        let (mut size, mut copies) = (0, Vec::new());
+        let depth = self.chain.len() as u32;
+        let base = 4 * (depth > 1) as u32;
+        let nparams = self.routines[r].params.len() as i64 + (depth > 1) as i64;
+        let (mut size, mut copies) = (base, Vec::new());
         for s in &mut self.syms[first..] {
-            if s.kind == SymKind::Local && s.taken {
-                if s.val < nparams {
-                    copies.push((s.val as u32, size, s.ty));
-                }
-                (s.kind, s.val) = (SymKind::Frame, size as i64);
-                size += self.types.ord(s.ty).2 as u32;
+            if s.depth != depth || !s.taken || !matches!(s.kind, SymKind::Local | SymKind::Ref) {
+                continue;
             }
+            let ty = if s.kind == SymKind::Ref {
+                Ty::LONGINT
+            } else {
+                s.ty
+            };
+            if s.val < nparams {
+                copies.push((s.val as u32, size, ty));
+            }
+            s.kind = if s.kind == SymKind::Ref {
+                SymKind::FrameRef
+            } else {
+                SymKind::Frame
+            };
+            (s.val, size) = (size as i64, size + self.types.ord(ty).2 as u32);
         }
-        self.routines[r].frame = size;
-        self.routines[r].copies = copies;
+        let r = &mut self.routines[r];
+        r.framed = size > base || r.children;
+        (r.frame, r.copies) = (size, copies);
+    }
+
+    /// A reference to `sym` from the current routine: a `Local` or `Ref` of an enclosing
+    /// routine is captured, a `Local` passed as a `var` argument is address-taken; both move
+    /// it to the frame.
+    fn capture(&mut self, sym: Sym, by_ref: bool) {
+        let depth = self.chain.len() as u32;
+        let s = &mut self.syms[sym.0 as usize];
+        let outer = s.depth < depth;
+        s.taken |= matches!(s.kind, SymKind::Local | SymKind::Ref) && outer
+            || by_ref && s.kind == SymKind::Local;
     }
 
     /// TP's error for an argument of a `var` parameter that is not a variable, decided by its
@@ -381,7 +434,7 @@ impl Cx<'_> {
         if s.ty != ty {
             return Err(self.err(at, 26));
         }
-        self.syms[sym.0 as usize].taken |= s.kind == SymKind::Local;
+        self.capture(sym, true);
         self.ast.nodes[arg as usize].kind = Kind::Var(sym);
         self.ast.nodes[arg as usize].ty = ty;
         Ok(())
@@ -443,7 +496,8 @@ impl Cx<'_> {
                     unreachable!("the parser names the control variable")
                 };
                 let (sym, s) = self.resolve(var, name)?;
-                if s.kind == SymKind::Ref {
+                let outer = s.depth < self.chain.len() as u32;
+                if s.kind == SymKind::Ref || s.kind == SymKind::Local && outer {
                     return Err(self.err(var, 97));
                 }
                 if !matches!(s.kind, SymKind::Var | SymKind::Local) {
@@ -463,12 +517,17 @@ impl Cx<'_> {
                 };
                 let (sym, s) = self.resolve(target, name)?;
                 let (kind, ty) = match s.kind {
-                    SymKind::Var | SymKind::Local | SymKind::Ref => (Kind::Var(sym), s.ty),
+                    SymKind::Var | SymKind::Local | SymKind::Ref => {
+                        self.capture(sym, false);
+                        (Kind::Var(sym), s.ty)
+                    }
                     SymKind::Routine
-                        if self.cur == Some(s.val as usize)
+                        if self.chain.contains(&(s.val as usize))
                             && self.routines[s.val as usize].func =>
                     {
-                        (Kind::Result, self.routines[s.val as usize].result)
+                        let ret = self.routines[s.val as usize].result_sym;
+                        self.capture(ret, false);
+                        (Kind::Var(ret), self.routines[s.val as usize].result)
                     }
                     SymKind::Routine if self.routines[s.val as usize].func => {
                         return Err(self.err(target, 122));
@@ -626,7 +685,10 @@ impl Cx<'_> {
                 match s.kind {
                     SymKind::Const if s.ty == Ty::STRING => (Kind::StrLit(s.val as u32), s.ty),
                     SymKind::Const => (Kind::IntLit(s.val), s.ty),
-                    SymKind::Var | SymKind::Local | SymKind::Ref => (Kind::Var(sym), s.ty),
+                    SymKind::Var | SymKind::Local | SymKind::Ref => {
+                        self.capture(sym, false);
+                        (Kind::Var(sym), s.ty)
+                    }
                     SymKind::Routine => {
                         let r = &self.routines[s.val as usize];
                         let (func, result) = (r.func, r.result);

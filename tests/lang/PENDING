@@ -1,14 +1,3 @@
-nested_forward_declaration
-nested_function_basic
-nested_global_routine_call_from_nested
-nested_local_shadows_outer_local
-nested_procedure_basic
-nested_reads_outer_local
-nested_reads_outer_parameter
-nested_recursive_function
-nested_three_levels
-nested_two_siblings
-nested_writes_outer_local
 proc_type_anonymous_variable_type
 proc_type_as_parameter
 proc_type_basic
@@ -17,4 +6,3 @@ proc_type_per_routine_far_directive
 proc_type_structural_compatibility
 proc_type_var_parameter_of_procedural_type
 proc_type_without_parameters_function
-nested_routine_shadows_enclosing_name

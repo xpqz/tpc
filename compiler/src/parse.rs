@@ -142,9 +142,9 @@ impl Parser {
         self.compound()
     }
 
-    /// After `BEGIN`.
+    /// After `BEGIN`; the node is stamped at the `BEGIN`.
     fn compound(&mut self) -> R<Id> {
-        let (line, col) = (self.tok().line, self.tok().col);
+        let (line, col) = (self.toks[self.at - 1].line, self.toks[self.at - 1].col);
         let items = self.statements(END, b"END")?;
         self.at += 1;
         let list = self.ast.list(&items);
