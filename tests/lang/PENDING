@@ -1,17 +1,8 @@
 boolean_logic_table
 boolean_short_circuit
-case_boolean_selector
 case_byte_selector
 case_char_selector
-case_else_optional_semicolon
-case_longint_selector_is_integer_sized
-case_named_constants_and_expression_selector
-case_negative_labels
-case_nested_and_compound
-case_no_match_no_else
-case_ranges_grades
 case_ranges_lists_else
-case_word_selector
 collatz_steps
 comparisons_integers
 div_mod_truncate_toward_zero

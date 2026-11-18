@@ -170,6 +170,44 @@ impl Parser {
         }
     }
 
+    /// After `CASE`: `expr of arm {; arm} [; else statements] [;] end`.
+    fn case(&mut self) -> R<Id> {
+        let selector = self.expr()?;
+        let placeholder = Kind::Compound(self.ast.list(&[]));
+        let id = self.after(placeholder);
+        self.expect_kw(b"OF", 54)?;
+        let mut arms = Vec::new();
+        loop {
+            let (line, col) = self.pos();
+            let mut labels = Vec::new();
+            loop {
+                let (lo_line, lo_col) = self.pos();
+                let lo = self.expr()?;
+                let hi = if self.sym(b"..") { self.expr()? } else { lo };
+                labels.push(self.ast.add(Kind::Range(lo, hi), lo_line, lo_col));
+                if !self.sym(b",") {
+                    break;
+                }
+            }
+            self.expect_sym(b":", 86)?;
+            let body = self.sub(END | ELSE)?;
+            let labels = self.ast.list(&labels);
+            arms.push(self.ast.add(Kind::Arm(labels, body), line, col));
+            if !self.sym(b";") || self.is(Tk::Kw, b"ELSE") || self.is(Tk::Kw, b"END") {
+                break;
+            }
+        }
+        let other = if self.kw(b"ELSE") {
+            self.statements(END, b"END")?
+        } else {
+            Vec::new()
+        };
+        self.expect_kw(b"END", 85)?;
+        let (arms, other) = (self.ast.list(&arms), self.ast.list(&other));
+        self.ast.nodes[id as usize].kind = Kind::Case(selector, arms, other);
+        Ok(id)
+    }
+
     fn control(&mut self) -> R<Option<Id>> {
         let placeholder = Kind::Compound(self.ast.list(&[]));
         if self.kw(b"IF") {
@@ -199,6 +237,9 @@ impl Parser {
             let cond = self.expr()?;
             let list = self.ast.list(&items);
             return Ok(Some(self.after(Kind::Repeat(list, cond))));
+        }
+        if self.kw(b"CASE") {
+            return self.case().map(Some);
         }
         if self.kw(b"FOR") {
             let (line, col) = self.pos();

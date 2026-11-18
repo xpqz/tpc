@@ -28,6 +28,8 @@ const I32_EQZ: u8 = 0x45;
 const I32_EQ: u8 = 0x46;
 const I32_NE: u8 = 0x47;
 const I32_LE_S: u8 = 0x4C;
+const I32_LE_U: u8 = 0x4D;
+const I32_OR: u8 = 0x72;
 const I32_GE_S: u8 = 0x4E;
 const I32_GT_S: u8 = 0x4A;
 const I32_LT_S: u8 = 0x48;
@@ -311,6 +313,47 @@ impl Gen<'_> {
                 self.ast.items(body).iter().for_each(|&s| self.stmt(s));
                 self.expr(cond);
                 self.code.op(I32_EQZ).br_if(top).end();
+            }
+            Kind::Case(selector, arms, other) => {
+                // The selector is converted to Integer; each arm is a chain of range tests.
+                let local = self.locals;
+                self.locals += 1;
+                self.expr(selector);
+                self.narrow(Ty::INTEGER);
+                self.code.idx(LOCAL_SET, local);
+                let exit = self.code.block(VOID);
+                for &arm in self.ast.items(arms) {
+                    let Kind::Arm(labels, body) = self.ast.nodes[arm as usize].kind else {
+                        unreachable!("checked arm")
+                    };
+                    self.code.i32_const(0);
+                    for &label in self.ast.items(labels) {
+                        let Kind::Range(lo, hi) = self.ast.nodes[label as usize].kind else {
+                            unreachable!("checked range")
+                        };
+                        let (Kind::IntLit(lo), Kind::IntLit(hi)) = (
+                            self.ast.nodes[lo as usize].kind,
+                            self.ast.nodes[hi as usize].kind,
+                        ) else {
+                            unreachable!("constant labels")
+                        };
+                        if lo <= hi {
+                            self.code
+                                .idx(LOCAL_GET, local)
+                                .i32_const(lo as i32)
+                                .op(I32_SUB);
+                            self.code
+                                .i32_const((hi - lo) as i32)
+                                .op(I32_LE_U)
+                                .op(I32_OR);
+                        }
+                    }
+                    self.code.if_(VOID);
+                    self.stmt(body);
+                    self.code.br(exit).end();
+                }
+                self.ast.items(other).iter().for_each(|&s| self.stmt(s));
+                self.code.end();
             }
             Kind::For(var, first, last, body, down) => {
                 // The last value is compared for equality before stepping, so the
