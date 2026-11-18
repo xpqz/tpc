@@ -5,6 +5,9 @@ https://discmaster.textfiles.com/file/9297/Cream%20of%20the%20Crop%201.iso/CAD/G
 and neighbouring entries. The guide states the numbers vary only slightly from 4.0.
 TP 5.0 is the target; where 5.0 and 5.5 differ (5.5 adds objects), 5.5-only errors are not
 used. Numbers missing from the source (108-111, 115, 119, 125, 145) are not used.
+Message wording here is normalised (capitalisation, 5.5-only object references dropped);
+the numbers are authoritative, the wording is ours. 146 (File access denied) is listed by
+the source but outside its stated 1-144 range and is not used.
 Diagnostics in `compiler/src/diag.rs` use these numbers and messages. Errors for omitted
 features use a distinct "not supported" code chosen in docs/decisions.md.
 
