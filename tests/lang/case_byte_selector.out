@@ -1,0 +1,6 @@
+min 0
+low 1
+low 127
+high 128
+high 254
+max 255
