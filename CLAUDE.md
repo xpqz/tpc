@@ -26,7 +26,8 @@ budgets are in `plan.md` §1. The 500-line margin is not spent before Phase 7.
   not test harness JS or Pascal. Test code never lives in a counted path: Rust tests
   (including the Phase 0 emitter test) go in `compiler/tests/`, not `#[cfg(test)]` modules;
   the Node runner lives in `tests/`. No `include!`, `#[path]` or generated source to move
-  production code out of view.
+  production code out of view. The one exception is decision 11: `runtime/system.pas` is
+  embedded with `include_bytes!` and counted where it lives.
 - Because tests are free, test richly. Thin coverage is never a way to save lines.
 - Checker + codegen are budgeted at 4,700 (2,200 + 2,500); 5,200 is the Phase 4
   stop-and-cut ceiling, not an allowance. Other checkpoints: Rust total 6,500 at Phase 3,

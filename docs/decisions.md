@@ -131,3 +131,45 @@ confirmed); `Integer (30000+30000) div 2` = -2768, `i+1 > 0` with i=32767 is FAL
 - Constant expressions are folded in 32-bit (`LongInt`) precision; the folded value then
   has the smallest type containing it (decision 5 constant rule).
 - Tests come from `tools/tp5.sh`; decision 5's provisional-test naming is no longer needed.
+
+## 11. System unit before units exist
+
+**Decision.** `runtime/system.pas` (counted, Pascal budget) is embedded in the compiler
+with `include_bytes!` and parsed as a plain declaration part in an outer scope that
+encloses the program, at the program's routine depth (no static links). Programs may
+redeclare System names (TP5 accepts `var Length: Integer;`, measured). Helpers the
+compiler calls implicitly (string concat/compare/copy etc.) are bound to symbol handles
+right after System is loaded, never looked up by name at use sites, so a user routine
+with a helper's name cannot break them. Unit syntax arrives in Phase 5.
+**Reason.** Whole-program compilation (plan §3) with no unit machinery yet.
+**Note.** Embedding a counted runtime file with `include_bytes!` is the one permitted use
+of an include mechanism; the file is counted where it lives.
+
+## 12. Aggregate copies are bulk-memory instructions; the heap moves to Phase 4
+
+**Decision.** Aggregate assignment, value-aggregate callee copies (plan §4.3) and string
+moves use WASM `memory.copy`/`memory.fill` emitted inline, not a Pascal `MemMove`. No
+raw-memory construct (`Mem[]` etc.) is added to the language. The bump allocator, `New`,
+`GetMem` move to Phase 4 with pointers, where a heap is first observable.
+**Reason.** Shortest code; nothing in Phase 3 can observe a heap.
+
+## 13. One mechanism for string values
+
+**Decision.** Every string-valued expression evaluates into a 256-byte frame temporary;
+one truncating store copies a temporary into a `String[n]` destination (length byte
+clamped to n). Concatenation, `Copy`, `Insert`, `Delete` and string function results all
+go through it. System string helpers are ordinary Pascal using string indexing.
+**Reason.** Aliasing (`s := 'a' + s`) and capacity are handled in one place.
+
+## 14. Function-level dead-code elimination
+
+**Decision.** Codegen emits function bodies from a worklist rooted at `main` (and later
+unit initialisers and address-taken routines), assigning WASM indices on first
+reference. String-literal data is emitted only when referenced; globals are laid out
+before literals.
+**Reason.** System grows; hello-world must not.
+
+## 15. Hidden result pointer test moves to Phase 3
+
+The plan's Phase 2 exit test "a function returning through the hidden result pointer"
+needs strings; it lands in `tests/abi` with the strings slice.
