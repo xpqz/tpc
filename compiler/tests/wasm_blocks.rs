@@ -185,7 +185,6 @@ fn br_table_with_a_closed_label_is_rejected() {
     let mut c = Code::new();
     let a = c.block(VOID);
     c.end();
-    c.block(VOID);
     c.br_table(&[], a);
 }
 

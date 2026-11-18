@@ -113,7 +113,7 @@ fn only_adjacent_equal_locals_are_merged() {
     let mut m = Module::new();
     let t = void_ty(&mut m);
     m.func(t, &[I32, F64, I32], Code::new());
-    let want_code = section(10, &[1, 9, 3, 1, 0x7F, 1, 0x7C, 1, 0x7F, 0x0B]);
+    let want_code = section(10, &[1, 8, 3, 1, 0x7F, 1, 0x7C, 1, 0x7F, 0x0B]);
     assert!(m.finish().ends_with(&want_code));
 }
 
