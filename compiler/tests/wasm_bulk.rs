@@ -93,3 +93,13 @@ fn out_of_bounds_copy_traps() {
               try { i.exports.main(); console.log('no trap') } catch (e) { console.log(e instanceof WebAssembly.RuntimeError) }";
     assert_eq!(node(js, &m).trim(), "true");
 }
+
+#[test]
+fn emitter_helper_writes_the_pinned_bytes() {
+    let mut a = Code::new();
+    a.memory_copy();
+    let mut b = Code::new();
+    raw(&mut b, &COPY);
+    let (ma, mb) = (module(|c| *c = a), module(|c| *c = b));
+    assert_eq!(ma, mb);
+}

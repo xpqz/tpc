@@ -99,6 +99,11 @@ impl Code {
         self.idx(0x11, ty).op(0)
     }
 
+    /// `memory.copy` of (dest, src, len) on the stack, memory 0 to memory 0.
+    pub fn memory_copy(&mut self) -> &mut Self {
+        self.idx(0xFC, 0x0A).op(0).op(0)
+    }
+
     fn open(&mut self, opcode: u8, bt: u8, is_if: bool) -> Label {
         self.buf.extend_from_slice(&[opcode, bt]);
         self.open.push(is_if);

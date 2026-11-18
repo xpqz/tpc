@@ -103,6 +103,20 @@ pub enum Kind {
     ProcType(Option<List>, u32, bool),
     /// An enumerated type: its identifiers as `Name` nodes.
     Enum(List),
+    /// Index types (one per dimension) and element type.
+    Array(List, Id),
+    /// Field declarations and at most one `Variant`, in order.
+    Record(List),
+    /// Field name (`NO_NAME` for an untagged variant selector type) and type.
+    FieldDecl(u32, Id),
+    /// The arms of a variant part, each a `Record`.
+    Variant(List),
+    /// `base[index]`; the flag marks an index that continues the same brackets (`a[i, j]`).
+    Index(Id, Id, bool),
+    /// `base.name`; the checker replaces the name with the field's offset.
+    Field(Id, u32),
+    /// Record designators whose fields are visible in the body.
+    With(List, Id),
 }
 
 pub const NO_NAME: u32 = u32::MAX;

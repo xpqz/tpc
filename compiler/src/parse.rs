@@ -269,6 +269,21 @@ impl Parser {
         if self.kw(b"CASE") {
             return self.case().map(Some);
         }
+        if self.kw(b"WITH") {
+            let mut records = Vec::new();
+            loop {
+                records.push(self.designator()?);
+                if !self.sym(b",") {
+                    break;
+                }
+            }
+            let id = self.after(placeholder);
+            self.expect_kw(b"DO", 50)?;
+            let body = self.sub(self.stops)?;
+            let list = self.ast.list(&records);
+            self.ast.nodes[id as usize].kind = Kind::With(list, body);
+            return Ok(Some(id));
+        }
         if self.kw(b"FOR") {
             let (line, col) = self.pos();
             if self.tok().kind != Tk::Ident {
@@ -315,6 +330,9 @@ impl Parser {
     /// A type name; `String` is not supported yet.
     fn type_name(&mut self) -> R<u32> {
         self.unsupported(&[b"STRING", b"FILE"])?;
+        if self.is(Tk::Kw, b"ARRAY") || self.is(Tk::Kw, b"RECORD") || self.is(Tk::Kw, b"PACKED") {
+            return Err(self.err(12));
+        }
         self.ident()
     }
 
@@ -369,6 +387,28 @@ impl Parser {
             let list = self.ast.list(&names);
             return Ok(self.ast.add(Kind::Enum(list), line, col));
         }
+        if self.kw(b"PACKED") && !self.is(Tk::Kw, b"ARRAY") && !self.is(Tk::Kw, b"RECORD") {
+            return Err(self.err(5));
+        }
+        if self.kw(b"ARRAY") {
+            self.expect_sym(b"[", 93)?;
+            let mut index = vec![self.type_spec()?];
+            while self.sym(b",") {
+                index.push(self.type_spec()?);
+            }
+            self.expect_sym(b"]", 93)?;
+            self.expect_kw(b"OF", 54)?;
+            let (index, elem) = (self.ast.list(&index), self.type_spec()?);
+            return Ok(self.ast.add(Kind::Array(index, elem), line, col));
+        }
+        if self.kw(b"RECORD") {
+            let fields = self.fields()?;
+            if !self.kw(b"END") {
+                return Err(self.err(2));
+            }
+            let list = self.ast.list(&fields);
+            return Ok(self.ast.add(Kind::Record(list), line, col));
+        }
         if !self.kw(b"PROCEDURE") && !self.kw(b"FUNCTION") {
             self.unsupported(&[b"STRING", b"FILE"])?;
             let t = self.tok();
@@ -397,6 +437,63 @@ impl Parser {
         Ok(self
             .ast
             .add(Kind::ProcType(params, result, func), line, col))
+    }
+
+    /// A record's field list up to (not including) `END` or `)`: fixed fields, then an optional
+    /// variant part `case [tag:] type of labels: (fields); ...`.
+    fn fields(&mut self) -> R<Vec<Id>> {
+        let mut out = Vec::new();
+        while self.tok().kind == Tk::Ident {
+            let mut names = Vec::new();
+            loop {
+                let (line, col) = self.pos();
+                names.push((self.ident()?, line, col));
+                if !self.sym(b",") {
+                    break;
+                }
+            }
+            self.expect_sym(b":", 86)?;
+            let spec = self.type_spec()?;
+            for (name, line, col) in names {
+                out.push(self.ast.add(Kind::FieldDecl(name, spec), line, col));
+            }
+            if !self.sym(b";") {
+                return Ok(out);
+            }
+        }
+        if !self.is(Tk::Kw, b"CASE") {
+            return Ok(out);
+        }
+        let (line, col) = self.pos();
+        self.at += 1;
+        let tagged = self.toks[self.at + 1].text == b":";
+        let name = if tagged { self.ident()? } else { NO_NAME };
+        if tagged {
+            self.at += 1;
+        }
+        let spec = self.type_spec()?;
+        out.push(self.ast.add(Kind::FieldDecl(name, spec), line, col));
+        self.expect_kw(b"OF", 54)?;
+        let mut arms = Vec::new();
+        loop {
+            let (line, col) = self.pos();
+            while {
+                self.expr()?;
+                self.sym(b",")
+            } {}
+            self.expect_sym(b":", 86)?;
+            self.expect_sym(b"(", 88)?;
+            let inner = self.fields()?;
+            self.expect_sym(b")", 89)?;
+            let list = self.ast.list(&inner);
+            arms.push(self.ast.add(Kind::Record(list), line, col));
+            if !self.sym(b";") || self.is(Tk::Kw, b"END") || self.is(Tk::Sym, b")") {
+                break;
+            }
+        }
+        let list = self.ast.list(&arms);
+        out.push(self.ast.add(Kind::Variant(list), line, col));
+        Ok(out)
     }
 
     /// After `PROCEDURE` or `FUNCTION`.
@@ -515,14 +612,56 @@ impl Parser {
         Ok((args, close))
     }
 
+    /// Index and field selectors after the designator `e` that starts at `(line, col)`.
+    fn selectors(&mut self, mut e: Id) -> R<Id> {
+        let (line, col) = (
+            self.ast.nodes[e as usize].line,
+            self.ast.nodes[e as usize].col,
+        );
+        loop {
+            if self.sym(b"[") {
+                let mut more = false;
+                loop {
+                    let index = self.expr()?;
+                    e = self.ast.add(Kind::Index(e, index, more), line, col);
+                    more = true;
+                    if !self.sym(b",") {
+                        break;
+                    }
+                }
+                self.expect_sym(b"]", 93)?;
+            } else if self.sym(b".") {
+                if self.tok().kind != Tk::Ident {
+                    return Err(self.err(44));
+                }
+                let name = self.ident()?;
+                e = self.ast.add(Kind::Field(e, name), line, col);
+            } else {
+                return Ok(e);
+            }
+        }
+    }
+
+    /// A variable with selectors.
+    fn designator(&mut self) -> R<Id> {
+        let (line, col) = self.pos();
+        let name = self.ident()?;
+        let base = self.ast.add(Kind::Name(name), line, col);
+        self.selectors(base)
+    }
+
     fn statement(&mut self) -> R<Option<Id>> {
         let (line, col) = self.pos();
         if self.tok().kind == Tk::Ident {
             let name = self.ident()?;
-            let target = self.ast.add(Kind::Name(name), line, col);
+            let mut target = self.ast.add(Kind::Name(name), line, col);
+            target = self.selectors(target)?;
             if self.sym(b":=") {
                 let value = self.expr()?;
                 return Ok(Some(self.after(Kind::Assign(target, value))));
+            }
+            if !matches!(self.ast.nodes[target as usize].kind, Kind::Name(_)) {
+                return Err(self.err(113));
             }
             let (mut args, mut at) = (Vec::new(), self.pos());
             if self.sym(b"(") {
@@ -621,7 +760,7 @@ impl Parser {
                 let name = self.ident()?;
                 let callee = self.ast.add(Kind::Name(name), line, col);
                 if !self.sym(b"(") {
-                    return Ok(callee);
+                    return self.selectors(callee);
                 }
                 let (args, at) = self.arguments()?;
                 let list = self.ast.list(&args);

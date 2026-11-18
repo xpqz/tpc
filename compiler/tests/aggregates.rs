@@ -218,16 +218,16 @@ const MEMORY_COPY: [u8; 4] = [0xFC, 0x0A, 0x00, 0x00];
 fn aggregate_copies_are_memory_copy_instructions() {
     let scalar = "program P;\nvar a, b: Integer;\nbegin\n  a := 1; b := a\nend.";
     assert!(!has(&compile(scalar), &MEMORY_COPY));
-    let assign = "program P;\ntype A = array[1..4] of Integer;\nvar a, b: A;\nbegin\n  a[1] := 5; b := a\nend.";
+    let assign = "program P;\ntype Arr = array[1..4] of Integer;\nvar a, b: Arr;\nbegin\n  a[1] := 5; b := a\nend.";
     assert!(has(&compile(assign), &MEMORY_COPY), "array assignment");
     let record = "program P;\ntype R = record x, y: Integer end;\nvar a, b: R;\nbegin\n  a.x := 5; b := a\nend.";
     assert!(has(&compile(record), &MEMORY_COPY), "record assignment");
-    let param = "program P;\ntype A = array[1..4] of Integer;\nvar a: A;\nprocedure Q(v: A);\nbegin\n  v[1] := 1\nend;\nbegin\n  Q(a)\nend.";
+    let param = "program P;\ntype Arr = array[1..4] of Integer;\nvar a: Arr;\nprocedure Q(v: Arr);\nbegin\n  v[1] := 1\nend;\nbegin\n  Q(a)\nend.";
     assert!(
         has(&compile(param), &MEMORY_COPY),
         "callee copy of a value parameter"
     );
-    let by_ref = "program P;\ntype A = array[1..4] of Integer;\nvar a: A;\nprocedure Q(var v: A);\nbegin\n  v[1] := 1\nend;\nbegin\n  Q(a)\nend.";
+    let by_ref = "program P;\ntype Arr = array[1..4] of Integer;\nvar a: Arr;\nprocedure Q(var v: Arr);\nbegin\n  v[1] := 1\nend;\nbegin\n  Q(a)\nend.";
     assert!(
         !has(&compile(by_ref), &MEMORY_COPY),
         "a var parameter is not copied"
