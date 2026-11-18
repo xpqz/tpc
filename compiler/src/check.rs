@@ -193,6 +193,39 @@ impl Cx<'_> {
                     self.stmt(s)?;
                 }
             }
+            Kind::If(cond, then, other) => {
+                self.condition(id, cond)?;
+                self.stmt(then)?;
+                if let Some(s) = other {
+                    self.stmt(s)?;
+                }
+            }
+            Kind::While(cond, body) => {
+                self.condition(id, cond)?;
+                self.stmt(body)?;
+            }
+            Kind::Repeat(body, cond) => {
+                for s in self.ast.items(body).to_vec() {
+                    self.stmt(s)?;
+                }
+                self.condition(id, cond)?;
+            }
+            Kind::For(var, first, last, body, _) => {
+                let Kind::Name(name) = self.ast.nodes[var as usize].kind else {
+                    unreachable!("the parser names the control variable")
+                };
+                let (sym, s) = self.resolve(var, name)?;
+                if s.kind != SymKind::Var {
+                    return Err(self.err(var, 20));
+                }
+                self.ast.nodes[var as usize].kind = Kind::Var(sym);
+                self.ast.nodes[var as usize].ty = s.ty;
+                for bound in [first, last] {
+                    self.expr(bound)?;
+                    self.assignable(id, s.ty, bound)?;
+                }
+                self.stmt(body)?;
+            }
             Kind::Assign(target, value) => {
                 let Kind::Name(name) = self.ast.nodes[target as usize].kind else {
                     unreachable!("the parser assigns to names")
@@ -219,6 +252,15 @@ impl Cx<'_> {
             _ => unreachable!("statements only"),
         }
         Ok(())
+    }
+
+    /// `at` is the statement owning the Boolean condition.
+    fn condition(&mut self, at: Id, cond: Id) -> R<()> {
+        self.expr(cond)?;
+        match self.ast.nodes[cond as usize].ty {
+            Ty::BOOLEAN => Ok(()),
+            _ => Err(self.err(at, 40)),
+        }
     }
 
     /// `at` is the assignment; a constant must also fit the destination's range.
@@ -292,10 +334,10 @@ impl Cx<'_> {
                     .types
                     .binary(op, na.ty, nb.ty)
                     .map_err(|c| self.err(e, c))?;
-                if matches!(op, Op::Div | Op::Mod) && matches!(nb.kind, Kind::IntLit(0)) {
-                    return Err(self.err(e, 62));
-                }
                 match (na.kind, nb.kind) {
+                    (Kind::IntLit(_), Kind::IntLit(0)) if matches!(op, Op::Div | Op::Mod) => {
+                        return Err(self.err(e, 62));
+                    }
                     (Kind::IntLit(x), Kind::IntLit(y)) if ty != Ty::STRING => {
                         self.constant(fold(op, x, y), ty)
                     }

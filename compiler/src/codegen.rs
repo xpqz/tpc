@@ -23,13 +23,19 @@ const LOCAL_SET: u8 = 0x21;
 const I32_LOAD: u8 = 0x28;
 const I32_STORE: u8 = 0x36;
 const I32_STORE8: u8 = 0x3A;
+const RETURN: u8 = 0x0F;
 const I32_EQZ: u8 = 0x45;
+const I32_EQ: u8 = 0x46;
 const I32_NE: u8 = 0x47;
+const I32_LE_S: u8 = 0x4C;
+const I32_GE_S: u8 = 0x4E;
 const I32_GT_S: u8 = 0x4A;
 const I32_LT_S: u8 = 0x48;
 const I32_ADD: u8 = 0x6A;
 const I32_SUB: u8 = 0x6B;
+const I32_DIV_S: u8 = 0x6D;
 const I32_DIV_U: u8 = 0x6E;
+const I32_REM_S: u8 = 0x6F;
 const I32_REM_U: u8 = 0x70;
 const I32_AND: u8 = 0x71;
 const I32_XOR: u8 = 0x73;
@@ -41,7 +47,7 @@ const HOST_WRITE: u32 = 0;
 const HOST_RTERROR: u32 = 1;
 const WSTR: u32 = 2;
 const WINT: u32 = 3;
-const NONZERO: u32 = 4;
+const QUOT: u32 = 4;
 
 struct Gen<'a> {
     ast: &'a Ast,
@@ -49,6 +55,8 @@ struct Gen<'a> {
     code: Code,
     /// Address of each string literal.
     addr: Vec<u32>,
+    /// WASM locals of `main` in use; local 0 is the Boolean scratch.
+    locals: u32,
 }
 
 pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
@@ -63,6 +71,7 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
         info,
         code: Code::new(),
         addr,
+        locals: 1,
     };
     let Kind::Program(_, _, body) = ast.nodes[root as usize].kind else {
         unreachable!("the root is a program")
@@ -79,9 +88,9 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
     m.func(write, &[], write_string());
     let two = m.ty(&[I32, I32], &[]);
     m.func(two, &[I32, I32, I32], write_integer());
-    let one = m.ty(&[I32], &[I32]);
-    m.func(one, &[], nonzero());
-    let f = m.func(main, &[I32], g.code);
+    let three = m.ty(&[I32, I32, I32], &[I32]);
+    m.func(three, &[], quotient());
+    let f = m.func(main, &vec![I32; g.locals as usize], g.code);
     m.export("main", FUNC, f);
     m.export("memory", MEM, 0);
     m.data(HEADER, b"\n FALSETRUE");
@@ -159,12 +168,33 @@ fn write_integer() -> Code {
     c
 }
 
-/// `nonzero(d)`: `d`, or runtime error 200 when it is zero.
-fn nonzero() -> Code {
+/// `quot(a, b, flags)`: `a div b`, or `a mod b` when bit 0 is set. Bit 1 marks 16-bit
+/// operands. A zero divisor is runtime error 200, as is -32768 by -1 on 16 bits; on 32
+/// bits `a div -1` wraps and `a mod -1` is 0.
+fn quotient() -> Code {
+    let (a, b, flags) = (0, 1, 2);
     let mut c = Code::new();
-    c.idx(LOCAL_GET, 0).op(I32_EQZ).if_(VOID);
+    c.idx(LOCAL_GET, b).op(I32_EQZ).if_(VOID);
     c.i32_const(200).idx(CALL, HOST_RTERROR).end();
-    c.idx(LOCAL_GET, 0);
+    c.idx(LOCAL_GET, b).i32_const(-1).op(I32_EQ).if_(VOID);
+    c.idx(LOCAL_GET, flags).i32_const(1).op(I32_GT_S);
+    c.idx(LOCAL_GET, a)
+        .i32_const(-32768)
+        .op(I32_EQ)
+        .op(I32_AND)
+        .if_(VOID);
+    c.i32_const(200).idx(CALL, HOST_RTERROR).end();
+    c.idx(LOCAL_GET, flags).i32_const(1).op(I32_AND).if_(I32);
+    c.i32_const(0)
+        .else_()
+        .i32_const(0)
+        .idx(LOCAL_GET, a)
+        .op(I32_SUB)
+        .end();
+    c.op(RETURN).end();
+    c.idx(LOCAL_GET, a).idx(LOCAL_GET, b).op(I32_REM_S);
+    c.idx(LOCAL_GET, a).idx(LOCAL_GET, b).op(I32_DIV_S);
+    c.idx(LOCAL_GET, flags).i32_const(1).op(I32_AND).op(SELECT);
     c
 }
 
@@ -173,19 +203,19 @@ fn binary_op(op: Op) -> u8 {
         Op::Add => 0x6A,
         Op::Sub => 0x6B,
         Op::Mul => 0x6C,
-        Op::Div => 0x6D,
-        Op::Mod => 0x6F,
+        Op::Div => I32_DIV_S,
+        Op::Mod => I32_REM_S,
         Op::And => 0x71,
         Op::Or => 0x72,
         Op::Xor => 0x73,
         Op::Shl => 0x74,
         Op::Shr => 0x76,
-        Op::Eq => 0x46,
+        Op::Eq => I32_EQ,
         Op::Ne => I32_NE,
         Op::Lt => I32_LT_S,
         Op::Gt => I32_GT_S,
-        Op::Le => 0x4C,
-        Op::Ge => 0x4E,
+        Op::Le => I32_LE_S,
+        Op::Ge => I32_GE_S,
         Op::Neg | Op::Not => unreachable!("unary"),
     }
 }
@@ -213,6 +243,34 @@ impl Gen<'_> {
         }
     }
 
+    fn var_addr(&mut self, v: Id) {
+        let Kind::Var(sym) = self.ast.nodes[v as usize].kind else {
+            unreachable!("checked variable")
+        };
+        self.code
+            .i32_const(self.info.syms[sym.0 as usize].val as i32);
+    }
+
+    /// Replaces the address on the stack by the variable's value.
+    fn load(&mut self, v: Id) {
+        let (_, _, size, signed) = self.info.types.ord(self.ast.nodes[v as usize].ty);
+        let op = match (size, signed) {
+            (1, true) => 0x2C,
+            (1, false) => 0x2D,
+            (2, true) => 0x2E,
+            (2, false) => 0x2F,
+            _ => I32_LOAD,
+        };
+        self.code.mem(op, 0, 0);
+    }
+
+    /// Stores the value on the stack at the address below it, truncating to the type.
+    fn store(&mut self, v: Id) {
+        let size = self.info.types.ord(self.ast.nodes[v as usize].ty).2;
+        self.code
+            .mem([I32_STORE8, 0x3B, 0, I32_STORE][size as usize - 1], 0, 0);
+    }
+
     fn width(&mut self, w: Option<Id>) {
         match w {
             Some(w) => self.expr(w),
@@ -226,15 +284,62 @@ impl Gen<'_> {
         match self.ast.nodes[id as usize].kind {
             Kind::Compound(l) => self.ast.items(l).iter().for_each(|&s| self.stmt(s)),
             Kind::Assign(target, value) => {
-                let Kind::Var(sym) = self.ast.nodes[target as usize].kind else {
-                    unreachable!("checked target")
-                };
-                let size = self.info.types.ord(self.ast.nodes[target as usize].ty).2;
-                self.code
-                    .i32_const(self.info.syms[sym.0 as usize].val as i32);
+                self.var_addr(target);
                 self.expr(value);
-                let store = [I32_STORE8, 0x3B, 0, I32_STORE][size as usize - 1];
-                self.code.mem(store, 0, 0);
+                self.store(target);
+            }
+            Kind::If(cond, then, other) => {
+                self.expr(cond);
+                self.code.if_(VOID);
+                self.stmt(then);
+                if let Some(s) = other {
+                    self.code.else_();
+                    self.stmt(s);
+                }
+                self.code.end();
+            }
+            Kind::While(cond, body) => {
+                let exit = self.code.block(VOID);
+                let top = self.code.loop_(VOID);
+                self.expr(cond);
+                self.code.op(I32_EQZ).br_if(exit);
+                self.stmt(body);
+                self.code.br(top).end().end();
+            }
+            Kind::Repeat(body, cond) => {
+                let top = self.code.loop_(VOID);
+                self.ast.items(body).iter().for_each(|&s| self.stmt(s));
+                self.expr(cond);
+                self.code.op(I32_EQZ).br_if(top).end();
+            }
+            Kind::For(var, first, last, body, down) => {
+                // The last value is compared for equality before stepping, so the
+                // control variable never passes its type's limit.
+                let end = self.locals;
+                self.locals += 1;
+                self.var_addr(var);
+                self.expr(first);
+                self.store(var);
+                self.expr(last);
+                self.code.idx(LOCAL_SET, end);
+                let exit = self.code.block(VOID);
+                self.var_addr(var);
+                self.load(var);
+                self.code.idx(LOCAL_GET, end);
+                self.code
+                    .op(if down { I32_LT_S } else { I32_GT_S })
+                    .br_if(exit);
+                let top = self.code.loop_(VOID);
+                self.stmt(body);
+                self.var_addr(var);
+                self.load(var);
+                self.code.idx(LOCAL_GET, end).op(I32_EQ).br_if(exit);
+                self.var_addr(var);
+                self.var_addr(var);
+                self.load(var);
+                self.code.i32_const(if down { -1 } else { 1 }).op(I32_ADD);
+                self.store(var);
+                self.code.br(top).end().end();
             }
             Kind::Write(args, ln) => {
                 self.ast.items(args).iter().for_each(|&a| self.write_arg(a));
@@ -299,18 +404,22 @@ impl Gen<'_> {
             Kind::IntLit(v) => {
                 self.code.i32_const(v as i32);
             }
-            Kind::Var(sym) => {
-                let (_, _, size, signed) = self.info.types.ord(n.ty);
-                let load = match (size, signed) {
-                    (1, true) => 0x2C,
-                    (1, false) => 0x2D,
-                    (2, true) => 0x2E,
-                    (2, false) => 0x2F,
-                    _ => I32_LOAD,
-                };
-                self.code
-                    .i32_const(self.info.syms[sym.0 as usize].val as i32);
-                self.code.mem(load, 0, 0);
+            Kind::Var(_) => {
+                self.var_addr(e);
+                self.load(e);
+            }
+            Kind::Binary(op @ (Op::And | Op::Or), a, b) if n.ty == Ty::BOOLEAN => {
+                // `{$B-}`: the right operand is evaluated only when it can matter.
+                self.expr(a);
+                self.code.if_(I32);
+                if op == Op::And {
+                    self.expr(b);
+                    self.code.else_().i32_const(0);
+                } else {
+                    self.code.i32_const(1).else_();
+                    self.expr(b);
+                }
+                self.code.end();
             }
             Kind::Unary(Op::Not, a) if n.ty == Ty::BOOLEAN => {
                 self.expr(a);
@@ -335,7 +444,9 @@ impl Gen<'_> {
                 }
                 self.expr(b);
                 if matches!(op, Op::Div | Op::Mod) {
-                    self.code.idx(CALL, NONZERO);
+                    let flags = (op == Op::Mod) as i32 + 2 * (n.ty == Ty::INTEGER) as i32;
+                    self.code.i32_const(flags).idx(CALL, QUOT);
+                    return;
                 }
                 self.code.op(binary_op(op));
                 if matches!(op, Op::Add | Op::Sub | Op::Mul | Op::Shl | Op::Shr) {
