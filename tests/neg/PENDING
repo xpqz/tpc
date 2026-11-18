@@ -1,9 +1,3 @@
 for_control_variable_real
 ordinal_expression_expected_case_real
 unsupported_absolute_variable
-unsupported_asm_block
-unsupported_goto
-unsupported_inline_procedure
-unsupported_inline_statement
-unsupported_interrupt_procedure
-unsupported_label_declaration
