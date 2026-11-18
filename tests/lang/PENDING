@@ -26,3 +26,7 @@ var_param_integer_types
 var_param_local_argument
 var_param_multiple_results
 var_param_read_before_write
+var_param_declaration_forms
+var_param_function_result
+var_param_in_conditions
+var_param_sign_extension_on_read
