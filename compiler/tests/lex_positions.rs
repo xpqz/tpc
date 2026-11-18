@@ -80,7 +80,7 @@ fn positions_after_comments() {
 fn positions_after_strings() {
     assert_eq!(pos("'ab' x"), [(StrLit, 1, 1), (Ident, 1, 6)]);
     assert_eq!(pos("'a''b' x"), [(StrLit, 1, 1), (Ident, 1, 8)]);
-    assert_eq!(pos("'a'#13#10'b' x"), [(StrLit, 1, 1), (Ident, 1, 13)]);
+    assert_eq!(pos("'a'#13#10'b' x"), [(StrLit, 1, 1), (Ident, 1, 14)]);
 }
 
 #[test]
