@@ -160,7 +160,7 @@ else fail "defaults: repo budget passes from any cwd" "exit $RC; output: $OUT"; 
 B="$ROOT/tools/budget.txt"
 SRC=compiler/src
 EXPECTED=$(cat <<EOT
-1100|$SRC/diag.rs $SRC/driver.rs $SRC/lib.rs $SRC/main.rs $SRC/units.rs compiler/build.rs
+1100|$SRC/diag.rs $SRC/ffi.rs $SRC/driver.rs $SRC/lib.rs $SRC/main.rs $SRC/units.rs compiler/build.rs
 1400|$SRC/types.rs
 1500|runtime
 2000|$SRC/ast.rs $SRC/parse.rs
