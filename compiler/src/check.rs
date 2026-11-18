@@ -210,6 +210,24 @@ impl Cx<'_> {
                 }
                 self.condition(id, cond)?;
             }
+            Kind::Case(selector, arms, other) => {
+                self.expr(selector)?;
+                let Some(tag) = self.types.tag(self.ast.nodes[selector as usize].ty) else {
+                    return Err(self.err(id, 39));
+                };
+                for arm in self.ast.items(arms).to_vec() {
+                    let Kind::Arm(labels, body) = self.ast.nodes[arm as usize].kind else {
+                        unreachable!("the parser lists arms")
+                    };
+                    for label in self.ast.items(labels).to_vec() {
+                        self.label(label, tag)?;
+                    }
+                    self.stmt(body)?;
+                }
+                for s in self.ast.items(other).to_vec() {
+                    self.stmt(s)?;
+                }
+            }
             Kind::For(var, first, last, body, _) => {
                 let Kind::Name(name) = self.ast.nodes[var as usize].kind else {
                     unreachable!("the parser names the control variable")
@@ -250,6 +268,27 @@ impl Cx<'_> {
                 self.ast.nodes[id as usize].kind = Kind::Write(args, s.val == 1);
             }
             _ => unreachable!("statements only"),
+        }
+        Ok(())
+    }
+
+    /// A case label range: constants of the selector's family, within Integer.
+    fn label(&mut self, label: Id, tag: Tag) -> R<()> {
+        let Kind::Range(lo, hi) = self.ast.nodes[label as usize].kind else {
+            unreachable!("the parser lists ranges")
+        };
+        for end in if lo == hi { vec![lo] } else { vec![lo, hi] } {
+            self.expr(end)?;
+            let n = self.ast.nodes[end as usize];
+            let Kind::IntLit(v) = n.kind else {
+                return Err(self.err(label, 133));
+            };
+            if self.types.tag(n.ty) != Some(tag) {
+                return Err(self.err(label, 74));
+            }
+            if tag == Tag::Int && !(-32768..=32767).contains(&v) {
+                return Err(self.err(label, 112));
+            }
         }
         Ok(())
     }

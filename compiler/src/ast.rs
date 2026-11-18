@@ -46,6 +46,12 @@ pub enum Kind {
     While(Id, Id),
     /// Body statements, condition.
     Repeat(List, Id),
+    /// Selector, arms, `else` statements.
+    Case(Id, List, List),
+    /// Labels (ranges), body.
+    Arm(List, Id),
+    /// Label range; a single label has both ends equal.
+    Range(Id, Id),
     /// Control variable, first, last, body, `downto`.
     For(Id, Id, Id, Id, bool),
     /// Index into `Ast::strs`.

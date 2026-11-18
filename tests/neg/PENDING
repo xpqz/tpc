@@ -1,12 +1,9 @@
-case_label_out_of_range_integer
-case_label_type_mismatch
 duplicate_parameter_and_local
 duplicate_procedure_name
 for_control_variable_real
 function_result_type_missing
 missing_begin_in_procedure
 missing_left_paren_in_call_args
-missing_of_in_case
 ordinal_expression_expected_case_real
 too_many_arguments
 type_mismatch_argument
