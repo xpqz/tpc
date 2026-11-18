@@ -1,0 +1,13 @@
+[package]
+name = "tp5c"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "tp5c"
+path = "src/main.rs"
+
+[dependencies]
