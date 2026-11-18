@@ -100,31 +100,40 @@ def count_file(path):
 
 
 def files(root, spec):
-    p = os.path.join(root, spec)
+    p = os.path.normpath(os.path.join(root, spec))
     if os.path.isfile(p):
         return [p] if os.path.splitext(p)[1] in EXT else []
     return [os.path.join(d, f) for d, _, fs in os.walk(p) for f in fs
             if os.path.splitext(f)[1] in EXT]
 
 
-rows = []
+rows = {}
+order = []
 for entry in open(BUDGET):
     entry = entry.strip()
     if entry and not entry.startswith("#"):
-        rows.append(entry.split("|"))
-total_limit = next(int(r[1]) for r in rows if r[0] == "TOTAL")
-total, over = 0, []
-for name, limit, *rest in rows:
-    if name == "TOTAL":
+        name, *rest = entry.split("|")
+        rows[name] = rest
+        order.append(name)
+total_limit = int(rows["TOTAL"][0])
+total, over, assigned = 0, [], set()
+for name in order:
+    if name in ("TOTAL", "ROOTS"):
         continue
-    n = sum(count_file(f) for spec in rest[0].split() for f in files(ROOT, spec))
+    limit, paths = rows[name]
+    members = [f for spec in paths.split() for f in files(ROOT, spec)]
+    assigned.update(members)
+    n = sum(count_file(f) for f in members)
     total += n
     print(f"{name}: {n} / {limit}")
     if n > int(limit):
-        over.append(name)
+        over.append("OVER: " + name)
 print(f"total: {total} / {total_limit}")
 if total > total_limit:
-    over.append("total")
-for name in over:
-    print(f"OVER: {name}")
+    over.append("OVER: total")
+for spec in rows.get("ROOTS", [""])[0].split():
+    over += ["UNASSIGNED: " + os.path.relpath(f, ROOT) for f in sorted(files(ROOT, spec))
+             if f not in assigned]
+for line in over:
+    print(line)
 sys.exit(1 if over else 0)

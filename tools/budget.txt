@@ -9,4 +9,5 @@ Units, directives, driver, diagnostics, native CLI|1100|compiler/src/lib.rs comp
 System, Crt, Dos subset|1500|runtime
 IDE|2500|ide
 Host glue|500|host
+ROOTS|compiler/src compiler/build.rs runtime ide host
 TOTAL|15000

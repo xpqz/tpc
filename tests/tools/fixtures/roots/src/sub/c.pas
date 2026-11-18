@@ -1,0 +1,3 @@
+program C;
+begin
+end.

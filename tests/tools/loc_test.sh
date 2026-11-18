@@ -93,6 +93,19 @@ check "rust: lifetimes and char literals are code" "$FX" "$BUD/rustlex.txt" 0 \
 check "pascal: directive after multi-line comment" "$FX" "$BUD/pasdir.txt" 0 \
     "Directive: 4 / 100" "total: 4 / 100"
 
+# ROOTS|dirs: every source file under a root must belong to a component.
+check "roots: unassigned files fail and are named" "$FX" "$BUD/roots_unassigned.txt" 1 \
+    "Comp: 1 / 100" "UNASSIGNED: roots/src/b.rs" "UNASSIGNED: roots/src/sub/c.pas"
+absent "roots: assigned file not flagged" "$FX" "$BUD/roots_unassigned.txt" \
+    "UNASSIGNED: roots/src/a.rs"
+absent "roots: non-source file not flagged" "$FX" "$BUD/roots_unassigned.txt" \
+    "UNASSIGNED: roots/src/readme.txt"
+check "roots: all assigned (file and directory components) exits zero" \
+    "$FX" "$BUD/roots_ok.txt" 0 "Comp: 2 / 100" "Pas: 3 / 100" "total: 5 / 100"
+if ! printf '%s\n' "$OUT" | grep -q '^total: '; then fail "roots: no UNASSIGNED when all assigned" "no report"
+elif printf '%s\n' "$OUT" | grep -q UNASSIGNED; then fail "roots: no UNASSIGNED when all assigned" "$OUT"
+else pass "roots: no UNASSIGNED when all assigned"; fi
+
 # Rust is counted after rustfmt (max_width = 100); the source file is left untouched.
 # unformatted.rs formats to 25 counted lines (pick 7, two 4, wide 11, lead 3); its raw
 # non-comment line count is 4, so a counter that skips formatting cannot pass.
@@ -139,7 +152,7 @@ EXPECTED=$(printf '%s\n' "$EXPECTED" | while IFS='|' read -r lim paths; do
     printf '%s|%s\n' "$lim" "$(printf '%s\n' $paths | sort | tr '\n' ' ')"
 done | sort)
 if [ -f "$B" ]; then
-    ACTUAL=$(grep -v '^[[:space:]]*#' "$B" | grep -v '^[[:space:]]*$' | grep -v '^TOTAL|' |
+    ACTUAL=$(grep -v '^[[:space:]]*#' "$B" | grep -v '^[[:space:]]*$' | grep -v '^TOTAL|' | grep -v '^ROOTS|' |
         while IFS='|' read -r _ lim paths; do
             printf '%s|%s\n' "$lim" "$(printf '%s\n' $paths | sort | tr '\n' ' ')"
         done | sort)
@@ -149,9 +162,12 @@ if [ -f "$B" ]; then
 $EXPECTED
 actual:
 $ACTUAL"; fi
+    if grep -Fxq 'ROOTS|compiler/src compiler/build.rs runtime ide host' "$B"; then
+        pass "budget.txt: counted roots"
+    else fail "budget.txt: counted roots" "no ROOTS line for compiler/src compiler/build.rs runtime ide host"; fi
     if grep -Fxq 'TOTAL|15000' "$B"; then pass "budget.txt: total is 15000"
     else fail "budget.txt: total is 15000" "no 'TOTAL|15000' line"; fi
-    sum=$(grep -v '^[[:space:]]*#' "$B" | grep -v '^TOTAL|' | awk -F'|' 'NF >= 3 { s += $2 } END { print s + 0 }')
+    sum=$(grep -v '^[[:space:]]*#' "$B" | grep -v '^TOTAL|' | grep -v '^ROOTS|' | awk -F'|' 'NF >= 3 { s += $2 } END { print s + 0 }')
     if [ "$sum" -eq 14500 ]; then pass "budget.txt: component limits sum to 14500"
     else fail "budget.txt: component limits sum to 14500" "sum $sum"; fi
 else
