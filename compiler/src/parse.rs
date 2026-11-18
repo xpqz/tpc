@@ -3,10 +3,16 @@ use crate::ast::{Ast, Id, Kind, Op, NO_NAME};
 use crate::driver::Diag;
 use crate::lex::{Tk, Tok};
 
+/// Keywords that may follow an empty statement in the enclosing construct.
+const END: u8 = 1;
+const UNTIL: u8 = 2;
+const ELSE: u8 = 4;
+
 struct Parser {
     toks: Vec<Tok>,
     at: usize,
     ast: Ast,
+    stops: u8,
 }
 
 type R<T> = Result<T, Diag>;
@@ -16,6 +22,7 @@ pub fn parse(toks: Vec<Tok>) -> R<(Ast, Id)> {
         toks,
         at: 0,
         ast: Ast::default(),
+        stops: 0,
     };
     let (line, col) = (p.tok().line, p.tok().col);
     let mut name = NO_NAME;
@@ -115,9 +122,9 @@ impl Parser {
         Ok(name)
     }
 
-    /// After `BEGIN`: statements separated by `;`, then `END`.
-    fn compound(&mut self) -> R<Id> {
-        let (line, col) = (self.tok().line, self.tok().col);
+    /// Statements separated by `;`, up to (not including) the keyword `closer`.
+    fn statements(&mut self, stops: u8, closer: &[u8]) -> R<Vec<Id>> {
+        let outer = std::mem::replace(&mut self.stops, stops);
         let mut items = Vec::new();
         loop {
             items.extend(self.statement()?);
@@ -125,11 +132,96 @@ impl Parser {
                 break;
             }
         }
-        if !self.kw(b"END") {
+        self.stops = outer;
+        if !self.is(Tk::Kw, closer) {
             return Err(self.err(85));
         }
+        Ok(items)
+    }
+
+    /// After `BEGIN`.
+    fn compound(&mut self) -> R<Id> {
+        let (line, col) = (self.tok().line, self.tok().col);
+        let items = self.statements(END, b"END")?;
+        self.at += 1;
         let list = self.ast.list(&items);
         Ok(self.ast.add(Kind::Compound(list), line, col))
+    }
+
+    /// A statement used as a branch or body; an empty one becomes an empty compound.
+    fn sub(&mut self, stops: u8) -> R<Id> {
+        let outer = std::mem::replace(&mut self.stops, stops);
+        let s = self.statement()?;
+        self.stops = outer;
+        Ok(match s {
+            Some(s) => s,
+            None => {
+                let list = self.ast.list(&[]);
+                self.after(Kind::Compound(list))
+            }
+        })
+    }
+
+    fn expect_kw(&mut self, text: &[u8], code: u16) -> R<()> {
+        if self.kw(text) {
+            Ok(())
+        } else {
+            Err(self.err(code))
+        }
+    }
+
+    fn control(&mut self) -> R<Option<Id>> {
+        let placeholder = Kind::Compound(self.ast.list(&[]));
+        if self.kw(b"IF") {
+            let cond = self.expr()?;
+            let id = self.after(placeholder);
+            self.expect_kw(b"THEN", 57)?;
+            let then = self.sub(self.stops | ELSE)?;
+            let other = if self.kw(b"ELSE") {
+                Some(self.sub(self.stops)?)
+            } else {
+                None
+            };
+            self.ast.nodes[id as usize].kind = Kind::If(cond, then, other);
+            return Ok(Some(id));
+        }
+        if self.kw(b"WHILE") {
+            let cond = self.expr()?;
+            let id = self.after(placeholder);
+            self.expect_kw(b"DO", 50)?;
+            let body = self.sub(self.stops)?;
+            self.ast.nodes[id as usize].kind = Kind::While(cond, body);
+            return Ok(Some(id));
+        }
+        if self.kw(b"REPEAT") {
+            let items = self.statements(UNTIL, b"UNTIL")?;
+            self.at += 1;
+            let cond = self.expr()?;
+            let list = self.ast.list(&items);
+            return Ok(Some(self.after(Kind::Repeat(list, cond))));
+        }
+        if self.kw(b"FOR") {
+            let (line, col) = self.pos();
+            if self.tok().kind != Tk::Ident {
+                return Err(self.err(20));
+            }
+            let name = self.ident()?;
+            let var = self.ast.add(Kind::Name(name), line, col);
+            self.expect_sym(b":=", 91)?;
+            let first = self.expr()?;
+            let down = self.is(Tk::Kw, b"DOWNTO");
+            if !down && !self.is(Tk::Kw, b"TO") {
+                return Err(self.err(58));
+            }
+            self.at += 1;
+            let last = self.expr()?;
+            let id = self.after(placeholder);
+            self.expect_kw(b"DO", 50)?;
+            let body = self.sub(self.stops)?;
+            self.ast.nodes[id as usize].kind = Kind::For(var, first, last, body, down);
+            return Ok(Some(id));
+        }
+        Ok(None)
     }
 
     fn pos(&self) -> (u32, u32) {
@@ -212,7 +304,15 @@ impl Parser {
         if self.kw(b"BEGIN") {
             return self.compound().map(Some);
         }
-        if self.is(Tk::Sym, b";") || self.is(Tk::Kw, b"END") {
+        if let Some(s) = self.control()? {
+            return Ok(Some(s));
+        }
+        let t = self.tok();
+        let stop = [(END, &b"END"[..]), (UNTIL, b"UNTIL"), (ELSE, b"ELSE")];
+        let stops = stop
+            .iter()
+            .any(|&(bit, k)| self.stops & bit != 0 && t.text == k);
+        if t.kind == Tk::Kw && stops || self.is(Tk::Sym, b";") {
             return Ok(None);
         }
         Err(self.err(113))

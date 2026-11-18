@@ -40,6 +40,14 @@ pub enum Kind {
     Call(u32, List),
     Assign(Id, Id),
     Compound(List),
+    /// Condition, then-branch, else-branch.
+    If(Id, Id, Option<Id>),
+    /// Condition, body.
+    While(Id, Id),
+    /// Body statements, condition.
+    Repeat(List, Id),
+    /// Control variable, first, last, body, `downto`.
+    For(Id, Id, Id, Id, bool),
     /// Index into `Ast::strs`.
     StrLit(u32),
     /// Integer, Boolean and Char constants.
