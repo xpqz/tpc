@@ -212,3 +212,41 @@ expected, 38 integer expected). A missing argument list is reported at the token
 for free. Inline `memory.copy` for the truncating store: needs a clamp and locals; the Pascal helper is
 shorter and is removed by function-level elimination when unused (decision 14); aggregate copies
 still use `memory.copy`.
+
+## 18. Heap layout for Phase 4
+
+**Decision.** Fixed heap: from the end of static data up to the stack limit (initial
+memory top minus the 64 KB stack). No `memory.grow`. Exhaustion is runtime error 203.
+`MemAvail`/`MaxAvail` report our heap and differ from TP5's; tests print only relations
+(`MemAvail > 0`, before/after comparisons), never values.
+**Reason.** Pages from `memory.grow` would arrive above the stack, so a growing heap
+needs a different layout; a fixed heap is fewer lines and plan §4.1 only says "may".
+
+## 19. Real arithmetic and expectations
+
+**Decision.** `Real` is f64 (D1). `Write` of reals goes through `host.fmt_real`,
+implemented in `host/` (counted, host glue budget) and imported by tests/run.mjs. Tests:
+TP5 output is the oracle for formatting; programs print values that are exact in both
+48-bit and f64 representations, or computed values where TP5 and fpc (with `SizeOf(Real)`
+= 8) agree. A program whose digits differ between TP5 and f64 is not used.
+**Reason.** TP5 computes in 48 bits; the plan's "matched against Free Pascal" predates the
+TP5 oracle.
+
+## 20. Range checking scope
+
+**Decision.** `{$R+}` checks assignments (and value arguments) to subranges and narrower
+integer types, and array indexes; runtime error 201. String indexes are not checked:
+TP 5.0 does not check them (measured: `s[4]` on `String[3]` under `{$R+}` runs).
+
+## 21. Phase 4 names and pointer casts
+
+**Measured on TP 5.0.** `Include`/`Exclude` do not exist (error 3; sets use `+`/`-`).
+`LongInt(p)` and `PtrType(l)` casts are accepted; `MemAvail` and `MaxAvail` exist. The
+allocator in System uses these casts for address arithmetic.
+
+## 22. Checker budget pacing
+
+**Decision.** Phase 4 is given ~300 checker lines across its slices and Phase 5 ~200;
+if the checker ends Phase 4 above ~1,650, re-plan before Phase 5. Corpus briefs cap
+negative tests at one per rule in plan scope; per-context error-number parity beyond
+that is pruned at the RED verdict.
