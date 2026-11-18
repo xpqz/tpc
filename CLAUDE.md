@@ -66,20 +66,19 @@ budgets are in `plan.md` §1. The 500-line margin is not spent before Phase 7.
   tests, loc) is the merge gate, run by the lead on the branch after merging `main` in. The
   pre-commit hook (`make hooks`) runs only fmt, clippy and loc, so RED commits with failing
   tests go through. An epic closes only when its exit test passes under `make check`.
-- Free Pascal 3.2.2 (`/opt/homebrew/bin/fpc`) is the reference. Node runs the emitted modules.
-  - `fpc -Mtp -v0 prog.pas` builds a native binary; its stdout is the expected `.out` for
-    `tests/lang/` and `tests/diff/`. Build in `tmp/`. The macOS `ld` warnings are harmless.
-  - Before writing a test's expected output by hand, run it through fpc. Hand-written
-    expectations for arithmetic, promotion or formatting are not accepted.
+- **The real Turbo Pascal 5.0 is the oracle**: `tools/tp5.sh prog.pas` compiles and runs
+  it with Borland's TPC.EXE under DOSBox-X (about a second per program) and prints the
+  output, or `P.PAS(LINE): Error N: Message.` with exit 1. Expected `.out` files for
+  `tests/lang/` and `tests/diff/`, and `.err` numbers and lines for `tests/neg/`, come from
+  it. Hand-written expectations are not accepted. Output differs from TP5 only where
+  `docs/deviations.md` says so (e.g. `Real` formatting, D1).
+- Free Pascal 3.2.2 (`fpc -Mtp`) is secondary: for natively unit-testing pure-logic Pascal
+  modules, and for cross-checks. Node runs the emitted modules.
   - Pure-logic Pascal modules (such as the IDE's `Buffer`) must also compile under
     `fpc -Mtp`, so they can be checked and unit-tested natively before our compiler supports
     them. `System`, `Crt` and other host-bound units are exempt.
-  - fpc diverges from TP5 in places (`Real` formatting, some error numbers). Record each
-    divergence found in `docs/deviations.md` and trust the TP5 manual over fpc there.
-  - fpc evaluates integer intermediates at native width and truncates only on assignment,
-    so it is not an oracle for TP5 expression result types (e.g. `Byte + Byte`, `Integer`
-    overflow before `div`). Those follow the decision in `docs/decisions.md`; differential
-    tests avoid intermediate overflow or note the decision they rely on.
+  - fpc evaluates integer intermediates at native width and differs from TP5 on
+    intermediate overflow and on error numbers; never use it for expected output.
 - Target `wasm32-unknown-unknown` is installed.
 - Scratch files go in `tmp/` in the repo (git-ignored), never `/tmp`.
 - Build artefacts go to `/Volumes/Space2/tpa/<checkout name>` (or `<checkout>/target-shared`
@@ -95,7 +94,7 @@ Test layout follows `plan.md` §6: `tests/lang/` (`.pas` + `.out`, one feature p
 (expected runtime error code), `tests/ide/`, `tests/host/`. Name test files after the
 behaviour they check, never after an issue id, phase or date.
 
-- Expected output comes from `fpc -Mtp`, not from our compiler. Where we deviate on purpose,
+- Expected output comes from `tools/tp5.sh`, not from our compiler or fpc. Where we deviate on purpose,
   the deviation is in `docs/deviations.md` and the test says which entry.
 - Test richly: every feature gets positive, boundary and negative cases (16-bit wrap, empty
   strings, `String[n]` truncation, set bounds, deep nesting, recursion depth). Tests cost
@@ -107,7 +106,7 @@ behaviour they check, never after an issue id, phase or date.
 ### Tests are the specification
 
 Never change a test to make it pass. A test may change only if it is provably wrong
-(logic error, contradicts `plan.md` or TP5 behaviour as shown by `fpc -Mtp`, or a typo),
+(logic error, contradicts `plan.md` or TP5 behaviour as shown by `tools/tp5.sh`, or a typo),
 and then only with a written justification in `docs/prs/{id}.md` and the lead's approval
 in `docs/reviews/{id}.md`.
 Forbidden: adjusting expected output to match actual output, shrinking scope, removing

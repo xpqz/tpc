@@ -111,3 +111,23 @@ identifies the keyword or operator; the parser matches on text.
 **Reason.** One variant per keyword and operator cost ~100 lexer lines plus a mapping
 table; a packed keyword array is ~10 lines.
 **Rejected.** Per-keyword enum variants.
+
+## 10. Integer typing measured on TP 5.0 (supersedes decision 5 clauses P2-P4)
+
+**Source.** Real TP 5.0 (`tools/tp5.sh`), probe programs in docs/prs of the arithmetic
+slice. Measured: `Byte 200+100` = 300, `Byte 1-2` = -1, `Byte 255*255` = -511 (P1
+confirmed); `Integer (30000+30000) div 2` = -2768, `i+1 > 0` with i=32767 is FALSE
+(16-bit wrap everywhere, decision 5 confirmed); `-Word(40000)` = -40000; `not Byte(200)` =
+55; `Byte(200) shl 1` = 400, `Byte(200) shl 9` = -28672; `ShortInt(-1) shr 1` = 32767;
+`Word(40000) shl 1` = 14464; `Byte 1 + Word 65535` = 0; `ShortInt -1 + Word 65535` = 65534;
+`30000 * 2 div 2` (constants) = 30000; `65535 + 1` (constants) = 65536.
+**Decision.**
+- P1 stands: byte-sized operands widen to `Integer`, except `Byte` with `Word` gives `Word`.
+- P2 replaced: unary minus gives `Integer` for byte-sized and `Integer` operands, `LongInt`
+  for `Word` and `LongInt`.
+- P3 replaced: `not` keeps the operand's type, including byte-sized types. `shl`/`shr`
+  widen a byte-sized left operand to `Integer` (ShortInt sign-extends) and keep `Word`,
+  `Integer`, `LongInt`; `shr` is logical within the 16- or 32-bit width.
+- Constant expressions are folded in 32-bit (`LongInt`) precision; the folded value then
+  has the smallest type containing it (decision 5 constant rule).
+- Tests come from `tools/tp5.sh`; decision 5's provisional-test naming is no longer needed.

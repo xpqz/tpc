@@ -22,8 +22,9 @@ build into `target/`.
 
 1. Write the tests the acceptance criteria describe. Test richly: positive, boundary and
    negative cases. Tests do not count towards the LOC budget.
-   - Expected program output comes from `fpc -Mtp -v0` (build in `tmp/`), never written by
-     hand. Note any intended deviation and its `docs/deviations.md` entry.
+   - Expected program output and error numbers/lines come from the real TP 5.0 via
+     `tools/tp5.sh prog.pas`, never written by hand and never from fpc. Note any intended
+     deviation and its `docs/deviations.md` entry.
    - Every new construct gets a negative test (expected error number and line).
 2. Run the new tests. Confirm each fails for the stated reason: not a compile error in the
    test itself, not an empty-versus-empty comparison, not a path that never reaches the

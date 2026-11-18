@@ -8,5 +8,9 @@
 - **Turbo Pascal 5.5 Norton Guide** (third-party conversion), error tables:
   https://discmaster.textfiles.com/file/9297/Cream%20of%20the%20Crop%201.iso/CAD/G2P55.ARJ/G2P55.NG/ng2f7d0.html
   Basis of `docs/tp-errors.md`.
+- **Turbo Pascal 5.0 itself** (Borland, 1988), the oracle: WinWorld,
+  https://winworldpc.com/product/turbo-pascal/5x, "Borland Turbo Pascal 5.0 (5.25-360k)".
+  Extract `TPC.EXE` and `TURBO.TPL` from disk 1 into `/Users/stefan/work/crust/tp5-oracle/c`
+  (or set `TP5_HOME`); `tools/tp5.sh` runs them under DOSBox-X. Not committed to the repo.
 - **Free Pascal 3.2.2** `-Mtp`, installed locally: oracle for program output except where
   `docs/decisions.md` or `docs/deviations.md` says otherwise.
