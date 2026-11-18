@@ -21,6 +21,8 @@ pub enum Tag {
     Int,
     Bool,
     Char,
+    /// Enumerated types (and their subranges) are compatible only with the same enumeration.
+    Enum,
 }
 
 pub enum Type {
@@ -39,6 +41,9 @@ pub enum Type {
         size: u8,
         signed: bool,
         tag: Tag,
+        /// The type that decides arithmetic: a predefined integer, Char, Boolean or the
+        /// enumeration itself; a type is its own base unless it is a subrange.
+        base: Ty,
     },
 }
 
@@ -67,7 +72,7 @@ pub enum SymKind {
     FrameRef,
     /// `val` is the index into the routine table.
     Routine,
-    /// Write 0, WriteLn 1, Ord 2, Chr 3, Succ 4, Pred 5, Odd 6, Abs 7, Sqr 8, Exit 9.
+    /// Write 0, WriteLn 1, Ord 2, Chr 3, Succ 4, Pred 5, Odd 6, Abs 7, Sqr 8, Exit 9, SizeOf 10.
     Intrinsic,
 }
 
@@ -130,24 +135,25 @@ pub struct Types {
 
 impl Types {
     pub fn new() -> Self {
-        let ord = |lo, hi, size, signed, tag| Type::Ord {
+        let ord = |lo, hi, size, signed, tag, base| Type::Ord {
             lo,
             hi,
             size,
             signed,
             tag,
+            base: Ty(base),
         };
         Types {
             v: vec![
                 Type::None,
                 Type::Str(255),
-                ord(0, 255, 1, false, Tag::Int),
-                ord(-128, 127, 1, true, Tag::Int),
-                ord(-32768, 32767, 2, true, Tag::Int),
-                ord(0, 65535, 2, false, Tag::Int),
-                ord(-(1 << 31), (1 << 31) - 1, 4, true, Tag::Int),
-                ord(0, 1, 1, false, Tag::Bool),
-                ord(0, 255, 1, false, Tag::Char),
+                ord(0, 255, 1, false, Tag::Int, 2),
+                ord(-128, 127, 1, true, Tag::Int, 3),
+                ord(-32768, 32767, 2, true, Tag::Int, 4),
+                ord(0, 65535, 2, false, Tag::Int, 5),
+                ord(-(1 << 31), (1 << 31) - 1, 4, true, Tag::Int, 6),
+                ord(0, 1, 1, false, Tag::Bool, 7),
+                ord(0, 255, 1, false, Tag::Char, 8),
             ],
         }
     }
@@ -157,6 +163,53 @@ impl Types {
             Type::Ord { tag, .. } => Some(tag),
             _ => None,
         }
+    }
+
+    /// The type that decides arithmetic and compatibility of `t`.
+    pub fn base(&self, t: Ty) -> Ty {
+        match self.v[t.0 as usize] {
+            Type::Ord { base, .. } => base,
+            _ => t,
+        }
+    }
+
+    /// Ordinal types of one family; enumerations must also be the same enumeration.
+    pub fn compat(&self, a: Ty, b: Ty) -> bool {
+        match (self.tag(a), self.tag(b)) {
+            (Some(x), Some(y)) => x == y && (x != Tag::Enum || self.base(a) == self.base(b)),
+            _ => false,
+        }
+    }
+
+    /// A new enumeration of `n` values.
+    pub fn enumeration(&mut self, n: i64) -> Ty {
+        let at = Ty(self.v.len() as u32);
+        self.range(0, n - 1, Tag::Enum, at)
+    }
+
+    /// The subrange `lo..hi` of the ordinal type `of`.
+    pub fn subrange(&mut self, lo: i64, hi: i64, of: Ty) -> Ty {
+        let tag = self.tag(of).unwrap_or(Tag::Int);
+        self.range(lo, hi, tag, self.base(of))
+    }
+
+    /// A range type stored like the smallest of ShortInt, Byte, Integer, Word, LongInt holding
+    /// both bounds (as TP stores enumerations and subranges: `0..100` is signed).
+    fn range(&mut self, lo: i64, hi: i64, tag: Tag, base: Ty) -> Ty {
+        let fit = [Ty::SHORTINT, Ty::BYTE, Ty::INTEGER, Ty::WORD]
+            .into_iter()
+            .find(|&t| self.ord(t).0 <= lo && hi <= self.ord(t).1)
+            .unwrap_or(Ty::LONGINT);
+        let (_, _, size, signed) = self.ord(fit);
+        self.v.push(Type::Ord {
+            lo,
+            hi,
+            size,
+            signed,
+            tag,
+            base,
+        });
+        Ty(self.v.len() as u32 - 1)
     }
 
     pub fn proc(&mut self, params: Vec<(Ty, bool)>, result: Ty) -> Ty {
@@ -227,14 +280,14 @@ impl Types {
     /// Result type of a binary operator, or the TP error number: 26 when the operand
     /// families differ, 41 when the operator is not defined for them.
     pub fn binary(&self, op: Op, a: Ty, b: Ty) -> Result<Ty, u16> {
-        let text = |t: Ty| t == Ty::CHAR || t == Ty::STRING;
+        let text = |t: Ty| t == Ty::STRING || self.tag(t) == Some(Tag::Char);
         if op == Op::Add && text(a) && text(b) {
             return Ok(Ty::STRING);
         }
-        let (Some(ta), Some(tb)) = (self.tag(a), self.tag(b)) else {
+        let (Some(ta), Some(_)) = (self.tag(a), self.tag(b)) else {
             return Err(26);
         };
-        if ta != tb {
+        if !self.compat(a, b) {
             return Err(26);
         }
         let compare = matches!(op, Op::Eq | Op::Ne | Op::Lt | Op::Gt | Op::Le | Op::Ge);
@@ -250,11 +303,15 @@ impl Types {
     /// Result type of a unary operator or intrinsic, or the TP error number.
     pub fn unary(&self, op: Op, a: Ty) -> Result<Ty, u16> {
         let tag = self.tag(a);
-        let wide = a == Ty::WORD || a == Ty::LONGINT;
+        let wide = tag == Some(Tag::Int) && {
+            let (lo, hi, ..) = self.ord(a);
+            lo < -32768 || hi > 32767
+        };
         match (tag, op) {
             (Some(Tag::Int), Op::Neg | Op::Abs | Op::Sqr) if wide => Ok(Ty::LONGINT),
             (Some(Tag::Int), Op::Neg | Op::Abs | Op::Sqr) => Ok(Ty::INTEGER),
-            (Some(Tag::Int | Tag::Bool), Op::Not) => Ok(a),
+            (Some(Tag::Bool), Op::Not) => Ok(Ty::BOOLEAN),
+            (Some(Tag::Int), Op::Not) => Ok(a),
             (_, Op::Neg | Op::Not) => Err(41),
             (_, Op::Abs | Op::Sqr) => Err(79),
             (Some(Tag::Int), Op::Odd) => Ok(Ty::BOOLEAN),
@@ -267,10 +324,10 @@ impl Types {
     }
 
     fn promote(&self, a: Ty) -> Ty {
-        if self.ord(a).2 == 1 {
-            Ty::INTEGER
-        } else {
-            a
+        match self.ord(a) {
+            (_, _, 1, _) | (_, _, 2, true) => Ty::INTEGER,
+            (_, _, 2, false) => Ty::WORD,
+            _ => Ty::LONGINT,
         }
     }
 }

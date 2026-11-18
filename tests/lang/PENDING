@@ -23,11 +23,6 @@ array_types_of_each_element
 boolean_array_flags_and_enum_counts
 enum_as_array_index_and_const
 enum_byte_sized_in_records
-enum_case_selector
-enum_comparisons
-enum_for_loop
-enum_ord_succ_pred
-enum_variable_assign_and_ordinal_cast
 nested_proc_with_aggregate_locals
 param_aggregate_mixed_value_and_var
 param_array_element_and_field_as_var
@@ -103,10 +98,6 @@ string_write_control_and_empty
 string_write_width_expression
 string_write_with_width
 subrange_as_array_index_and_for
-subrange_basic
-subrange_from_constants
-subrange_of_enum
-subrange_sizes
 with_array_element
 with_basic
 with_nested

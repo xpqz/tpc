@@ -350,13 +350,43 @@ impl Parser {
         Ok(Some(self.ast.list(&list)))
     }
 
-    /// A type: a type name, or `procedure [(params)]` / `function [(params)]: name`.
+    /// A type: a type name, an enumeration `(a, b)`, a subrange `lo..hi` of constants, or
+    /// `procedure [(params)]` / `function [(params)]: name`.
     fn type_spec(&mut self) -> R<Id> {
         let (line, col) = self.pos();
         let func = self.is(Tk::Kw, b"FUNCTION");
+        if self.sym(b"(") {
+            let mut names = Vec::new();
+            loop {
+                let (line, col) = self.pos();
+                let name = self.ident()?;
+                names.push(self.ast.add(Kind::Name(name), line, col));
+                if !self.sym(b",") {
+                    break;
+                }
+            }
+            self.expect_sym(b")", 89)?;
+            let list = self.ast.list(&names);
+            return Ok(self.ast.add(Kind::Enum(list), line, col));
+        }
         if !self.kw(b"PROCEDURE") && !self.kw(b"FUNCTION") {
-            let name = self.type_name()?;
-            return Ok(self.ast.add(Kind::Name(name), line, col));
+            self.unsupported(&[b"STRING", b"FILE"])?;
+            let t = self.tok();
+            let starts = matches!(t.kind, Tk::Ident | Tk::IntLit | Tk::StrLit | Tk::Ctrl)
+                || self.is(Tk::Sym, b"-")
+                || self.is(Tk::Sym, b"+");
+            if !starts {
+                return Err(self.err(2));
+            }
+            let lo = self.expr()?;
+            if !self.sym(b"..") {
+                return match self.ast.nodes[lo as usize].kind {
+                    Kind::Name(_) => Ok(lo),
+                    _ => Err(self.err(5)),
+                };
+            }
+            let hi = self.expr()?;
+            return Ok(self.ast.add(Kind::Range(lo, hi), line, col));
         }
         let params = self.params()?;
         let mut result = NO_NAME;
@@ -436,7 +466,10 @@ impl Parser {
                         }
                     }
                     self.expect_sym(b":", 86)?;
-                    let ty = if self.is(Tk::Kw, b"PROCEDURE") || self.is(Tk::Kw, b"FUNCTION") {
+                    let named = self.tok().kind == Tk::Ident
+                        && self.toks[self.at + 1].kind == Tk::Sym
+                        && self.toks[self.at + 1].text == b";";
+                    let ty = if !named {
                         // A hidden type name no identifier can have.
                         let n = self.ast.names.len() as u32;
                         let key = [b' ', 0x80 | (n & 0x7F) as u8, 0x80 | (n >> 7) as u8];

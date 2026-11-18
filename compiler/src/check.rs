@@ -46,6 +46,7 @@ const PREDEFINED: &[(&[u8], SymKind, Ty, i64)] = &[
     (b"ABS", SymKind::Intrinsic, Ty::NONE, 7),
     (b"SQR", SymKind::Intrinsic, Ty::NONE, 8),
     (b"EXIT", SymKind::Intrinsic, Ty::NONE, 9),
+    (b"SIZEOF", SymKind::Intrinsic, Ty::NONE, 10),
 ];
 
 /// The operators behind the intrinsic functions, by symbol value.
@@ -238,6 +239,35 @@ impl Cx<'_> {
         match self.ast.nodes[spec as usize].kind {
             Kind::Name(n) if n == name => Err(self.err(spec, 21)),
             Kind::Name(n) => self.type_of(spec, n),
+            Kind::Enum(names) => {
+                let ty = self.types.enumeration(self.ast.items(names).len() as i64);
+                for (i, &id) in self.ast.items(names).to_vec().iter().enumerate() {
+                    let Kind::Name(n) = self.ast.nodes[id as usize].kind else {
+                        unreachable!("the parser lists identifiers")
+                    };
+                    self.declare(id, n, Symbol::new(SymKind::Const, ty, i as i64))?;
+                }
+                Ok(ty)
+            }
+            Kind::Range(lo, hi) => {
+                let mut ends = [(0, Ty::NONE); 2];
+                for (end, id) in ends.iter_mut().zip([lo, hi]) {
+                    self.expr(id)?;
+                    let n = self.ast.nodes[id as usize];
+                    let Kind::IntLit(v) = n.kind else {
+                        return Err(self.err(spec, 133));
+                    };
+                    *end = (v, n.ty);
+                }
+                let [(a, ta), (b, tb)] = ends;
+                if !self.types.compat(ta, tb) {
+                    return Err(self.err(spec, 26));
+                }
+                if a > b {
+                    return Err(self.err(spec, 28));
+                }
+                Ok(self.types.subrange(a, b, ta))
+            }
             Kind::ProcType(params, result, _) => {
                 let mut sig = Vec::new();
                 for p in params.map_or(Vec::new(), |l| self.ast.items(l).to_vec()) {
@@ -571,15 +601,16 @@ impl Cx<'_> {
             }
             Kind::Case(selector, arms, other) => {
                 self.expr(selector)?;
-                let Some(tag) = self.types.tag(self.ast.nodes[selector as usize].ty) else {
+                let sel = self.ast.nodes[selector as usize].ty;
+                if self.types.tag(sel).is_none() {
                     return Err(self.err(id, 39));
-                };
+                }
                 for arm in self.ast.items(arms).to_vec() {
                     let Kind::Arm(labels, body) = self.ast.nodes[arm as usize].kind else {
                         unreachable!("the parser lists arms")
                     };
                     for label in self.ast.items(labels).to_vec() {
-                        self.label(label, tag)?;
+                        self.label(label, sel)?;
                     }
                     self.stmt(body)?;
                 }
@@ -752,7 +783,7 @@ impl Cx<'_> {
     }
 
     /// A case label range: constants of the selector's family, within Integer.
-    fn label(&mut self, label: Id, tag: Tag) -> R<()> {
+    fn label(&mut self, label: Id, sel: Ty) -> R<()> {
         let Kind::Range(lo, hi) = self.ast.nodes[label as usize].kind else {
             unreachable!("the parser lists ranges")
         };
@@ -762,10 +793,10 @@ impl Cx<'_> {
             let Kind::IntLit(v) = n.kind else {
                 return Err(self.err(label, 133));
             };
-            if self.types.tag(n.ty) != Some(tag) {
+            if !self.types.compat(sel, n.ty) {
                 return Err(self.err(label, 74));
             }
-            if tag == Tag::Int && !(-32768..=32767).contains(&v) {
+            if self.types.tag(sel) == Some(Tag::Int) && !(-32768..=32767).contains(&v) {
                 return Err(self.err(label, 112));
             }
         }
@@ -784,12 +815,11 @@ impl Cx<'_> {
     /// `at` is the assignment; a constant must also fit the destination's range.
     fn assignable(&self, at: Id, dest: Ty, value: Id) -> R<()> {
         let v = self.ast.nodes[value as usize];
-        match (self.types.tag(dest), self.types.tag(v.ty)) {
-            (Some(a), Some(b)) if a == b => {}
-            _ => return Err(self.err(at, 26)),
+        if !self.types.compat(dest, v.ty) {
+            return Err(self.err(at, 26));
         }
         match v.kind {
-            Kind::IntLit(c) if self.types.tag(dest) == Some(Tag::Int) => {
+            Kind::IntLit(c) => {
                 let (lo, hi, ..) = self.types.ord(dest);
                 if c < lo || c > hi {
                     return Err(self.err(at, 76));
@@ -811,6 +841,9 @@ impl Cx<'_> {
         }
         self.expr(value)?;
         let n = self.ast.nodes[value as usize];
+        if self.types.tag(n.ty) == Some(Tag::Enum) {
+            return Err(self.err(value, 64));
+        }
         if n.ty == Ty::STRING && !matches!(n.kind, Kind::StrLit(_)) {
             return Err(self.err(value, 200));
         }
@@ -890,6 +923,8 @@ impl Cx<'_> {
                         }
                         self.unary(e, INTRINSIC_OPS[s.val as usize - 2], items[0])?
                     }
+                    SymKind::Intrinsic if s.val == 10 => self.size_of(e, args)?,
+                    SymKind::Type => self.cast(e, s.ty, args)?,
                     SymKind::Intrinsic => return Err(self.err(callee, 42)),
                     _ => return Err(self.err(e, 89)),
                 }
@@ -926,12 +961,52 @@ impl Cx<'_> {
         Ok(())
     }
 
+    /// `T(x)`: the ordinal value of `x` as type `ty`.
+    fn cast(&mut self, at: Id, ty: Ty, args: List) -> R<(Kind, Ty)> {
+        let [arg] = self.ast.items(args)[..] else {
+            return Err(self.err(at, 89));
+        };
+        self.expr(arg)?;
+        let a = self.ast.nodes[arg as usize];
+        if self.types.tag(ty).is_none() || self.types.tag(a.ty).is_none() {
+            return Err(self.err(at, 200));
+        }
+        Ok(match a.kind {
+            Kind::IntLit(v) => self.constant(v, ty),
+            _ => (Kind::Unary(Op::Ord, arg), ty),
+        })
+    }
+
+    /// `SizeOf(type name or variable)`, a constant.
+    fn size_of(&mut self, at: Id, args: List) -> R<(Kind, Ty)> {
+        let [arg] = self.ast.items(args)[..] else {
+            return Err(self.err(at, 89));
+        };
+        let Kind::Name(name) = self.ast.nodes[arg as usize].kind else {
+            return Err(self.err(arg, 20));
+        };
+        let (_, s) = self.resolve(arg, name)?;
+        let named = matches!(s.kind, SymKind::Type | SymKind::Var | SymKind::Local);
+        if !named && !matches!(s.kind, SymKind::Ref | SymKind::Frame | SymKind::FrameRef) {
+            return Err(self.err(arg, 20));
+        }
+        if self.types.tag(s.ty).is_none() && self.types.sig(s.ty).is_none() {
+            return Err(self.err(arg, 200));
+        }
+        Ok(self.constant(self.types.ord(s.ty).2 as i64, Ty::INTEGER))
+    }
+
     /// A unary operator or intrinsic applied to `a`, folded when `a` is constant (`Sqr` is
     /// not constant in TP).
     fn unary(&mut self, e: Id, op: Op, a: Id) -> R<(Kind, Ty)> {
         self.expr(a)?;
         let na = self.ast.nodes[a as usize];
-        let ty = self.types.unary(op, na.ty).map_err(|c| self.err(e, c))?;
+        let mut ty = self.types.unary(op, na.ty).map_err(|c| self.err(e, c))?;
+        if op == Op::Ord && self.types.tag(na.ty) == Some(Tag::Enum) {
+            // TP types Ord(enum) by the enumeration's range (`Ord(c) + w` is a Word sum).
+            let (lo, hi, ..) = self.types.ord(na.ty);
+            ty = self.types.subrange(lo, hi, Ty::INTEGER);
+        }
         Ok(match na.kind {
             Kind::IntLit(v) if op == Op::Not && ty == Ty::BOOLEAN => self.constant(v ^ 1, ty),
             Kind::IntLit(v) if op != Op::Sqr => self.constant(fold(op, v, 0), ty),
@@ -939,12 +1014,12 @@ impl Cx<'_> {
         })
     }
 
-    /// A folded constant: Boolean stays Boolean, an integer takes the smallest type.
+    /// A folded constant: an integer takes the smallest type, other ordinals keep theirs.
     fn constant(&self, v: i64, ty: Ty) -> (Kind, Ty) {
-        let ty = if ty == Ty::BOOLEAN || ty == Ty::CHAR {
-            ty
-        } else {
+        let ty = if self.types.tag(ty) == Some(Tag::Int) {
             self.types.const_ty(v)
+        } else {
+            ty
         };
         (Kind::IntLit(v), ty)
     }
