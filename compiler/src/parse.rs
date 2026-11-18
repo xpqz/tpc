@@ -327,9 +327,12 @@ impl Parser {
         Ok(())
     }
 
-    /// A type name; `String` is not supported yet.
+    /// A type name; `String` is the keyword.
     fn type_name(&mut self) -> R<u32> {
-        self.unsupported(&[b"STRING", b"FILE"])?;
+        self.unsupported(&[b"FILE"])?;
+        if self.kw(b"STRING") {
+            return Ok(self.ast.intern(b"STRING"));
+        }
         if self.is(Tk::Kw, b"ARRAY") || self.is(Tk::Kw, b"RECORD") || self.is(Tk::Kw, b"PACKED") {
             return Err(self.err(12));
         }
@@ -409,8 +412,18 @@ impl Parser {
             let list = self.ast.list(&fields);
             return Ok(self.ast.add(Kind::Record(list), line, col));
         }
+        if self.is(Tk::Kw, b"STRING") && self.toks[self.at + 1].text == b"[" {
+            self.at += 2;
+            let size = self.expr()?;
+            self.expect_sym(b"]", 93)?;
+            return Ok(self.ast.add(Kind::StrType(size), line, col));
+        }
         if !self.kw(b"PROCEDURE") && !self.kw(b"FUNCTION") {
-            self.unsupported(&[b"STRING", b"FILE"])?;
+            self.unsupported(&[b"FILE"])?;
+            if self.is(Tk::Kw, b"STRING") {
+                let name = self.type_name()?;
+                return Ok(self.ast.add(Kind::Name(name), line, col));
+            }
             let t = self.tok();
             let starts = matches!(t.kind, Tk::Ident | Tk::IntLit | Tk::StrLit | Tk::Ctrl)
                 || self.is(Tk::Sym, b"-")
@@ -760,6 +773,7 @@ impl Parser {
                 let name = self.ident()?;
                 let callee = self.ast.add(Kind::Name(name), line, col);
                 if !self.sym(b"(") {
+                    self.ast.follow.push((callee, self.tok().line));
                     return self.selectors(callee);
                 }
                 let (args, at) = self.arguments()?;
@@ -790,6 +804,10 @@ impl Parser {
                     return Ok(self.ast.add(Kind::Paren(e), line, col));
                 }
                 return Ok(e);
+            }
+            Tk::Kw if t.text == b"STRING" => {
+                let name = self.type_name()?;
+                return Ok(self.ast.add(Kind::Name(name), line, col));
             }
             Tk::Sym if t.text == b"@" => {
                 self.at += 1;

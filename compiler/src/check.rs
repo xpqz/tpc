@@ -3,6 +3,22 @@ use crate::ast::{Ast, Id, Kind, List, Op, NO_NAME};
 use crate::driver::Diag;
 use crate::types::{Routine, Sym, SymKind, Symbol, Tag, Ty, Types};
 
+/// System routines bound by handle right after System is loaded (decision 11).
+const HELPERS: [&[u8]; 6] = [
+    b"ABSLONG",
+    b"STRCAT",
+    b"STRCMP",
+    b"STRASSIGN",
+    b"STRDELETE",
+    b"STRINSERT",
+];
+pub const H_ABS: usize = 0;
+pub const H_CAT: usize = 1;
+pub const H_CMP: usize = 2;
+pub const H_ASSIGN: usize = 3;
+const H_DELETE: usize = 4;
+const H_INSERT: usize = 5;
+
 /// The most bytes of one structure, of all globals, or of one routine's locals.
 const MAX_DATA: u32 = 65535;
 
@@ -15,8 +31,8 @@ pub struct Info {
     pub routines: Vec<Routine>,
     /// First address after the globals.
     pub data_end: u32,
-    /// The routine index of System's `AbsLong`, which `Abs` calls.
-    pub abs: u32,
+    /// The System routines the compiler calls implicitly, by the `H_*` indexes.
+    pub helpers: [u32; HELPERS.len()],
 }
 
 type R<T> = Result<T, Diag>;
@@ -50,6 +66,10 @@ const PREDEFINED: &[(&[u8], SymKind, Ty, i64)] = &[
     (b"SQR", SymKind::Intrinsic, Ty::NONE, 8),
     (b"EXIT", SymKind::Intrinsic, Ty::NONE, 9),
     (b"SIZEOF", SymKind::Intrinsic, Ty::NONE, 10),
+    (b"CONCAT", SymKind::Intrinsic, Ty::NONE, 11),
+    (b"DELETE", SymKind::Intrinsic, Ty::NONE, 12),
+    (b"INSERT", SymKind::Intrinsic, Ty::NONE, 13),
+    (b"STRING", SymKind::Type, Ty::STRING, 0),
 ];
 
 /// The operators behind the intrinsic functions, by symbol value.
@@ -80,6 +100,7 @@ struct Cx<'a> {
     local_bytes: u32,
     /// The record designators of the enclosing `with` statements, innermost last.
     withs: Vec<(Id, Ty)>,
+    helpers: [u32; HELPERS.len()],
 }
 
 pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
@@ -95,6 +116,7 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
         locals: 0,
         local_bytes: 0,
         withs: Vec::new(),
+        helpers: [0; HELPERS.len()],
     };
     for &(name, kind, ty, val) in PREDEFINED {
         let name = cx.ast.intern(name);
@@ -114,11 +136,15 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
         line: 0,
         col: 0,
     };
-    let abs = cx.ast.intern(b"ABSLONG");
-    let abs = match cx.lookup(abs).map(|s| cx.syms[s.0 as usize]) {
-        Some(s) if s.kind == SymKind::Routine => s.val as u32,
-        _ => return Err(in_system),
-    };
+    let mut helpers = [0; HELPERS.len()];
+    for (slot, name) in helpers.iter_mut().zip(HELPERS) {
+        let name = cx.ast.intern(name);
+        *slot = match cx.lookup(name).map(|s| cx.syms[s.0 as usize]) {
+            Some(s) if s.kind == SymKind::Routine => s.val as u32,
+            _ => return Err(in_system),
+        };
+    }
+    cx.helpers = helpers;
     if cx.routines.iter().any(|r| !r.defined) {
         return Err(Diag {
             code: 59,
@@ -141,7 +167,7 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
         syms: cx.syms,
         routines: cx.routines,
         data_end: cx.end,
-        abs,
+        helpers,
     })
 }
 
@@ -231,7 +257,7 @@ impl Cx<'_> {
                         return Err(self.err(d, 96));
                     }
                     // Aggregates always live in the frame.
-                    let taken = self.types.is_agg(ty);
+                    let taken = self.types.in_memory(ty);
                     let local = Symbol::new(SymKind::Local, ty, self.locals as i64 - 1);
                     Symbol { taken, ..local }
                 } else {
@@ -268,6 +294,16 @@ impl Cx<'_> {
                     self.declare(id, n, Symbol::new(SymKind::Const, ty, i as i64))?;
                 }
                 Ok(ty)
+            }
+            Kind::StrType(size) => {
+                self.expr(size)?;
+                let Kind::IntLit(n) = self.ast.nodes[size as usize].kind else {
+                    return Err(self.err(spec, 133));
+                };
+                if !(1..=255).contains(&n) {
+                    return Err(self.err(spec, 25));
+                }
+                Ok(self.types.string(n as u8))
             }
             Kind::Array(indexes, elem) => {
                 let mut index = Vec::new();
@@ -327,6 +363,9 @@ impl Cx<'_> {
                 } else {
                     self.type_of(spec, result)?
                 };
+                if self.types.is_str(result) {
+                    return Err(self.err(spec, 200));
+                }
                 Ok(self.types.proc(sig, result))
             }
             _ => unreachable!("the parser builds type specs"),
@@ -422,6 +461,8 @@ impl Cx<'_> {
                     framed: false,
                     frame: 0,
                     result_sym: Sym(0),
+                    result_ptr: self.types.is_str(result),
+                    builtin: self.user == 0,
                     addressed: false,
                     copies: Vec::new(),
                 });
@@ -470,16 +511,23 @@ impl Cx<'_> {
         self.user = scope_len;
         self.chain.push(r);
         let link = self.chain.len() > 1;
-        let nparams = params.len() as u32 + link as u32;
+        // Hidden parameters come first: the static link, then the address of a String result.
+        let hidden = link as u32 + self.routines[r].result_ptr as u32;
+        let nparams = params.len() as u32 + hidden;
         self.locals = nparams;
         if func {
-            let ret = Symbol::new(SymKind::Local, self.routines[r].result, nparams as i64);
+            let ty = self.routines[r].result;
+            let ret = if self.routines[r].result_ptr {
+                Symbol::new(SymKind::Ref, ty, link as i64)
+            } else {
+                self.locals += 1;
+                Symbol::new(SymKind::Local, ty, nparams as i64)
+            };
             self.routines[r].result_sym = Sym(self.syms.len() as u32);
             self.syms.push(Symbol {
                 depth: self.chain.len() as u32,
                 ..ret
             });
-            self.locals += 1;
         }
         for (i, (&n, &ty)) in names.iter().zip(&params).enumerate() {
             let kind = if refs[i] {
@@ -487,8 +535,8 @@ impl Cx<'_> {
             } else {
                 SymKind::Local
             };
-            let param = Symbol::new(kind, ty, (i + link as usize) as i64);
-            let taken = !refs[i] && self.types.is_agg(ty);
+            let param = Symbol::new(kind, ty, (i as u32 + hidden) as i64);
+            let taken = !refs[i] && self.types.in_memory(ty);
             self.declare(block, n, Symbol { taken, ..param })?;
         }
         for decl in self.ast.items(decls).to_vec() {
@@ -517,7 +565,9 @@ impl Cx<'_> {
     fn place_frame(&mut self, r: usize, first: usize) {
         let depth = self.chain.len() as u32;
         let base = 4 * (depth > 1) as u32;
-        let nparams = self.routines[r].params.len() as i64 + (depth > 1) as i64;
+        let nparams = self.routines[r].params.len() as i64
+            + (depth > 1) as i64
+            + self.routines[r].result_ptr as i64;
         let (mut size, mut copies) = (base, Vec::new());
         for s in &mut self.syms[first..] {
             if s.depth != depth || !s.taken || !matches!(s.kind, SymKind::Local | SymKind::Ref) {
@@ -727,6 +777,7 @@ impl Cx<'_> {
                 if s.kind == SymKind::Ref
                     || s.kind == SymKind::Local && outer
                     || self.types.sig(s.ty).is_some()
+                    || self.types.tag(s.ty).is_none()
                 {
                     return Err(self.err(var, 97));
                 }
@@ -799,6 +850,9 @@ impl Cx<'_> {
                         }
                         Kind::Write(args, s.val == 1)
                     }
+                    SymKind::Intrinsic if s.val == 12 || s.val == 13 => {
+                        self.edit_string(id, s.val == 13, args)?
+                    }
                     SymKind::Intrinsic if s.val == 9 => {
                         if !self.ast.items(args).is_empty() {
                             return Err(self.err(id, 85));
@@ -807,7 +861,8 @@ impl Cx<'_> {
                     }
                     SymKind::Routine if !self.routines[s.val as usize].func => {
                         let (params, refs) = self.routine_params(s.val as usize);
-                        self.arguments(id, params, refs, args, false)?;
+                        let builtin = self.routines[s.val as usize].builtin;
+                        self.arguments(id, params, refs, args, false, builtin)?;
                         Kind::Invoke(s.val as u32, args)
                     }
                     SymKind::Routine => return Err(self.err(id, 122)),
@@ -844,6 +899,7 @@ impl Cx<'_> {
         refs: Vec<bool>,
         args: List,
         in_expr: bool,
+        builtin: bool,
     ) -> R<()> {
         let items = self.ast.items(args).to_vec();
         let code = match (params.len(), items.len()) {
@@ -854,6 +910,14 @@ impl Cx<'_> {
             (p, a) if a > p => 89,
             _ => 0,
         };
+        if code == 88 {
+            let follow = self.ast.follow.iter().find(|f| f.0 == at);
+            let line = follow.map_or(self.ast.nodes[at as usize].line, |f| f.1);
+            return Err(Diag {
+                line,
+                ..self.err(at, 88)
+            });
+        }
         if code != 0 {
             return Err(self.err(at, code));
         }
@@ -870,9 +934,23 @@ impl Cx<'_> {
                 continue;
             }
             self.expr(arg)?;
-            self.assignable(at, ty, arg)?;
+            self.argument_assignable(at, ty, arg, builtin)?;
         }
         Ok(())
+    }
+
+    /// `assignable` for an argument; TP names the kind of value that a System routine wants.
+    fn argument_assignable(&mut self, at: Id, ty: Ty, arg: Id, builtin: bool) -> R<()> {
+        self.assignable(at, ty, arg).map_err(|d| {
+            let code = match () {
+                _ if d.code != 26 || !builtin => d.code,
+                _ if self.types.is_str(ty) => 67,
+                _ if self.types.tag(ty) == Some(Tag::Char) => 106,
+                _ if self.types.tag(ty) == Some(Tag::Int) => 38,
+                _ => 26,
+            };
+            Diag { code, ..d }
+        })
     }
 
     fn routine_params(&self, r: usize) -> (Vec<Ty>, Vec<bool>) {
@@ -897,7 +975,7 @@ impl Cx<'_> {
             unreachable!("the parser names the callee")
         };
         let (sym, s) = self.resolve(callee, name)?;
-        self.arguments(at, params, refs, args, in_expr)?;
+        self.arguments(at, params, refs, args, in_expr, false)?;
         self.capture(sym, false);
         self.ast.nodes[callee as usize].kind = Kind::Var(sym);
         self.ast.nodes[callee as usize].ty = s.ty;
@@ -925,6 +1003,22 @@ impl Cx<'_> {
         Ok(())
     }
 
+    /// A Char operand `e` used as a String: a one-character literal, else a `CharToStr` node.
+    fn coerce_str(&mut self, e: Id) {
+        let n = self.ast.nodes[e as usize];
+        if self.types.tag(n.ty) != Some(Tag::Char) {
+            return;
+        }
+        self.ast.nodes[e as usize].ty = Ty::STRING;
+        self.ast.nodes[e as usize].kind = if let Kind::IntLit(c) = n.kind {
+            self.ast.strs.push(vec![c as u8]);
+            Kind::StrLit(self.ast.strs.len() as u32 - 1)
+        } else {
+            self.ast.nodes.push(n);
+            Kind::CharToStr(self.ast.nodes.len() as Id - 1)
+        };
+    }
+
     /// `at` is the statement owning the Boolean condition.
     fn condition(&mut self, at: Id, cond: Id) -> R<()> {
         self.expr(cond)?;
@@ -935,8 +1029,15 @@ impl Cx<'_> {
     }
 
     /// `at` is the assignment; a constant must also fit the destination's range.
-    fn assignable(&self, at: Id, dest: Ty, value: Id) -> R<()> {
+    fn assignable(&mut self, at: Id, dest: Ty, value: Id) -> R<()> {
         let v = self.ast.nodes[value as usize];
+        if self.types.is_str(dest) {
+            if !self.types.is_str(v.ty) && self.types.tag(v.ty) != Some(Tag::Char) {
+                return Err(self.err(at, 26));
+            }
+            self.coerce_str(value);
+            return Ok(());
+        }
         if self.types.is_agg(dest) {
             // Name equivalence: only the very same type.
             return if v.ty == dest {
@@ -974,9 +1075,6 @@ impl Cx<'_> {
         if self.types.tag(n.ty) == Some(Tag::Enum) || self.types.is_agg(n.ty) {
             return Err(self.err(value, 64));
         }
-        if n.ty == Ty::STRING && !matches!(n.kind, Kind::StrLit(_)) {
-            return Err(self.err(value, 200));
-        }
         Ok(())
     }
 
@@ -994,7 +1092,9 @@ impl Cx<'_> {
             }
             Kind::Index(base, index, more) => {
                 self.expr(base)?;
-                let Some((ix, elem)) = self.types.array_of(self.ast.nodes[base as usize].ty) else {
+                let Some((ix, lo, hi, elem)) =
+                    self.types.array_of(self.ast.nodes[base as usize].ty)
+                else {
                     return Err(self.err(e, if more { 93 } else { 121 }));
                 };
                 self.expr(index)?;
@@ -1002,7 +1102,6 @@ impl Cx<'_> {
                 if !self.types.compat(ix, i.ty) {
                     return Err(self.err(e, 26));
                 }
-                let (lo, hi, ..) = self.types.ord(ix);
                 if matches!(i.kind, Kind::IntLit(c) if c < lo || c > hi) {
                     return Err(self.err(e, 76));
                 }
@@ -1045,7 +1144,14 @@ impl Cx<'_> {
                         }
                         let none = self.ast.list(&[]);
                         let (params, refs) = self.routine_params(s.val as usize);
-                        self.arguments(e, params, refs, none, true)?;
+                        self.arguments(
+                            e,
+                            params,
+                            refs,
+                            none,
+                            true,
+                            self.routines[s.val as usize].builtin,
+                        )?;
                         (Kind::Invoke(s.val as u32, none), result)
                     }
                     SymKind::Intrinsic if (2..=8).contains(&s.val) => {
@@ -1067,7 +1173,14 @@ impl Cx<'_> {
                             return Err(self.err(callee, 143));
                         }
                         let (params, refs) = self.routine_params(s.val as usize);
-                        self.arguments(e, params, refs, args, true)?;
+                        self.arguments(
+                            e,
+                            params,
+                            refs,
+                            args,
+                            true,
+                            self.routines[s.val as usize].builtin,
+                        )?;
                         (Kind::Invoke(s.val as u32, args), result)
                     }
                     SymKind::Var | SymKind::Local | SymKind::Ref => match self.types.sig(s.ty) {
@@ -1085,6 +1198,7 @@ impl Cx<'_> {
                         self.unary(e, INTRINSIC_OPS[s.val as usize - 2], items[0])?
                     }
                     SymKind::Intrinsic if s.val == 10 => self.size_of(e, args)?,
+                    SymKind::Intrinsic if s.val == 11 => self.concat(e, args)?,
                     SymKind::Type => self.cast(e, s.ty, args)?,
                     SymKind::Intrinsic => return Err(self.err(callee, 42)),
                     _ => return Err(self.err(e, 89)),
@@ -1105,12 +1219,26 @@ impl Cx<'_> {
                     .types
                     .binary(op, na.ty, nb.ty)
                     .map_err(|c| self.err(e, c))?;
-                match (na.kind, nb.kind) {
+                if ty == Ty::STRING || self.types.is_str(na.ty) || self.types.is_str(nb.ty) {
+                    self.coerce_str(a);
+                    self.coerce_str(b);
+                }
+                match (
+                    self.ast.nodes[a as usize].kind,
+                    self.ast.nodes[b as usize].kind,
+                ) {
                     (Kind::IntLit(_), Kind::IntLit(0)) if matches!(op, Op::Div | Op::Mod) => {
                         return Err(self.err(e, 62));
                     }
                     (Kind::IntLit(x), Kind::IntLit(y)) if ty != Ty::STRING => {
                         self.constant(fold(op, x, y), ty)
+                    }
+                    (Kind::StrLit(x), Kind::StrLit(y)) if op == Op::Add => {
+                        let mut joined = self.ast.strs[x as usize].clone();
+                        joined.extend_from_slice(&self.ast.strs[y as usize]);
+                        joined.truncate(255);
+                        self.ast.strs.push(joined);
+                        (Kind::StrLit(self.ast.strs.len() as u32 - 1), ty)
                     }
                     _ => (n.kind, ty),
                 }
@@ -1136,6 +1264,72 @@ impl Cx<'_> {
             Kind::IntLit(v) => self.constant(v, ty),
             _ => (Kind::Unary(Op::Ord, arg), ty),
         })
+    }
+
+    /// `Delete(s, i, n)` is `s := StrDelete(s, i, n)`, `Insert(src, s, i)` is
+    /// `s := StrInsert(src, s, i)`: the call becomes that assignment.
+    fn edit_string(&mut self, at: Id, insert: bool, args: List) -> R<Kind> {
+        let items = self.ast.items(args).to_vec();
+        if items.len() != 3 {
+            return Err(self.err(at, if items.len() < 3 { 87 } else { 89 }));
+        }
+        let target = items[insert as usize];
+        self.expr(target)?;
+        let t = self.ast.nodes[target as usize];
+        if !matches!(t.kind, Kind::Var(_) | Kind::Index(..) | Kind::Field(..)) {
+            return Err(self.err(target, 20));
+        }
+        if !self.types.is_str(t.ty) {
+            return Err(self.err(target, 66));
+        }
+        let rest = if insert {
+            [items[0], items[2]]
+        } else {
+            [items[1], items[2]]
+        };
+        for (x, ty) in rest.into_iter().zip(if insert {
+            [Ty::STRING, Ty::INTEGER]
+        } else {
+            [Ty::INTEGER; 2]
+        }) {
+            self.expr(x)?;
+            self.argument_assignable(at, ty, x, true)?;
+        }
+        let helper = self.helpers[if insert { H_INSERT } else { H_DELETE }];
+        let (line, col) = (
+            self.ast.nodes[at as usize].line,
+            self.ast.nodes[at as usize].col,
+        );
+        let call = self.ast.add(Kind::Invoke(helper, args), line, col);
+        self.ast.nodes[call as usize].ty = Ty::STRING;
+        Ok(Kind::Assign(target, call))
+    }
+
+    /// `Concat(a, b, ...)`: the same as `a + b + ...`.
+    fn concat(&mut self, at: Id, args: List) -> R<(Kind, Ty)> {
+        let items = self.ast.items(args).to_vec();
+        if items.is_empty() {
+            return Err(self.err(at, 42));
+        }
+        let (line, col) = (
+            self.ast.nodes[at as usize].line,
+            self.ast.nodes[at as usize].col,
+        );
+        let mut sum = items[0];
+        for (i, &x) in items.iter().enumerate() {
+            self.expr(x)?;
+            let ty = self.ast.nodes[x as usize].ty;
+            if !self.types.is_str(ty) && self.types.tag(ty) != Some(Tag::Char) {
+                return Err(self.err(at, 67));
+            }
+            self.coerce_str(x);
+            if i > 0 {
+                sum = self.ast.add(Kind::Binary(Op::Add, sum, x), line, col);
+                self.ast.nodes[sum as usize].ty = Ty::STRING;
+            }
+        }
+        let n = self.ast.nodes[sum as usize];
+        Ok((n.kind, n.ty))
     }
 
     /// `SizeOf(type name or variable)`, a constant.

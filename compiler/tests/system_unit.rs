@@ -13,8 +13,13 @@ use sysutil::{compile_with, contains, run, system_pas};
 
 const HELLO: &str = "program Hello;\nbegin\n  WriteLn('hello')\nend.";
 
-/// A System that only provides the helper the compiler needs.
-const HELPER_ONLY: &str = "function AbsLong(x: LongInt): LongInt;\nbegin\n  AbsLong := 777\nend;\n";
+/// A System that only provides the helpers the compiler binds (stubs; `AbsLong` is observable).
+const HELPER_ONLY: &str = "function AbsLong(x: LongInt): LongInt;\nbegin\n  AbsLong := 777\nend;\n\
+procedure StrCat(var d, a, b: String);\nbegin\nend;\n\
+function StrCmp(var a, b: String): Integer;\nbegin\n  StrCmp := 0\nend;\n\
+procedure StrAssign(var d, s: String; max: Integer);\nbegin\nend;\n\
+function StrDelete(s: String; i, n: Integer): String;\nbegin\n  StrDelete := s\nend;\n\
+function StrInsert(src, s: String; i: Integer): String;\nbegin\n  StrInsert := s\nend;\n";
 
 fn fixtures(sub: &str) -> std::path::PathBuf {
     driver::root()

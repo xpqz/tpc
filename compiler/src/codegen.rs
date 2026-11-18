@@ -2,7 +2,7 @@
 //! Static data: a fixed header, the globals (`check::GLOBALS`..), then the string literals that
 //! live bodies use. Bodies are emitted from a worklist (decision 14).
 use crate::ast::{Ast, Id, Kind, List, Op};
-use crate::check::Info;
+use crate::check::{Info, H_ABS, H_ASSIGN, H_CAT, H_CMP};
 use crate::types::{Routine, SymKind, Symbol, Tag, Ty, Type};
 use crate::wasm::{Code, Label, Module, FUNC, GLOBAL, I32, MEM, VOID};
 
@@ -16,6 +16,8 @@ const TRUE: i32 = 263;
 const BUF: i32 = 267;
 const BUF_LEN: i32 = 12;
 const TOP: u32 = PAGES * 65536;
+/// Bytes of a string temporary: the length byte and 255 characters.
+const STRING_TEMP: u32 = 256;
 /// The shadow stack may use the top 64 KB of memory (docs/abi.md).
 const STACK_LIMIT: i32 = (TOP - 65536) as i32;
 const SP: u32 = 0;
@@ -90,10 +92,12 @@ impl Layout {
         self.index[r as usize].unwrap_or_default()
     }
 
+    /// The address of the literal as a Pascal string: its length byte, then the characters.
     fn lit(&mut self, s: u32, bytes: &[u8]) -> u32 {
         let at = self.data_end + self.lits.len() as u32;
         let addr = *self.addr[s as usize].get_or_insert(at);
         if addr == at {
+            self.lits.push(bytes.len() as u8);
             self.lits.extend_from_slice(bytes);
         }
         addr
@@ -107,8 +111,13 @@ struct Gen<'a> {
     layout: &'a mut Layout,
     /// Number of WASM locals in use: parameters, the result, declared locals, temporaries.
     locals: u32,
-    /// The local holding the frame pointer, when the routine has a frame.
-    fp: u32,
+    /// The local holding the frame pointer, once the routine has a frame.
+    fp: Option<u32>,
+    /// Offset of the string temporaries in the frame: the end of the declared frame.
+    frame: u32,
+    /// The next free string temporary, and how many a statement used at most.
+    temp: u32,
+    temps: u32,
     /// Lexical depth of the routine; a routine of depth 2 or more has its static link in
     /// local 0.
     depth: u32,
@@ -168,8 +177,9 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
     let mut done = 0;
     while done < layout.order.len() {
         let r = &info.routines[layout.order[done] as usize];
-        let results: &[u8] = if r.func { &[I32] } else { &[] };
-        let ty = m.ty(&vec![I32; r.params.len() + (r.depth > 1) as usize], results);
+        let results: &[u8] = if r.func && !r.result_ptr { &[I32] } else { &[] };
+        let hidden = (r.depth > 1) as usize + r.result_ptr as usize;
+        let ty = m.ty(&vec![I32; r.params.len() + hidden], results);
         let (code, locals) = body(ast, info, &mut layout, Some(r), r.body);
         m.func(ty, &vec![I32; locals], code);
         done += 1;
@@ -198,8 +208,9 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
 }
 
 /// A routine body wrapped in `block $exit`, between the frame prologue and epilogue, followed
-/// by the result read for a function; the main program (`None`) has no frame. Returns the
-/// code and the number of locals after the parameters.
+/// by the result read for a function; the main program (`None`) has a frame only for string
+/// temporaries. The body is generated first: the frame also holds the temporaries it used.
+/// Returns the code and the number of locals after the parameters.
 fn body(
     ast: &Ast,
     info: &Info,
@@ -208,37 +219,59 @@ fn body(
     stmt: Id,
 ) -> (Code, usize) {
     let depth = routine.map_or(0, |r| r.depth);
-    let nparams = routine.map_or(0, |r| r.params.len() as u32 + (r.depth > 1) as u32);
+    let hidden = routine.map_or(0, |r| (r.depth > 1) as u32 + r.result_ptr as u32);
+    let nparams = routine.map_or(0, |r| r.params.len() as u32) + hidden;
     let mut g = Gen {
         ast,
         info,
         code: Code::new(),
         layout,
         locals: nparams + routine.map_or(0, |r| r.nlocals),
-        fp: 0,
+        fp: None,
+        frame: routine.map_or(0, |r| r.frame),
+        temp: 0,
+        temps: 0,
         depth,
         exit: Label(0),
         withs: Vec::new(),
     };
     let framed = routine.filter(|r| r.framed);
-    if let Some(r) = framed {
-        g.fp = g.new_local();
-        let frame = r.frame as i32;
-        g.code.idx(GLOBAL_GET, SP).i32_const(frame).op(I32_SUB);
+    if framed.is_some() {
+        g.fp();
+    }
+    g.exit = g.code.block(VOID);
+    g.stmt(stmt);
+    g.code.end();
+    let inner = std::mem::take(&mut g.code);
+    if let Some(fp) = g.fp {
+        let frame = g.frame + STRING_TEMP * g.temps;
         g.code
-            .idx(LOCAL_TEE, g.fp)
+            .idx(GLOBAL_GET, SP)
+            .i32_const(frame as i32)
+            .op(I32_SUB);
+        g.code
+            .idx(LOCAL_TEE, fp)
             .i32_const(STACK_LIMIT)
             .op(I32_LT_U);
         g.code.if_(VOID);
         g.code.i32_const(202).idx(CALL, HOST_RTERROR).end();
-        g.code.idx(LOCAL_GET, g.fp).idx(GLOBAL_SET, SP);
-        if depth > 1 {
-            g.code.idx(LOCAL_GET, g.fp).idx(LOCAL_GET, 0);
+        g.code.idx(LOCAL_GET, fp).idx(GLOBAL_SET, SP);
+        if depth > 1 && framed.is_some() {
+            g.code.idx(LOCAL_GET, fp).idx(LOCAL_GET, 0);
             g.code.mem(I32_STORE, 0, 0);
         }
-        for &(local, offset, ty) in &r.copies {
-            g.code.idx(LOCAL_GET, g.fp);
-            if info.types.is_agg(ty) {
+        for &(local, offset, ty) in framed.map_or(&[][..], |r| &r.copies[..]) {
+            g.code.idx(LOCAL_GET, fp);
+            if info.types.is_str(ty) {
+                let assign = g.layout.func(info.helpers[H_ASSIGN]);
+                g.code
+                    .i32_const(offset as i32)
+                    .op(I32_ADD)
+                    .idx(LOCAL_GET, local);
+                g.code
+                    .i32_const(info.types.capacity(ty) as i32)
+                    .idx(CALL, assign);
+            } else if info.types.is_agg(ty) {
                 let size = info.types.size(ty) as i32;
                 g.code
                     .i32_const(offset as i32)
@@ -250,18 +283,16 @@ fn body(
                 g.store(ty, offset);
             }
         }
-    }
-    g.exit = g.code.block(VOID);
-    g.stmt(stmt);
-    g.code.end();
-    if let Some(r) = framed {
+        g.code.append(inner);
         g.code
-            .idx(LOCAL_GET, g.fp)
-            .i32_const(r.frame as i32)
+            .idx(LOCAL_GET, fp)
+            .i32_const(frame as i32)
             .op(I32_ADD);
         g.code.idx(GLOBAL_SET, SP);
+    } else {
+        g.code = inner;
     }
-    if let Some(r) = routine.filter(|r| r.func) {
+    if let Some(r) = routine.filter(|r| r.func && !r.result_ptr) {
         g.load(info.syms[r.result_sym.0 as usize], r.result);
     }
     (g.code, (g.locals - nparams) as usize)
@@ -417,11 +448,70 @@ impl Gen<'_> {
         self.locals - 1
     }
 
+    /// The frame pointer local, created on first use.
+    fn fp(&mut self) -> u32 {
+        if self.fp.is_none() {
+            self.fp = Some(self.new_local());
+        }
+        self.fp.unwrap_or_default()
+    }
+
+    /// A new string temporary, returned as its frame offset. A statement's temporaries are
+    /// not reused within it.
+    fn new_temp(&mut self) -> u32 {
+        self.temp += 1;
+        self.temps = self.temps.max(self.temp);
+        self.frame + STRING_TEMP * (self.temp - 1)
+    }
+
+    fn temp_addr(&mut self, offset: u32) {
+        let fp = self.fp();
+        self.code
+            .idx(LOCAL_GET, fp)
+            .i32_const(offset as i32)
+            .op(I32_ADD);
+    }
+
+    /// Pushes the address of the string value of `e`, which the caller must not modify:
+    /// literals and variables in place, everything else in a temporary (decision 13).
+    fn str(&mut self, e: Id) {
+        match self.ast.nodes[e as usize].kind {
+            Kind::StrLit(s) => {
+                let addr = self.layout.lit(s, &self.ast.strs[s as usize]);
+                self.code.i32_const(addr as i32);
+            }
+            Kind::CharToStr(c) => {
+                let t = self.new_temp();
+                self.temp_addr(t);
+                self.code.i32_const(1).mem(I32_STORE8, 0, 0);
+                self.temp_addr(t);
+                self.expr(c);
+                self.code.mem(I32_STORE8, 0, 1);
+                self.temp_addr(t);
+            }
+            Kind::Binary(Op::Add, a, b) => {
+                let t = self.new_temp();
+                self.temp_addr(t);
+                self.str(a);
+                self.str(b);
+                let cat = self.layout.func(self.info.helpers[H_CAT]);
+                self.code.idx(CALL, cat);
+                self.temp_addr(t);
+            }
+            Kind::Invoke(r, args) => {
+                let t = self.invoke(r, args).expect("string function");
+                self.temp_addr(t);
+            }
+            _ => self.address_of(e),
+        }
+    }
+
     /// Pushes the frame pointer of the routine `up` levels above the current one: the
     /// own `fp`, else the static link walked `up - 1` times.
     fn frame_ptr(&mut self, up: u32) {
         if up == 0 {
-            self.code.idx(LOCAL_GET, self.fp);
+            let fp = self.fp();
+            self.code.idx(LOCAL_GET, fp);
             return;
         }
         self.code.idx(LOCAL_GET, 0);
@@ -508,10 +598,10 @@ impl Gen<'_> {
             Kind::Index(base, index, _) => {
                 let offset = self.addr(base);
                 let types = &self.info.types;
-                let (ix, elem) = types
+                let (_, lo, _, elem) = types
                     .array_of(self.ast.nodes[base as usize].ty)
                     .expect("checked array");
-                let (lo, size) = (types.ord(ix).0, types.size(elem));
+                let size = types.size(elem);
                 if let Kind::IntLit(c) = self.ast.nodes[index as usize].kind {
                     return offset + (c - lo) as u32 * size;
                 }
@@ -566,15 +656,22 @@ impl Gen<'_> {
 
     /// A call of routine `r`: value arguments converted to the parameter types, `var`
     /// arguments passed as addresses.
-    fn invoke(&mut self, r: u32, args: List) {
+    /// A call of a String function also passes the address of a new temporary for the
+    /// result, which is returned.
+    fn invoke(&mut self, r: u32, args: List) -> Option<u32> {
         let info = self.info;
         let routine = &info.routines[r as usize];
         if routine.depth > 1 {
             self.frame_ptr(self.depth + 1 - routine.depth);
         }
+        let result = routine.result_ptr.then(|| self.new_temp());
+        if let Some(t) = result {
+            self.temp_addr(t);
+        }
         self.push_args(args, &routine.params, &routine.byref);
         let index = self.layout.func(r);
         self.code.idx(CALL, index);
+        result
     }
 
     /// Value arguments converted to the parameter types, `var` arguments as addresses.
@@ -582,6 +679,8 @@ impl Gen<'_> {
         for ((&a, &ty), &byref) in self.ast.items(args).iter().zip(params).zip(refs) {
             if byref || self.info.types.is_agg(ty) {
                 self.address_of(a);
+            } else if self.info.types.is_str(ty) {
+                self.str(a);
             } else {
                 self.expr(a);
                 self.narrow(ty);
@@ -626,7 +725,7 @@ impl Gen<'_> {
                 self.code.i32_const(step).op(I32_ADD);
             }
             Op::Abs => {
-                let index = self.layout.func(self.info.abs);
+                let index = self.layout.func(self.info.helpers[H_ABS]);
                 self.code.idx(CALL, index);
             }
             Op::Sqr => {
@@ -649,8 +748,18 @@ impl Gen<'_> {
     }
 
     fn stmt(&mut self, id: Id) {
+        self.temp = 0;
         match self.ast.nodes[id as usize].kind {
             Kind::Compound(l) => self.ast.items(l).iter().for_each(|&s| self.stmt(s)),
+            Kind::Assign(target, value)
+                if self.info.types.is_str(self.ast.nodes[target as usize].ty) =>
+            {
+                let capacity = self.info.types.capacity(self.ast.nodes[target as usize].ty);
+                self.address_of(target);
+                self.str(value);
+                let assign = self.layout.func(self.info.helpers[H_ASSIGN]);
+                self.code.i32_const(capacity as i32).idx(CALL, assign);
+            }
             Kind::Assign(target, value) if self.is_agg(target) => {
                 let size = self.info.types.size(self.ast.nodes[target as usize].ty);
                 self.address_of(target);
@@ -669,7 +778,9 @@ impl Gen<'_> {
                 self.stmt(body);
                 self.withs.truncate(outer);
             }
-            Kind::Invoke(r, args) => self.invoke(r, args),
+            Kind::Invoke(r, args) => {
+                self.invoke(r, args);
+            }
             Kind::Indirect(callee, args) => self.indirect(callee, args),
             Kind::Exit => {
                 self.code.br(self.exit);
@@ -783,8 +894,17 @@ impl Gen<'_> {
                 let bytes = &self.ast.strs[s as usize];
                 let addr = self.layout.lit(s, bytes);
                 self.code
-                    .i32_const(addr as i32)
+                    .i32_const(addr as i32 + 1)
                     .i32_const(bytes.len() as i32);
+                self.width(w);
+                self.code.idx(CALL, WSTR);
+            }
+            (None, _) if self.info.types.is_str(n.ty) => {
+                let t = self.new_local();
+                self.str(e);
+                self.code.idx(LOCAL_SET, t);
+                self.code.idx(LOCAL_GET, t).i32_const(1).op(I32_ADD);
+                self.code.idx(LOCAL_GET, t).mem(0x2D, 0, 0);
                 self.width(w);
                 self.code.idx(CALL, WSTR);
             }
@@ -830,7 +950,9 @@ impl Gen<'_> {
             Kind::ProcRef(r) => {
                 self.code.i32_const(self.layout.slots[r as usize] as i32);
             }
-            Kind::Invoke(r, args) => self.invoke(r, args),
+            Kind::Invoke(r, args) => {
+                self.invoke(r, args);
+            }
             Kind::Indirect(callee, args) => self.indirect(callee, args),
             Kind::Binary(op @ (Op::And | Op::Or), a, b) if n.ty == Ty::BOOLEAN => {
                 // `{$B-}`: the right operand is evaluated only when it can matter.
@@ -846,6 +968,12 @@ impl Gen<'_> {
                 self.code.end();
             }
             Kind::Unary(op, a) => self.unary(op, a, n.ty),
+            Kind::Binary(op, a, b) if self.info.types.is_str(self.ast.nodes[a as usize].ty) => {
+                self.str(a);
+                self.str(b);
+                let cmp = self.layout.func(self.info.helpers[H_CMP]);
+                self.code.idx(CALL, cmp).i32_const(0).op(binary_op(op));
+            }
             Kind::Binary(op, a, b) => {
                 self.expr(a);
                 if op == Op::Shr && n.ty == Ty::INTEGER {

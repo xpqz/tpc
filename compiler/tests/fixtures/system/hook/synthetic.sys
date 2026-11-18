@@ -12,3 +12,21 @@ function AbsLong(x: LongInt): LongInt;
 begin
   if x < 0 then AbsLong := -x else AbsLong := x
 end;
+procedure StrCat(var d, a, b: String);
+begin
+end;
+function StrCmp(var a, b: String): Integer;
+begin
+  StrCmp := 0
+end;
+procedure StrAssign(var d, s: String; max: Integer);
+begin
+end;
+function StrDelete(s: String; i, n: Integer): String;
+begin
+  StrDelete := s
+end;
+function StrInsert(src, s: String; i: Integer): String;
+begin
+  StrInsert := s
+end;
