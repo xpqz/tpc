@@ -62,8 +62,10 @@ budgets are in `plan.md` §1. The 500-line margin is not spent before Phase 7.
 
 - `cargo build`, `cargo test`, `cargo fmt`, `cargo clippy --all-targets -- -D warnings`
 - `make test` runs everything except browser tests (Node, no browser).
-- `tools/loc.sh` for the budget. CI runs it with `make test`; an epic closes only when its
-  exit test passes in CI.
+- `tools/loc.sh` for the budget. There is no remote CI: `make check` (fmt, clippy, all
+  tests, loc) is the merge gate, run by the lead on the branch after merging `main` in. The
+  pre-commit hook (`make hooks`) runs only fmt, clippy and loc, so RED commits with failing
+  tests go through. An epic closes only when its exit test passes under `make check`.
 - Free Pascal 3.2.2 (`/opt/homebrew/bin/fpc`) is the reference. Node runs the emitted modules.
   - `fpc -Mtp -v0 prog.pas` builds a native binary; its stdout is the expected `.out` for
     `tests/lang/` and `tests/diff/`. Build in `tmp/`. The macOS `ld` warnings are harmless.

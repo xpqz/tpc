@@ -1,0 +1,4 @@
+Rust|100|l.rs
+Pascal|100|l.pas
+JS|100|l.js
+TOTAL|300

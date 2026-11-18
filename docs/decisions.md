@@ -27,3 +27,11 @@ Test code never lives in a counted path.
 it uses, when it first uses them; they count as emitter lines. Emitter tests keep their own.
 **Reason.** A full opcode table costs lines for opcodes never emitted.
 **Rejected.** Raw hex literals in codegen: unreadable and error-prone.
+
+## 4. Pre-commit hook versus merge gate
+
+**Question.** What does the pre-commit hook enforce?
+**Decision.** fmt, clippy and `tools/loc.sh` only. `make check` (all tests) is the merge
+gate, run by the lead on the branch with `main` merged in.
+**Reason.** RED commits contain failing tests by design, and `--no-verify` is forbidden.
+**Rejected.** Running `make check` in the hook: blocks every RED commit.

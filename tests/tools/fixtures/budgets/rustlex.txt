@@ -1,0 +1,4 @@
+Lifetimes|100|rustlex/lifetimes.rs
+Nested|100|rustlex/nested.rs
+Raw|100|rustlex/raw.rs
+TOTAL|300

@@ -1,0 +1,11 @@
+#!/bin/sh
+# Checks that hold at every commit, including RED commits with failing tests.
+# The full suite (make check) is the lead's merge gate.
+set -e
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+CARGO_TARGET_DIR=$(scripts/cargo-target.sh)
+export CARGO_TARGET_DIR
+cargo fmt --check
+cargo clippy --all-targets -q -- -D warnings
+if [ -x tools/loc.sh ]; then tools/loc.sh >/dev/null; fi
