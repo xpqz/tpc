@@ -31,8 +31,8 @@ pub fn compile(src: &[u8]) -> Result<Vec<u8>, Diag> {
         })
     })?;
     let (mut ast, root) = parse(toks).map_err(diag)?;
-    check(&mut ast, root)?;
-    Ok(gen(&ast, root))
+    let info = check(&mut ast, root)?;
+    Ok(gen(&ast, &info, root))
 }
 
 /// `tp5c in.pas -o out.wasm`; returns the process exit code.

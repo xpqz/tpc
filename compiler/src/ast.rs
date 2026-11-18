@@ -1,5 +1,5 @@
 //! Node arena shared by parser, checker and codegen (docs/design/ast.md).
-use crate::types::Ty;
+use crate::types::{Sym, Ty};
 
 pub type Id = u32;
 
@@ -7,18 +7,58 @@ pub type Id = u32;
 #[derive(Clone, Copy)]
 pub struct List(pub u32, pub u32);
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Op {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    And,
+    Or,
+    Xor,
+    Shl,
+    Shr,
+    Eq,
+    Ne,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    /// Unary only.
+    Neg,
+    Not,
+}
+
+/// Nodes made by operators, assignments and `:` carry the position of the token after
+/// their last operand, where TP reports their errors; other nodes carry their own start.
 #[derive(Clone, Copy)]
 pub enum Kind {
     /// Parser output for an identifier; the checker overwrites it.
     Name(u32),
     /// `name` or `name(args)` used as a statement; the checker resolves it.
     Call(u32, List),
+    Assign(Id, Id),
     Compound(List),
     /// Index into `Ast::strs`.
     StrLit(u32),
+    /// Integer, Boolean and Char constants.
+    IntLit(i64),
+    Var(Sym),
+    Unary(Op, Id),
+    Binary(Op, Id, Id),
+    /// `value : width` in a write argument.
+    Fmt(Id, Id),
     /// `Write` / `WriteLn` (true) with its arguments.
     Write(List, bool),
+    /// Header name (`NO_NAME` when absent), declarations, body.
+    Program(u32, List, Id),
+    ConstDecl(u32, Id),
+    /// Variable name, type name.
+    VarDecl(u32, u32),
 }
+
+pub const NO_NAME: u32 = u32::MAX;
 
 #[derive(Clone, Copy)]
 pub struct Node {
