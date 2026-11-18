@@ -1,7 +1,7 @@
 //! Types, symbols and the operator typing rules (decisions 5 and 10).
 use crate::ast::{Id, Op};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Ty(pub u32);
 
 impl Ty {
@@ -34,6 +34,17 @@ pub enum Type {
     Proc {
         params: Vec<(Ty, bool)>,
         result: Ty,
+    },
+    /// One dimension; `a[i, j]` is an array of arrays. `size` saturates at u32::MAX.
+    Array {
+        index: Ty,
+        elem: Ty,
+        size: u32,
+    },
+    /// Fields (name, type, offset) in declaration order, variants overlaid, and the size.
+    Record {
+        fields: Vec<(u32, Ty, u32)>,
+        size: u32,
     },
     Ord {
         lo: i64,
@@ -165,6 +176,57 @@ impl Types {
         }
     }
 
+    /// Storage size in bytes.
+    pub fn size(&self, t: Ty) -> u32 {
+        match &self.v[t.0 as usize] {
+            Type::Array { size, .. } | Type::Record { size, .. } => *size,
+            Type::Str(n) => *n as u32 + 1,
+            Type::Proc { .. } => 4,
+            Type::Ord { size, .. } => *size as u32,
+            Type::None => 0,
+        }
+    }
+
+    pub fn is_agg(&self, t: Ty) -> bool {
+        matches!(
+            self.v[t.0 as usize],
+            Type::Array { .. } | Type::Record { .. }
+        )
+    }
+
+    /// `array[index] of elem`.
+    pub fn array(&mut self, index: Ty, elem: Ty) -> Ty {
+        let (lo, hi, ..) = self.ord(index);
+        let size = ((hi - lo + 1) * self.size(elem) as i64).min(u32::MAX as i64) as u32;
+        self.v.push(Type::Array { index, elem, size });
+        Ty(self.v.len() as u32 - 1)
+    }
+
+    /// (index type, element type) of an array type.
+    pub fn array_of(&self, t: Ty) -> Option<(Ty, Ty)> {
+        match self.v[t.0 as usize] {
+            Type::Array { index, elem, .. } => Some((index, elem)),
+            _ => None,
+        }
+    }
+
+    pub fn is_record(&self, t: Ty) -> bool {
+        matches!(self.v[t.0 as usize], Type::Record { .. })
+    }
+
+    pub fn record(&mut self, fields: Vec<(u32, Ty, u32)>, size: u32) -> Ty {
+        self.v.push(Type::Record { fields, size });
+        Ty(self.v.len() as u32 - 1)
+    }
+
+    /// (type, offset) of a record field.
+    pub fn field(&self, t: Ty, name: u32) -> Option<(Ty, u32)> {
+        match &self.v[t.0 as usize] {
+            Type::Record { fields, .. } => fields.iter().find(|f| f.0 == name).map(|f| (f.1, f.2)),
+            _ => None,
+        }
+    }
+
     /// The type that decides arithmetic and compatibility of `t`.
     pub fn base(&self, t: Ty) -> Ty {
         match self.v[t.0 as usize] {
@@ -280,6 +342,9 @@ impl Types {
     /// Result type of a binary operator, or the TP error number: 26 when the operand
     /// families differ, 41 when the operator is not defined for them.
     pub fn binary(&self, op: Op, a: Ty, b: Ty) -> Result<Ty, u16> {
+        if self.is_agg(a) || self.is_agg(b) {
+            return Err(41);
+        }
         let text = |t: Ty| t == Ty::STRING || self.tag(t) == Some(Tag::Char);
         if op == Op::Add && text(a) && text(b) {
             return Ok(Ty::STRING);
@@ -319,6 +384,7 @@ impl Types {
             (Some(Tag::Int), Op::Ord) => Ok(a),
             (Some(_), Op::Ord) => Ok(Ty::INTEGER),
             (Some(_), Op::Succ | Op::Pred) => Ok(a),
+            (None, Op::Succ | Op::Pred) => Err(39),
             _ => Err(38),
         }
     }

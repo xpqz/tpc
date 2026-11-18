@@ -3,6 +3,9 @@ use crate::ast::{Ast, Id, Kind, List, Op, NO_NAME};
 use crate::driver::Diag;
 use crate::types::{Routine, Sym, SymKind, Symbol, Tag, Ty, Types};
 
+/// The most bytes of one structure, of all globals, or of one routine's locals.
+const MAX_DATA: u32 = 65535;
+
 /// Static data: globals start here, after the codegen's fixed header.
 pub const GLOBALS: u32 = 280;
 
@@ -73,6 +76,10 @@ struct Cx<'a> {
     chain: Vec<usize>,
     /// The next free local index.
     locals: u32,
+    /// Bytes of the current routine's local variables.
+    local_bytes: u32,
+    /// The record designators of the enclosing `with` statements, innermost last.
+    withs: Vec<(Id, Ty)>,
 }
 
 pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
@@ -86,6 +93,8 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
         routines: Vec::new(),
         chain: Vec::new(),
         locals: 0,
+        local_bytes: 0,
+        withs: Vec::new(),
     };
     for &(name, kind, ty, val) in PREDEFINED {
         let name = cx.ast.intern(name);
@@ -214,12 +223,23 @@ impl Cx<'_> {
             }
             Kind::VarDecl(name, type_name) => {
                 let ty = self.type_of(d, type_name)?;
+                let size = self.types.size(ty);
                 let sym = if !self.chain.is_empty() {
                     self.locals += 1;
-                    Symbol::new(SymKind::Local, ty, self.locals as i64 - 1)
+                    self.local_bytes += size;
+                    if self.local_bytes > MAX_DATA {
+                        return Err(self.err(d, 96));
+                    }
+                    // Aggregates always live in the frame.
+                    let taken = self.types.is_agg(ty);
+                    let local = Symbol::new(SymKind::Local, ty, self.locals as i64 - 1);
+                    Symbol { taken, ..local }
                 } else {
                     let val = self.end as i64;
-                    self.end += self.types.ord(ty).2 as u32;
+                    self.end += size;
+                    if self.end - GLOBALS > MAX_DATA {
+                        return Err(self.err(d, 96));
+                    }
                     Symbol::new(SymKind::Var, ty, val)
                 };
                 self.declare(d, name, sym)?;
@@ -248,6 +268,32 @@ impl Cx<'_> {
                     self.declare(id, n, Symbol::new(SymKind::Const, ty, i as i64))?;
                 }
                 Ok(ty)
+            }
+            Kind::Array(indexes, elem) => {
+                let mut index = Vec::new();
+                for ix in self.ast.items(indexes).to_vec() {
+                    let ty = self.spec(ix, NO_NAME)?;
+                    if self.types.tag(ty).is_none() {
+                        return Err(self.err(ix, 29));
+                    }
+                    index.push(ty);
+                }
+                let mut ty = self.spec(elem, NO_NAME)?;
+                for &ix in index.iter().rev() {
+                    ty = self.types.array(ix, ty);
+                    if self.types.size(ty) > MAX_DATA {
+                        return Err(self.err(spec, 22));
+                    }
+                }
+                Ok(ty)
+            }
+            Kind::Record(items) => {
+                let mut fields = Vec::new();
+                let size = self.fields(items, 0, &mut fields)?;
+                if size > MAX_DATA {
+                    return Err(self.err(spec, 22));
+                }
+                Ok(self.types.record(fields, size))
             }
             Kind::Range(lo, hi) => {
                 let mut ends = [(0, Ty::NONE); 2];
@@ -287,6 +333,37 @@ impl Cx<'_> {
         }
     }
 
+    /// Lays out the fields `items` from offset `at`, appending them to `out`; returns the end
+    /// offset. The arms of a variant part all start at the end of the fixed part.
+    fn fields(&mut self, items: List, at: u32, out: &mut Vec<(u32, Ty, u32)>) -> R<u32> {
+        let mut end = at;
+        for item in self.ast.items(items).to_vec() {
+            match self.ast.nodes[item as usize].kind {
+                Kind::FieldDecl(name, spec) => {
+                    let ty = self.spec(spec, NO_NAME)?;
+                    if name != NO_NAME {
+                        if out.iter().any(|f| f.0 == name) {
+                            return Err(self.err(item, 4));
+                        }
+                        out.push((name, ty, end));
+                        end += self.types.size(ty);
+                    }
+                }
+                Kind::Variant(arms) => {
+                    let start = end;
+                    for arm in self.ast.items(arms).to_vec() {
+                        let Kind::Record(list) = self.ast.nodes[arm as usize].kind else {
+                            unreachable!("the parser lists record arms")
+                        };
+                        end = end.max(self.fields(list, start, out)?);
+                    }
+                }
+                _ => unreachable!("the parser lists fields"),
+            }
+        }
+        Ok(end)
+    }
+
     fn type_of(&self, at: Id, name: u32) -> R<Ty> {
         match self.lookup(name).map(|s| self.syms[s.0 as usize]) {
             None => Err(self.err(at, 3)),
@@ -314,7 +391,11 @@ impl Cx<'_> {
         let rty = if result == NO_NAME {
             None
         } else {
-            Some(self.type_of(d, result)?)
+            let ty = self.type_of(d, result)?;
+            if self.types.is_agg(ty) {
+                return Err(self.err(d, 34));
+            }
+            Some(ty)
         };
         let known = self.scope[self.user..]
             .iter()
@@ -385,6 +466,7 @@ impl Cx<'_> {
         );
         let first = self.syms.len();
         let (scope_len, user, outer_locals) = (self.scope.len(), self.user, self.locals);
+        let outer_bytes = std::mem::take(&mut self.local_bytes);
         self.user = scope_len;
         self.chain.push(r);
         let link = self.chain.len() > 1;
@@ -405,7 +487,9 @@ impl Cx<'_> {
             } else {
                 SymKind::Local
             };
-            self.declare(block, n, Symbol::new(kind, ty, (i + link as usize) as i64))?;
+            let param = Symbol::new(kind, ty, (i + link as usize) as i64);
+            let taken = !refs[i] && self.types.is_agg(ty);
+            self.declare(block, n, Symbol { taken, ..param })?;
         }
         for decl in self.ast.items(decls).to_vec() {
             self.decl(decl)?;
@@ -422,7 +506,7 @@ impl Cx<'_> {
         self.place_frame(r, first);
         self.chain.pop();
         self.scope.truncate(scope_len);
-        (self.user, self.locals) = (user, outer_locals);
+        (self.user, self.locals, self.local_bytes) = (user, outer_locals, outer_bytes);
         Ok(())
     }
 
@@ -452,7 +536,7 @@ impl Cx<'_> {
             } else {
                 SymKind::Frame
             };
-            (s.val, size) = (size as i64, size + self.types.ord(ty).2 as u32);
+            (s.val, size) = (size as i64, size + self.types.size(ty));
         }
         let r = &mut self.routines[r];
         r.framed = size > base || r.children;
@@ -494,6 +578,8 @@ impl Cx<'_> {
                 Kind::Name(name) => function(name, true),
                 _ => 20,
             },
+            Kind::Index(base, ..) | Kind::Field(base, _) => self.bad_var_arg(base),
+            Kind::Name(name) if self.with_field(name).is_some() => 0,
             Kind::Name(name) => match self.lookup(name).map(|s| self.syms[s.0 as usize]) {
                 None => 3,
                 Some(s) if s.kind == SymKind::Omitted => 200,
@@ -511,8 +597,16 @@ impl Cx<'_> {
             0 => {}
             code => return Err(self.err(arg, code)),
         }
-        let Kind::Name(name) = self.ast.nodes[arg as usize].kind else {
-            unreachable!("a variable argument is a name")
+        let named = match self.ast.nodes[arg as usize].kind {
+            Kind::Name(name) if self.with_field(name).is_none() => Some(name),
+            _ => None,
+        };
+        let Some(name) = named else {
+            self.expr(arg)?;
+            return match self.ast.nodes[arg as usize].ty == ty {
+                true => Ok(()),
+                false => Err(self.err(at, 26)),
+            };
         };
         let (sym, s) = self.resolve(arg, name)?;
         if s.ty != ty {
@@ -564,6 +658,12 @@ impl Cx<'_> {
         self.ast.nodes[e as usize].kind = kind;
         self.ast.nodes[e as usize].ty = want;
         Ok(())
+    }
+
+    /// The field `name` of an enclosing `with` record: its designator, type and offset.
+    fn with_field(&self, name: u32) -> Option<(Id, Ty, u32)> {
+        let found = |&(d, ty): &(Id, Ty)| self.types.field(ty, name).map(|(t, off)| (d, t, off));
+        self.withs.iter().rev().find_map(found)
     }
 
     fn resolve(&self, id: Id, name: u32) -> R<(Sym, Symbol)> {
@@ -642,8 +742,13 @@ impl Cx<'_> {
                 self.stmt(body)?;
             }
             Kind::Assign(target, value) => {
-                let Kind::Name(name) = self.ast.nodes[target as usize].kind else {
-                    unreachable!("the parser assigns to names")
+                let name = match self.ast.nodes[target as usize].kind {
+                    Kind::Name(name) if self.with_field(name).is_none() => name,
+                    _ => {
+                        self.expr(target)?;
+                        let ty = self.ast.nodes[target as usize].ty;
+                        return self.assign_value(id, ty, value);
+                    }
                 };
                 let (sym, s) = self.resolve(target, name)?;
                 let (kind, ty) = match s.kind {
@@ -667,12 +772,20 @@ impl Cx<'_> {
                 };
                 self.ast.nodes[target as usize].kind = kind;
                 self.ast.nodes[target as usize].ty = ty;
-                if self.types.sig(ty).is_some() {
-                    self.proc_value(id, ty, value)?;
-                } else {
-                    self.expr(value)?;
-                    self.assignable(id, ty, value)?;
+                self.assign_value(id, ty, value)?;
+            }
+            Kind::With(records, body) => {
+                let outer = self.withs.len();
+                for d in self.ast.items(records).to_vec() {
+                    self.expr(d)?;
+                    let ty = self.ast.nodes[d as usize].ty;
+                    if !self.types.is_record(ty) {
+                        return Err(self.err(d, 75));
+                    }
+                    self.withs.push((d, ty));
                 }
+                self.stmt(body)?;
+                self.withs.truncate(outer);
             }
             Kind::Call(callee, args) => {
                 let Kind::Name(name) = self.ast.nodes[callee as usize].kind else {
@@ -711,6 +824,15 @@ impl Cx<'_> {
             _ => unreachable!("statements only"),
         }
         Ok(())
+    }
+
+    /// `at` is the assignment of `value` to a target of type `ty`.
+    fn assign_value(&mut self, at: Id, ty: Ty, value: Id) -> R<()> {
+        if self.types.sig(ty).is_some() {
+            return self.proc_value(at, ty, value);
+        }
+        self.expr(value)?;
+        self.assignable(at, ty, value)
     }
 
     /// Checks the arguments of a call of routine `r` against its parameters; `at` is the
@@ -815,6 +937,14 @@ impl Cx<'_> {
     /// `at` is the assignment; a constant must also fit the destination's range.
     fn assignable(&self, at: Id, dest: Ty, value: Id) -> R<()> {
         let v = self.ast.nodes[value as usize];
+        if self.types.is_agg(dest) {
+            // Name equivalence: only the very same type.
+            return if v.ty == dest {
+                Ok(())
+            } else {
+                Err(self.err(at, 26))
+            };
+        }
         if !self.types.compat(dest, v.ty) {
             return Err(self.err(at, 26));
         }
@@ -841,7 +971,7 @@ impl Cx<'_> {
         }
         self.expr(value)?;
         let n = self.ast.nodes[value as usize];
-        if self.types.tag(n.ty) == Some(Tag::Enum) {
+        if self.types.tag(n.ty) == Some(Tag::Enum) || self.types.is_agg(n.ty) {
             return Err(self.err(value, 64));
         }
         if n.ty == Ty::STRING && !matches!(n.kind, Kind::StrLit(_)) {
@@ -858,6 +988,37 @@ impl Cx<'_> {
                 [c] => (Kind::IntLit(c as i64), Ty::CHAR),
                 _ => (n.kind, Ty::STRING),
             },
+            Kind::Name(name) if self.with_field(name).is_some() => {
+                let (record, ty, offset) = self.with_field(name).unwrap_or_default();
+                (Kind::Field(record, offset), ty)
+            }
+            Kind::Index(base, index, more) => {
+                self.expr(base)?;
+                let Some((ix, elem)) = self.types.array_of(self.ast.nodes[base as usize].ty) else {
+                    return Err(self.err(e, if more { 93 } else { 121 }));
+                };
+                self.expr(index)?;
+                let i = self.ast.nodes[index as usize];
+                if !self.types.compat(ix, i.ty) {
+                    return Err(self.err(e, 26));
+                }
+                let (lo, hi, ..) = self.types.ord(ix);
+                if matches!(i.kind, Kind::IntLit(c) if c < lo || c > hi) {
+                    return Err(self.err(e, 76));
+                }
+                (n.kind, elem)
+            }
+            Kind::Field(base, name) => {
+                self.expr(base)?;
+                let bt = self.ast.nodes[base as usize].ty;
+                if !self.types.is_record(bt) {
+                    return Err(self.err(e, 121));
+                }
+                let Some((ty, offset)) = self.types.field(bt, name) else {
+                    return Err(self.err(e, 44));
+                };
+                (Kind::Field(base, offset), ty)
+            }
             Kind::Name(name) => {
                 let (sym, s) = self.resolve(e, name)?;
                 match s.kind {
@@ -982,18 +1143,20 @@ impl Cx<'_> {
         let [arg] = self.ast.items(args)[..] else {
             return Err(self.err(at, 89));
         };
-        let Kind::Name(name) = self.ast.nodes[arg as usize].kind else {
-            return Err(self.err(arg, 20));
+        let ty = match self.ast.nodes[arg as usize].kind {
+            Kind::Name(name) if self.with_field(name).is_none() => {
+                let (_, s) = self.resolve(arg, name)?;
+                if s.kind == SymKind::Const || s.kind == SymKind::Routine {
+                    return Err(self.err(arg, 20));
+                }
+                s.ty
+            }
+            _ => {
+                self.expr(arg)?;
+                self.ast.nodes[arg as usize].ty
+            }
         };
-        let (_, s) = self.resolve(arg, name)?;
-        let named = matches!(s.kind, SymKind::Type | SymKind::Var | SymKind::Local);
-        if !named && !matches!(s.kind, SymKind::Ref | SymKind::Frame | SymKind::FrameRef) {
-            return Err(self.err(arg, 20));
-        }
-        if self.types.tag(s.ty).is_none() && self.types.sig(s.ty).is_none() {
-            return Err(self.err(arg, 200));
-        }
-        Ok(self.constant(self.types.ord(s.ty).2 as i64, Ty::INTEGER))
+        Ok(self.constant(self.types.size(ty) as i64, Ty::INTEGER))
     }
 
     /// A unary operator or intrinsic applied to `a`, folded when `a` is constant (`Sqr` is

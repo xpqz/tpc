@@ -114,6 +114,8 @@ struct Gen<'a> {
     depth: u32,
     /// The block around the routine body; `Exit` branches to it.
     exit: Label,
+    /// Each `with` record designator and the local holding its address.
+    withs: Vec<(Id, u32)>,
 }
 
 pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
@@ -216,6 +218,7 @@ fn body(
         fp: 0,
         depth,
         exit: Label(0),
+        withs: Vec::new(),
     };
     let framed = routine.filter(|r| r.framed);
     if let Some(r) = framed {
@@ -234,8 +237,18 @@ fn body(
             g.code.mem(I32_STORE, 0, 0);
         }
         for &(local, offset, ty) in &r.copies {
-            g.code.idx(LOCAL_GET, g.fp).idx(LOCAL_GET, local);
-            g.store(ty, offset);
+            g.code.idx(LOCAL_GET, g.fp);
+            if info.types.is_agg(ty) {
+                let size = info.types.size(ty) as i32;
+                g.code
+                    .i32_const(offset as i32)
+                    .op(I32_ADD)
+                    .idx(LOCAL_GET, local);
+                g.code.i32_const(size).memory_copy();
+            } else {
+                g.code.idx(LOCAL_GET, local);
+                g.store(ty, offset);
+            }
         }
     }
     g.exit = g.code.block(VOID);
@@ -448,11 +461,25 @@ impl Gen<'_> {
         );
     }
 
+    fn is_agg(&self, e: Id) -> bool {
+        self.info.types.is_agg(self.ast.nodes[e as usize].ty)
+    }
+
     fn symbol(&self, v: Id) -> Symbol {
         let Kind::Var(sym) = self.ast.nodes[v as usize].kind else {
             unreachable!("checked variable")
         };
         self.info.syms[sym.0 as usize]
+    }
+
+    fn load_op(&self, ty: Ty) -> u8 {
+        match self.info.types.ord(ty) {
+            (_, _, 1, true) => 0x2C,
+            (_, _, 1, false) => 0x2D,
+            (_, _, 2, true) => 0x2E,
+            (_, _, 2, false) => 0x2F,
+            _ => I32_LOAD,
+        }
     }
 
     /// Pushes the value of a variable of type `ty`.
@@ -461,32 +488,77 @@ impl Gen<'_> {
             self.code.idx(LOCAL_GET, s.val as u32);
             return;
         }
-        let (_, _, size, signed) = self.info.types.ord(ty);
-        let op = match (size, signed) {
-            (1, true) => 0x2C,
-            (1, false) => 0x2D,
-            (2, true) => 0x2E,
-            (2, false) => 0x2F,
-            _ => I32_LOAD,
-        };
         let offset = self.base(s);
-        self.code.mem(op, 0, offset);
+        self.code.mem(self.load_op(ty), 0, offset);
+    }
+
+    /// Pushes the address of the designator `e` and returns the constant offset to add. A
+    /// `with` record is read from its local, so its designator is evaluated once.
+    fn addr(&mut self, e: Id) -> u32 {
+        if let Some(&(_, local)) = self.withs.iter().find(|w| w.0 == e) {
+            self.code.idx(LOCAL_GET, local);
+            return 0;
+        }
+        match self.ast.nodes[e as usize].kind {
+            Kind::Var(_) => {
+                let s = self.symbol(e);
+                self.base(s)
+            }
+            Kind::Field(base, offset) => self.addr(base) + offset,
+            Kind::Index(base, index, _) => {
+                let offset = self.addr(base);
+                let types = &self.info.types;
+                let (ix, elem) = types
+                    .array_of(self.ast.nodes[base as usize].ty)
+                    .expect("checked array");
+                let (lo, size) = (types.ord(ix).0, types.size(elem));
+                if let Kind::IntLit(c) = self.ast.nodes[index as usize].kind {
+                    return offset + (c - lo) as u32 * size;
+                }
+                self.expr(index);
+                if lo != 0 {
+                    self.code.i32_const(lo as i32).op(I32_SUB);
+                }
+                if size != 1 {
+                    self.code.i32_const(size as i32).op(I32_MUL);
+                }
+                self.code.op(I32_ADD);
+                offset
+            }
+            _ => unreachable!("designators"),
+        }
+    }
+
+    /// Pushes the address of the designator `e`.
+    fn address_of(&mut self, e: Id) {
+        let offset = self.addr(e);
+        if offset > 0 {
+            self.code.i32_const(offset as i32).op(I32_ADD);
+        }
     }
 
     fn get(&mut self, v: Id) {
-        self.load(self.symbol(v), self.ast.nodes[v as usize].ty);
+        let ty = self.ast.nodes[v as usize].ty;
+        if matches!(self.ast.nodes[v as usize].kind, Kind::Var(_)) {
+            self.load(self.symbol(v), ty);
+        } else {
+            let offset = self.addr(v);
+            self.code.mem(self.load_op(ty), 0, offset);
+        }
     }
 
     /// Assigns the value that `value` pushes to the variable `v`, truncated to its type: a
     /// store truncates in memory, a local is narrowed.
     fn put(&mut self, v: Id, value: impl FnOnce(&mut Self)) {
-        let (s, ty) = (self.symbol(v), self.ast.nodes[v as usize].ty);
-        if s.kind == SymKind::Local {
+        let ty = self.ast.nodes[v as usize].ty;
+        if matches!(self.ast.nodes[v as usize].kind, Kind::Var(_))
+            && self.symbol(v).kind == SymKind::Local
+        {
             value(self);
             self.narrow(ty);
-            self.code.idx(LOCAL_SET, s.val as u32);
+            self.code.idx(LOCAL_SET, self.symbol(v).val as u32);
         } else {
-            let offset = self.base(s);
+            let offset = self.addr(v);
             value(self);
             self.store(ty, offset);
         }
@@ -508,12 +580,8 @@ impl Gen<'_> {
     /// Value arguments converted to the parameter types, `var` arguments as addresses.
     fn push_args(&mut self, args: List, params: &[Ty], refs: &[bool]) {
         for ((&a, &ty), &byref) in self.ast.items(args).iter().zip(params).zip(refs) {
-            if byref {
-                let s = self.symbol(a);
-                let offset = self.base(s);
-                if offset > 0 {
-                    self.code.i32_const(offset as i32).op(I32_ADD);
-                }
+            if byref || self.info.types.is_agg(ty) {
+                self.address_of(a);
             } else {
                 self.expr(a);
                 self.narrow(ty);
@@ -583,7 +651,24 @@ impl Gen<'_> {
     fn stmt(&mut self, id: Id) {
         match self.ast.nodes[id as usize].kind {
             Kind::Compound(l) => self.ast.items(l).iter().for_each(|&s| self.stmt(s)),
+            Kind::Assign(target, value) if self.is_agg(target) => {
+                let size = self.info.types.size(self.ast.nodes[target as usize].ty);
+                self.address_of(target);
+                self.address_of(value);
+                self.code.i32_const(size as i32).memory_copy();
+            }
             Kind::Assign(target, value) => self.put(target, |g| g.expr(value)),
+            Kind::With(records, body) => {
+                let outer = self.withs.len();
+                for &d in self.ast.items(records) {
+                    let local = self.new_local();
+                    self.address_of(d);
+                    self.code.idx(LOCAL_SET, local);
+                    self.withs.push((d, local));
+                }
+                self.stmt(body);
+                self.withs.truncate(outer);
+            }
             Kind::Invoke(r, args) => self.invoke(r, args),
             Kind::Indirect(callee, args) => self.indirect(callee, args),
             Kind::Exit => {
@@ -741,7 +826,7 @@ impl Gen<'_> {
             Kind::IntLit(v) => {
                 self.code.i32_const(v as i32);
             }
-            Kind::Var(_) => self.get(e),
+            Kind::Var(_) | Kind::Index(..) | Kind::Field(..) => self.get(e),
             Kind::ProcRef(r) => {
                 self.code.i32_const(self.layout.slots[r as usize] as i32);
             }
