@@ -7,7 +7,7 @@ build:
 	cargo build
 
 test:
-	cargo test
+	cargo test --no-fail-fast
 
 fmt:
 	cargo fmt
@@ -18,7 +18,7 @@ clippy:
 check:
 	cargo fmt --check
 	cargo clippy --all-targets -- -D warnings
-	cargo test
+	cargo test --no-fail-fast
 
 wasm:
 	cargo build --release --lib --target wasm32-unknown-unknown
