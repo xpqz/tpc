@@ -289,3 +289,31 @@ fn harness_rejects_an_unbalanced_block_in_a_body() {
     assert!(!validates(&bad));
     assert!(!validates(&extra_end));
 }
+
+#[test]
+fn br_table_dispatches_on_in_range_and_out_of_range_selectors() {
+    let mut m = Module::new();
+    let t = m.ty(&[I32], &[I32]);
+    let mut c = Code::new();
+    let default = c.block(VOID);
+    let c2 = c.block(VOID);
+    let c1 = c.block(VOID);
+    let c0 = c.block(VOID);
+    c.idx(LOCAL_GET, 0).br_table(&[c0, c1, c2], default);
+    c.end().i32_const(10).op(RETURN);
+    c.end().i32_const(11).op(RETURN);
+    c.end().i32_const(12).op(RETURN);
+    c.end().i32_const(99);
+    let f = m.func(t, &[], c);
+    m.export("f", FUNC, f);
+    let w = m.finish();
+    assert!(validates(&w));
+    let out = node(
+        &js(
+            "{}",
+            "console.log([0, 1, 2, 3, 100, -1].map(e.f).join(' '))",
+        ),
+        &w,
+    );
+    assert_eq!(out.trim(), "10 11 12 99 99 99");
+}

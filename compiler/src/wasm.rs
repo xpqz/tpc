@@ -65,6 +65,9 @@ impl Code {
     pub fn br_if(&mut self, _l: Label) -> &mut Self {
         self
     }
+    pub fn br_table(&mut self, _targets: &[Label], _default: Label) -> &mut Self {
+        self
+    }
 }
 
 #[derive(Default)]
