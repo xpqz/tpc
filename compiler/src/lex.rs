@@ -28,57 +28,7 @@ pub struct LexErr {
     pub col: u32,
 }
 
-const KEYWORDS: &[&str] = &[
-    "AND",
-    "ARRAY",
-    "ASM",
-    "BEGIN",
-    "CASE",
-    "CONST",
-    "DIV",
-    "DO",
-    "DOWNTO",
-    "ELSE",
-    "END",
-    "FILE",
-    "FOR",
-    "FUNCTION",
-    "GOTO",
-    "IF",
-    "IMPLEMENTATION",
-    "IN",
-    "INLINE",
-    "INTERFACE",
-    "LABEL",
-    "MOD",
-    "NIL",
-    "NOT",
-    "OF",
-    "OR",
-    "PACKED",
-    "PROCEDURE",
-    "PROGRAM",
-    "RECORD",
-    "REPEAT",
-    "SET",
-    "SHL",
-    "SHR",
-    "STRING",
-    "THEN",
-    "TO",
-    "TYPE",
-    "UNIT",
-    "UNTIL",
-    "USES",
-    "VAR",
-    "WHILE",
-    "WITH",
-    "XOR",
-    "ABSOLUTE",
-    "EXTERNAL",
-    "FORWARD",
-    "INTERRUPT",
-];
+const KEYWORDS: &str = "AND ARRAY ASM BEGIN CASE CONST DIV DO DOWNTO ELSE END FILE FOR FUNCTION GOTO IF IMPLEMENTATION IN INLINE INTERFACE LABEL MOD NIL NOT OF OR PACKED PROCEDURE PROGRAM RECORD REPEAT SET SHL SHR STRING THEN TO TYPE UNIT UNTIL USES VAR WHILE WITH XOR ABSOLUTE EXTERNAL FORWARD INTERRUPT";
 const SYMS2: &[&str] = &["<=", ">=", "<>", ":=", "..", "(.", ".)"];
 const SYMS1: &[u8] = b"+-*/=<>()[],.;:^@";
 
@@ -255,7 +205,7 @@ impl Lx<'_> {
             self.i += 1;
         }
         let text = self.s[st..self.i].to_ascii_uppercase();
-        let kw = KEYWORDS.iter().any(|k| k.as_bytes() == text);
+        let kw = KEYWORDS.split(' ').any(|k| k.as_bytes() == text);
         self.tok(if kw { Tk::Kw } else { Tk::Ident }, text)
     }
 
