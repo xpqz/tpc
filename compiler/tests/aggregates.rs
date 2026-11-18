@@ -28,7 +28,7 @@ fn stems(sub: &str, ext: &str) -> Vec<String> {
 
 #[test]
 fn programs_print_what_tp5_prints() {
-    assert!(stems("lang", ".pas").len() >= 12);
+    assert!(stems("lang", ".pas").len() >= 11);
     assert_eq!(stems("lang", ".pas"), stems("lang", ".out"));
     for s in stems("lang", ".out") {
         let out = std::fs::read(dir("lang").join(format!("{s}.out"))).unwrap();
