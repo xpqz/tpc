@@ -20,6 +20,27 @@ fn corpus_has_no_unexpected_results() {
 }
 
 #[test]
+fn runtime_error_corpus_has_no_unexpected_results() {
+    let fails = check_rt(&root().join("tests/rt"), &real_compile);
+    assert!(fails.is_empty(), "{}", fails.join("\n"));
+}
+
+#[test]
+fn runtime_error_program_that_exits_normally_is_reported() {
+    let f = check_rt(&fixture("rt/exit_mismatch"), &fake_compile);
+    assert_eq!(f, ["exit_mismatch: run exited 0, want 200: "]);
+}
+
+#[test]
+fn runtime_error_out_without_error_line_is_reported() {
+    let f = check_rt(&fixture("rt/no_error_line"), &fake_compile);
+    assert_eq!(
+        f,
+        ["no_error_line: last line of .out is not `Runtime error N`"]
+    );
+}
+
+#[test]
 fn matching_program_passes() {
     assert_eq!(lang("pass"), Vec::<String>::new());
 }
