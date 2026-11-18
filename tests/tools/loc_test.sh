@@ -124,6 +124,31 @@ if rustfmt --check --edition 2021 --config max_width=100 \
 then pass "fixtures: formatted Rust is rustfmt-clean"
 else fail "fixtures: formatted Rust is rustfmt-clean" "rustfmt --check failed"; fi
 
+# Lines over 100 columns in a counted file fail as LONG: path:line (N columns), path relative to
+# ROOT. Rust is judged on the rustfmt'd copy (rustfmt wraps what it can; long literals stay).
+# Comment-only lines count: the limit is about readability, not about what is counted.
+LG="$FX/long"
+check "long: 101 columns flagged in Rust, Pascal and JS" "$LG" "$BUD/long_over.txt" 1 \
+    "LONG: over/a.rs:4 (101 columns)" "LONG: over/p.pas:4 (101 columns)" \
+    "LONG: over/j.js:2 (101 columns)"
+check "long: comment-only lines are flagged" "$LG" "$BUD/long_comment.txt" 1 \
+    "LONG: comment/a.rs:2 (101 columns)" "LONG: comment/p.pas:3 (105 columns)" \
+    "LONG: comment/j.js:3 (101 columns)"
+check "long: exactly 100 columns passes" "$LG" "$BUD/long_exact.txt" 0 "LongExact: 14 / 100"
+if ! printf '%s\n' "$OUT" | grep -q '^total: '; then fail "long: no LONG at 100 columns" "no report"
+elif printf '%s\n' "$OUT" | grep -q LONG; then fail "long: no LONG at 100 columns" "$OUT"
+else pass "long: no LONG at 100 columns"; fi
+check "long: Rust judged after rustfmt (wrapped line passes)" "$LG" "$BUD/long_wrapped.txt" 0 \
+    "Wrapped: 6 / 100"
+if ! printf '%s\n' "$OUT" | grep -q '^total: '; then fail "long: no LONG when rustfmt shortens" "no report"
+elif printf '%s\n' "$OUT" | grep -q LONG; then fail "long: no LONG when rustfmt shortens" "$OUT"
+else pass "long: no LONG when rustfmt shortens"; fi
+check "long: files outside the budget are ignored" "$LG" "$BUD/long_uncounted.txt" 0 \
+    "Counted: 15 / 100"
+if ! printf '%s\n' "$OUT" | grep -q '^total: '; then fail "long: no LONG for uncounted files" "no report"
+elif printf '%s\n' "$OUT" | grep -q LONG; then fail "long: no LONG for uncounted files" "$OUT"
+else pass "long: no LONG for uncounted files"; fi
+
 # Default arguments: repo root and tools/budget.txt, independent of the working directory.
 OUT=$(cd / && "$LOC" 2>&1)
 RC=$?
