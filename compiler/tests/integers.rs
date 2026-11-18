@@ -343,6 +343,49 @@ fn invalid_programs_report_tp5_number_and_line() {
     assert!(fails.is_empty(), "{}", fails.join("\n"));
 }
 
+/// (name, source): a run-time division by zero, after `before` was printed.
+const ZERO_DIV: &[(&str, &str)] = &[
+    ("div_integer", "var a, z: Integer;\nbegin\n  WriteLn('before'); a := 7; z := 0; WriteLn(a div z); WriteLn('after')\nend."),
+    ("mod_integer", "var a, z: Integer;\nbegin\n  WriteLn('before'); a := 7; z := 0; WriteLn(a mod z); WriteLn('after')\nend."),
+    ("div_longint", "var a, z: LongInt;\nbegin\n  WriteLn('before'); a := 7; z := 0; WriteLn(a div z); WriteLn('after')\nend."),
+    ("mod_longint", "var a, z: LongInt;\nbegin\n  WriteLn('before'); a := 7; z := 0; WriteLn(a mod z); WriteLn('after')\nend."),
+    ("div_word", "var a, z: Word;\nbegin\n  WriteLn('before'); a := 7; z := 0; WriteLn(a div z); WriteLn('after')\nend."),
+    ("div_by_expression", "var a: Integer;\nbegin\n  WriteLn('before'); a := 3; WriteLn(10 div (a - 3)); WriteLn('after')\nend."),
+];
+
+#[test]
+fn division_by_zero_at_run_time_is_runtime_error_200() {
+    let mut fails = Vec::new();
+    for &(name, src) in ZERO_DIV {
+        let src = [src, "\n"].concat();
+        let wasm = match tp5c::compile(src.as_bytes()) {
+            Ok(w) => w,
+            Err(d) => {
+                fails.push(format!(
+                    "{name}: rejected with {} at {}:{}",
+                    d.code, d.line, d.col
+                ));
+                continue;
+            }
+        };
+        let path = tmp_dir().join([name, ".wasm"].concat());
+        std::fs::write(&path, wasm).unwrap();
+        let out = Command::new("node")
+            .arg(root().join("tests/run.mjs"))
+            .arg(&path)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        if text != "before\nRuntime error 200\n" || out.status.code() != Some(200) {
+            fails.push(format!(
+                "{name}: stdout {text:?}, exit {:?}",
+                out.status.code()
+            ));
+        }
+    }
+    assert!(fails.is_empty(), "{}", fails.join("\n"));
+}
+
 #[test]
 fn every_run_case_prints_something() {
     assert!(RUN.iter().all(|r| !r.2.is_empty()));
