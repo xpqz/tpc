@@ -1,0 +1,3 @@
+1
+a { not a comment }
+b (* not a comment *)

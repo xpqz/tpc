@@ -2,7 +2,7 @@
 """Usage: loc.sh [ROOT [BUDGET]]. Counts non-blank, non-comment-only lines per budget component.
 
 Rust is counted after rustfmt (max_width = 100) on a copy. Exits 1 if any component or the
-total exceeds its limit.
+total exceeds its limit, or a counted file has a line over 100 columns (Rust: in the copy).
 """
 import os
 import subprocess
@@ -96,7 +96,11 @@ def count_file(path):
     with open(path, encoding="utf-8") as f:
         text = f.read()
     lang = EXT[os.path.splitext(path)[1]]
-    return count(rustfmt(text) if lang == "rs" else text, lang)
+    text = rustfmt(text) if lang == "rs" else text
+    for no, line in enumerate(text.split("\n"), 1):
+        if len(line) > 100:
+            long_lines.append(f"LONG: {os.path.relpath(path, ROOT)}:{no} ({len(line)} columns)")
+    return count(text, lang)
 
 
 def files(root, spec):
@@ -107,6 +111,7 @@ def files(root, spec):
             if os.path.splitext(f)[1] in EXT]
 
 
+long_lines = []
 rows = {}
 order = []
 for entry in open(BUDGET):
@@ -134,6 +139,7 @@ if total > total_limit:
 for spec in rows.get("ROOTS", [""])[0].split():
     over += ["UNASSIGNED: " + os.path.relpath(f, ROOT) for f in sorted(files(ROOT, spec))
              if f not in assigned]
+over += long_lines
 for line in over:
     print(line)
 sys.exit(1 if over else 0)
