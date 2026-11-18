@@ -26,3 +26,9 @@ D3 and D4 are not deviations from TP5 behaviour; they are kept as entries becaus
 
 D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expression typing
 (`docs/abi.md`, open questions 1 to 4) is unresolved and will be recorded here once decided.
+
+## Integer expression width (decision 5)
+
+| # | Deviation | Reference | This compiler | Notes |
+|---|---|---|---|---|
+| D8 | Intermediate integer width | fpc evaluates at native width (`(i+i2) div 2` with 30000+30000 is 30000) | TP5 common-type rule: 16-bit `Integer` arithmetic wraps (-2768) | Not a deviation from TP5; fpc is not the oracle here. Tests relying on it name decision 5 |

@@ -167,6 +167,9 @@ Compiler API exported from `compiler.wasm` (`plan.md` §3): `alloc(n) -> ptr`,
 
 ## Open questions
 
+Resolved: 1, 2, 4 and 5 by decision 5 (docs/decisions.md); 9 and 11 (initial `sp`,
+static start) by decision 6; 12 by the test runner contract in §8.
+
 Measurements use Free Pascal 3.2.2 (aarch64, macOS) with `fpc -Mtp -v0`, programs in
 `tmp/` (git-ignored; reproduced in `docs/prs/14.md`).
 

@@ -35,3 +35,50 @@ it uses, when it first uses them; they count as emitter lines. Emitter tests kee
 gate, run by the lead on the branch with `main` merged in.
 **Reason.** RED commits contain failing tests by design, and `--no-verify` is forbidden.
 **Rejected.** Running `make check` in the hook: blocks every RED commit.
+
+## 5. Integer expression typing
+
+**Question.** What are the result types and precision of integer expressions?
+**Source.** TP 5.0 Reference Guide (docs/references.md), Ch. 3 "Integer Types" and Ch. 6.
+Quoted: "The type of an integer constant is the predefined integer type with the smallest
+range that includes the value"; "both operands are converted to their common type before
+the operation. The common type is the predefined integer type with the smallest range that
+includes all possible values of both types ... the common type of integer and byte is
+integer, and the common type of integer and word is longint. The operation is performed
+using the precision of the common type, and the result type is the common type."; "The
+expression on the right of an assignment statement is evaluated independently from the
+size or type of the variable on the left."; "Any byte-sized operand is converted to an
+intermediate word-sized operand that is compatible with both integer and word before any
+arithmetic operation is performed."; sign negation and `not`: "the result is of the same
+integer type"; shifts: "The type of the result is the same as the type of i."
+**Decision.** Sourced clauses are applied as quoted. Where the source leaves room, the
+following are **provisional** (tests pinning them live in `tests/lang/int_typing_*` and
+name this decision):
+- (P1) Byte-sized operands of `+ - * div mod` and comparisons are widened before the
+  common type is formed: `Byte` and `ShortInt` both widen to `Integer`, except that `Byte`
+  paired with `Word` gives `Word`. So `Byte op Byte` is `Integer` (`200+200` = 400,
+  `1-2` = -1), `ShortInt op Word` is `LongInt`.
+- (P2) Unary minus on a byte-sized operand widens first (arithmetic), giving `Integer`;
+  on `Word` the result is `Word` (wraps mod 65536), as sourced.
+- (P3) `not`, `shl`, `shr` keep the operand's own type, including byte-sized ones
+  (`not Byte(0)` = 255, `Byte(200) shl 1` = 144). `shr` is logical within that width.
+- (P4) A constant whose value fits both `ShortInt` and `Byte` is `ShortInt` if negative,
+  else `Byte`; this is unobservable given P1.
+- `div`/`mod` truncate toward zero; `Word` and `Byte` use unsigned division.
+- Results are re-narrowed to the result type after `+ - *` and unary minus (plan §4.6), so
+  `Integer` arithmetic wraps at 16 bits: `30000+30000` is -5536 even inside a larger
+  expression. fpc differs (native width); see docs/deviations.md D8.
+- Subrange base type is the smallest predefined type containing both bounds; signedness
+  follows it (`0..200` unsigned, `-1..100` signed).
+**Rejected.** fpc's native-width evaluation: contradicts the TP5 manual.
+**Superseding.** If a TP5 binary or further text contradicts P1-P4, a new decision
+supersedes the clause and its tests change with a reference to that decision.
+
+## 6. Walking-skeleton ABI constants
+
+**Decision.** Memory starts at 16 pages (1 MB). Static data starts at 256. `sp` (global 0)
+starts at the top of initial memory (1,048,576) and grows down. `String` is `String[255]`.
+`{$R-}` is the default, as in TP5. Errors for omitted features use compiler error number
+**200, "Feature not supported"**, outside TP's 1-146 range, so it can never be confused
+with a TP error. The module exports `main` and `memory` (#13 contract).
+**Reason.** Plan §4.1 fixes the layout but not the numbers; these are the simplest values.
