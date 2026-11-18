@@ -250,3 +250,11 @@ allocator in System uses these casts for address arithmetic.
 if the checker ends Phase 4 above ~1,650, re-plan before Phase 5. Corpus briefs cap
 negative tests at one per rule in plan scope; per-context error-number parity beyond
 that is pruned at the RED verdict.
+
+## 23. Front-end contract as built (supersedes parts of decision 8)
+
+`docs/design/ast.md` now describes the code: the checker rewrites nodes in place (no
+handle return); `taken` covers both captured and address-taken; only procedural types are
+interned; string operators are lowered in codegen; `CharToStr` is the only conversion node
+so far (`IntToReal` arrives with Real). Where the doc and code disagree, the code wins and
+the doc is fixed in the same PR.
