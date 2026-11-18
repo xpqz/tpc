@@ -45,3 +45,18 @@ end;
 procedure HeapRelease(p: Pointer);
 begin
 end;
+type SetBuf = array[0..31] of Byte;
+procedure SetOp(var d, a, b: SetBuf; op: Integer);
+begin
+end;
+procedure SetAdd(var d: SetBuf; lo, hi: Integer);
+begin
+end;
+function SetIn(var s: SetBuf; i: Integer): Boolean;
+begin
+  SetIn := False
+end;
+function SetCmp(var a, b: SetBuf): Integer;
+begin
+  SetCmp := 0
+end;

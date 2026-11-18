@@ -39,6 +39,8 @@ pub enum Type {
     },
     /// A pointer to the type (`Ty::NONE` for the untyped `Pointer`): 4 bytes, unsigned.
     Ptr(Ty),
+    /// A set of the ordinal type (`Ty::NONE` for `[]`): 32 bytes, bit i is element i.
+    Set(Ty),
     /// One dimension; `a[i, j]` is an array of arrays. `size` saturates at u32::MAX.
     Array {
         index: Ty,
@@ -191,17 +193,57 @@ impl Types {
             Type::Array { size, .. } | Type::Record { size, .. } => *size,
             Type::Str(n) => *n as u32 + 1,
             Type::Proc { .. } | Type::Ptr(_) => 4,
+            Type::Set(_) => 32,
             Type::Ord { size, .. } => *size as u32,
             Type::None => 0,
         }
     }
 
-    /// Arrays and records, copied whole by `memory.copy`.
+    /// Arrays, records and sets, copied whole by `memory.copy`.
     pub fn is_agg(&self, t: Ty) -> bool {
         matches!(
             self.v[t.0 as usize],
-            Type::Array { .. } | Type::Record { .. }
+            Type::Array { .. } | Type::Record { .. } | Type::Set(_)
         )
+    }
+
+    /// The element type of a set type.
+    pub fn set_base(&self, t: Ty) -> Option<Ty> {
+        match self.v[t.0 as usize] {
+            Type::Set(base) => Some(base),
+            _ => None,
+        }
+    }
+
+    pub fn is_set(&self, t: Ty) -> bool {
+        self.set_base(t).is_some()
+    }
+
+    pub fn set(&mut self, base: Ty) -> Ty {
+        self.v.push(Type::Set(base));
+        Ty(self.v.len() as u32 - 1)
+    }
+
+    /// `set of base` as declared: an ordinal type within 0..255, else the TP error number.
+    pub fn set_of(&mut self, base: Ty) -> Result<Ty, u16> {
+        if self.tag(base).is_none() {
+            return Err(29);
+        }
+        let (lo, hi, ..) = self.ord(base);
+        match lo < 0 || hi > 255 {
+            true => Err(23),
+            false => Ok(self.set(base)),
+        }
+    }
+
+    /// The element type of a constructor holding `base` (`Ty::NONE` if empty) and an element
+    /// of type `ty`, or the TP error number.
+    pub fn element(&self, base: Ty, ty: Ty) -> Result<Ty, u16> {
+        match self.tag(ty) {
+            None => Err(39),
+            Some(_) if base != Ty::NONE && !self.compat(base, ty) => Err(26),
+            Some(_) => Ok(ty),
+        }
     }
 
     pub fn is_ptr(&self, t: Ty) -> bool {
@@ -294,6 +336,9 @@ impl Types {
     /// Ordinal types of one family (enumerations must also be the same enumeration), or
     /// pointers of one type or with the untyped `Pointer`.
     pub fn compat(&self, a: Ty, b: Ty) -> bool {
+        if let (Some(x), Some(y)) = (self.set_base(a), self.set_base(b)) {
+            return x == Ty::NONE || y == Ty::NONE || self.compat(x, y);
+        }
         match (self.tag(a), self.tag(b)) {
             (Some(x), Some(y)) => x == y && (x != Tag::Enum || self.base(a) == self.base(b)),
             _ => {
@@ -401,6 +446,22 @@ impl Types {
     /// Result type of a binary operator, or the TP error number: 26 when the operand
     /// families differ, 41 when the operator is not defined for them.
     pub fn binary(&self, op: Op, a: Ty, b: Ty) -> Result<Ty, u16> {
+        if op == Op::In {
+            return match self.set_base(b) {
+                None => Err(41),
+                Some(base) if self.compat(base, a) => Ok(Ty::BOOLEAN),
+                Some(_) => Err(26),
+            };
+        }
+        if self.set_base(a).is_some() || self.set_base(b).is_some() {
+            return match (self.compat(a, b), op) {
+                (false, _) => Err(26),
+                (_, Op::Add | Op::Sub | Op::Mul) if self.set_base(a) == Some(Ty::NONE) => Ok(b),
+                (_, Op::Add | Op::Sub | Op::Mul) => Ok(a),
+                (_, Op::Eq | Op::Ne | Op::Le | Op::Ge) => Ok(Ty::BOOLEAN),
+                _ => Err(41),
+            };
+        }
         if self.is_agg(a) || self.is_agg(b) {
             return Err(41);
         }

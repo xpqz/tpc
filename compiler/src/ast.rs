@@ -25,6 +25,8 @@ pub enum Op {
     Gt,
     Le,
     Ge,
+    /// `element in set`.
+    In,
     /// Unary only; the intrinsics Ord, Chr, Succ, Pred, Odd, Abs and Sqr are unary operators.
     Neg,
     Not,
@@ -127,6 +129,10 @@ pub enum Kind {
     StrType(Id),
     /// A Char operand used as a String.
     CharToStr(Id),
+    /// `[a, b..c]`: elements and `Range` nodes.
+    SetLit(List),
+    /// `set of` the type definition.
+    SetType(Id),
 }
 
 pub const NO_NAME: u32 = u32::MAX;
