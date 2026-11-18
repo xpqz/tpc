@@ -82,3 +82,14 @@ starts at the top of initial memory (1,048,576) and grows down. `String` is `Str
 **200, "Feature not supported"**, outside TP's 1-146 range, so it can never be confused
 with a TP error. The module exports `main` and `memory` (#13 contract).
 **Reason.** Plan §4.1 fixes the layout but not the numbers; these are the simplest values.
+
+## 7. Phase 1 test formats and the sieve
+
+**Decision.** `tests/lang/NAME.pas` + `NAME.out` (fpc output). `tests/neg/NAME.pas` +
+`NAME.err` holding one line `N LINE` (TP error number and 1-based line). A shrinking
+`tests/lang/PENDING` / `tests/neg/PENDING` lists programs not yet expected to pass; the
+driver fails if a pending program passes, so the list cannot go stale. The compiler
+reports errors as `NAME.pas(LINE,COL): Error N: MESSAGE` on stderr, exit code 1.
+The Phase 1 exit test "sieve" needs arrays, which arrive in Phase 3; it moves to the
+Phase 3 exit tests. Phase 1 uses a trial-division prime listing instead.
+**Reason.** Test-first corpus without blocking on later phases; arrays are Phase 3 scope.
