@@ -254,20 +254,46 @@ fn caret_after_closer_is_dereference() {
 }
 
 #[test]
-fn standalone_control_characters() {
-    assert_eq!(kinds("c := ^M;"), [Ident, Assign, StrLit, Semi]);
-    assert_eq!(toks("c := ^M;")[2].text, [13]);
+fn standalone_control_character_is_ctrl_with_original_char() {
+    assert_eq!(kinds("c := ^M;"), [Ident, Assign, Ctrl, Semi]);
+    assert_eq!(toks("c := ^M;")[2].text, b"M");
     assert_eq!(
         kinds("Write(^G, 'x')"),
-        [Ident, LParen, StrLit, Comma, StrLit, RParen]
+        [Ident, LParen, Ctrl, Comma, StrLit, RParen]
     );
-    assert_eq!(toks("Write(^G, 'x')")[2].text, [7]);
-    assert_eq!(string("^A"), [1]);
-    assert_eq!(string("^Z"), [26]);
+    assert_eq!(toks("Write(^G, 'x')")[2].text, b"G");
+    assert_eq!(kinds("write(^G)"), [Ident, LParen, Ctrl, RParen]);
+    for (src, text) in [
+        ("^A", "A"),
+        ("^Z", "Z"),
+        ("^[", "["),
+        ("^@", "@"),
+        ("^_", "_"),
+        ("^m", "m"),
+    ] {
+        assert_eq!(
+            raw_kind(src),
+            (RawTk::Ctrl, text.as_bytes().to_vec()),
+            "{src}"
+        );
+    }
+}
+
+#[test]
+fn ctrl_in_type_context() {
+    assert_eq!(kinds("type PT = ^T;"), [Type, Ident, Eq, Ctrl, Semi]);
+    assert_eq!(toks("type PT = ^T;")[3].text, b"T");
+}
+
+#[test]
+fn joined_control_characters_stay_one_string() {
     assert_eq!(string("^[^]"), [27, 29]);
     assert_eq!(string("^M^J"), [13, 10]);
+    assert_eq!(string("^M'a'"), [13, b'a']);
+    assert_eq!(string("'a'^M"), [b'a', 13]);
+    assert_eq!(string("^M#10"), [13, 10]);
+    assert_eq!(string("#10^M"), [10, 13]);
     assert_eq!(kinds("x = ^A'b'"), [Ident, Eq, StrLit]);
-    assert_eq!(kinds("write(^G)"), [Ident, LParen, StrLit, RParen]);
 }
 
 #[test]

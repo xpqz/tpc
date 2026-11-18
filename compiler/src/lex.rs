@@ -5,6 +5,7 @@ pub enum Tk {
     RealLit,
     StrLit,
     Directive,
+    Ctrl,
     Kw,
     Sym,
     Eof,

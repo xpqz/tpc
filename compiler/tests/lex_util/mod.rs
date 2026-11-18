@@ -54,6 +54,7 @@ pub enum Tk {
     RealLit,
     StrLit,
     Directive,
+    Ctrl,
     Eof,
     And,
     Array,
@@ -212,6 +213,7 @@ pub fn k(t: &Tok) -> Tk {
         R::RealLit => Tk::RealLit,
         R::StrLit => Tk::StrLit,
         R::Directive => Tk::Directive,
+        R::Ctrl => Tk::Ctrl,
         R::Eof => Tk::Eof,
         R::Kw => *KWS
             .iter()
