@@ -118,16 +118,16 @@ Use the `skis` CLI only. Never read, write, query or copy `.skis/issues.db` dire
 sqlite3 or anything else. It is git-ignored. Epics map to the phases in `plan.md` §5; a
 phase's exit test is its epic's acceptance criterion.
 
-### Parallel implementers and worktrees
+### Worktrees
 
-One implementer works in the main checkout. Additional implementers run in parallel only
-on issues that are independent (no shared files beyond append-only docs), each in its own
-worktree: `git worktree add worktrees/{id}-{slug} -b {id}-{slug} main` (`worktrees/` is
-git-ignored). Each worktree builds into its own target directory (`scripts/cargo-target.sh`
-keys it by checkout name), so parallel builds never share a cargo lock. Nobody edits files
-on an implementer's branch while it is working. After merge, the lead removes the worktree
-(`git worktree remove`) along with the branch. Do not start more parallel units than the
-lead can review promptly.
+The main checkout stays on `main` and belongs to the lead (merges, reviews, skis). Every
+implementer works in its own worktree, created by the lead before the brief:
+`git worktree add worktrees/{id}-{slug} -b {id}-{slug} main` (`worktrees/` is git-ignored).
+Each worktree builds into its own target directory (`scripts/cargo-target.sh` keys it by
+checkout name), so parallel builds never share a cargo lock. Parallel units must be
+independent (no shared files beyond append-only docs). Nobody edits files on an
+implementer's branch while it is working. After merge, the lead removes the worktree and
+the branch. Do not start more parallel units than the lead can review promptly.
 
 ### Per-issue loop
 
