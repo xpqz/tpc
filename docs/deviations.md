@@ -51,3 +51,5 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
 | D12 | Names of implicit System helpers are visible | `AbsLong`, `StrCat`, `StrCmp`, `StrAssign`, `StrDelete` and `StrInsert` are not declared identifiers (error 3) | They are System routines a program can call or redeclare; redeclaring one never affects the compiler's own calls | Only a program using an undeclared identifier of that name changes (accepted instead of 3); redeclaring it never affects `Abs` (decision 11) |
+
+| D13 | Disposing an already-disposed pointer | Runtime error 204 | Not detected (decision 25) | |
