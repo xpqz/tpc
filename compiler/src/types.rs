@@ -136,6 +136,10 @@ pub struct Routine {
     pub result_sym: Sym,
     /// Value parameters moved to the frame: (parameter local, offset, type).
     pub copies: Vec<(u32, u32, Ty)>,
+    /// Declared in System: its arguments are diagnosed like those of a TP built-in.
+    pub builtin: bool,
+    /// The result is a String: the caller passes its address as a hidden parameter.
+    pub result_ptr: bool,
     /// Its address is taken as a procedural value: it has a table slot.
     pub addressed: bool,
 }
@@ -187,11 +191,35 @@ impl Types {
         }
     }
 
+    /// Arrays and records, copied whole by `memory.copy`.
     pub fn is_agg(&self, t: Ty) -> bool {
         matches!(
             self.v[t.0 as usize],
             Type::Array { .. } | Type::Record { .. }
         )
+    }
+
+    pub fn is_str(&self, t: Ty) -> bool {
+        matches!(self.v[t.0 as usize], Type::Str(_))
+    }
+
+    /// Types that live in memory and are passed by address.
+    pub fn in_memory(&self, t: Ty) -> bool {
+        self.is_agg(t) || self.is_str(t)
+    }
+
+    /// A new `String[n]`; each form is a type of its own.
+    pub fn string(&mut self, n: u8) -> Ty {
+        self.v.push(Type::Str(n));
+        Ty(self.v.len() as u32 - 1)
+    }
+
+    /// Capacity of a string type.
+    pub fn capacity(&self, t: Ty) -> u8 {
+        match self.v[t.0 as usize] {
+            Type::Str(n) => n,
+            _ => 0,
+        }
     }
 
     /// `array[index] of elem`.
@@ -202,10 +230,15 @@ impl Types {
         Ty(self.v.len() as u32 - 1)
     }
 
-    /// (index type, element type) of an array type.
-    pub fn array_of(&self, t: Ty) -> Option<(Ty, Ty)> {
+    /// (index type, lower bound, upper bound, element type) of an array type; a string is
+    /// an array of Char from 0 (the length byte).
+    pub fn array_of(&self, t: Ty) -> Option<(Ty, i64, i64, Ty)> {
         match self.v[t.0 as usize] {
-            Type::Array { index, elem, .. } => Some((index, elem)),
+            Type::Array { index, elem, .. } => {
+                let (lo, hi, ..) = self.ord(index);
+                Some((index, lo, hi, elem))
+            }
+            Type::Str(n) => Some((Ty::INTEGER, 0, n as i64, Ty::CHAR)),
             _ => None,
         }
     }
@@ -345,9 +378,15 @@ impl Types {
         if self.is_agg(a) || self.is_agg(b) {
             return Err(41);
         }
-        let text = |t: Ty| t == Ty::STRING || self.tag(t) == Some(Tag::Char);
-        if op == Op::Add && text(a) && text(b) {
-            return Ok(Ty::STRING);
+        let text = |t: Ty| self.is_str(t) || self.tag(t) == Some(Tag::Char);
+        let compare = matches!(op, Op::Eq | Op::Ne | Op::Lt | Op::Gt | Op::Le | Op::Ge);
+        if self.is_str(a) || self.is_str(b) || op == Op::Add && text(a) && text(b) {
+            return match (text(a) && text(b), op) {
+                (false, _) => Err(26),
+                (_, Op::Add) => Ok(Ty::STRING),
+                (_, _) if compare => Ok(Ty::BOOLEAN),
+                _ => Err(41),
+            };
         }
         let (Some(ta), Some(_)) = (self.tag(a), self.tag(b)) else {
             return Err(26);
@@ -355,7 +394,6 @@ impl Types {
         if !self.compat(a, b) {
             return Err(26);
         }
-        let compare = matches!(op, Op::Eq | Op::Ne | Op::Lt | Op::Gt | Op::Le | Op::Ge);
         match (ta, op) {
             (_, _) if compare => Ok(Ty::BOOLEAN),
             (Tag::Int, Op::Shl | Op::Shr) => Ok(self.promote(a)),
@@ -384,7 +422,7 @@ impl Types {
             (Some(Tag::Int), Op::Ord) => Ok(a),
             (Some(_), Op::Ord) => Ok(Ty::INTEGER),
             (Some(_), Op::Succ | Op::Pred) => Ok(a),
-            (None, Op::Succ | Op::Pred) => Err(39),
+            (None, Op::Succ | Op::Pred | Op::Ord) => Err(39),
             _ => Err(38),
         }
     }

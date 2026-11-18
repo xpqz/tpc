@@ -188,3 +188,27 @@ are not checked (`{$R+}` is Phase 4). `T(x)` casts an ordinal value to an ordina
 `SizeOf` of a type identifier or a variable is a folded constant.
 **Reason.** Probes in `docs/prs/35.md` (`e4`, `e5`, `e6`).
 **Rejected.** Treating the smallest predefined type with Byte first: contradicts the `-1` readback.
+
+## 17. Strings: helpers, temporaries and TP built-ins
+
+**Decision.** `String[n]` types are `Type::Str(n)`, one per form (name equivalence); all are
+assignment compatible with each other and with Char. Operators and assignment call System helpers
+bound by handle at load from one name table (`ABSLONG STRCAT STRCMP STRASSIGN STRDELETE
+STRINSERT`; a missing helper is error 3 at line 0): `a + b` is `StrCat(temp, a, b)`, comparison is
+`StrCmp(a, b)` against 0, `s := e` is `StrAssign(s, e, n)` (the one truncating store), a String value
+parameter is copied into the callee frame by `StrAssign`. Every string-valued expression that is not a
+literal or a variable is evaluated into a 256-byte frame temporary; a statement's temporaries are not
+reused within it, and the frame size includes the largest number any statement used (the body is
+generated before the prologue). A String function result is a hidden `var` parameter after the static
+link; a call passes a fresh temporary. `Delete(s, i, n)` and `Insert(src, s, i)` are rewritten to
+`s := StrDelete(s, i, n)` and `s := StrInsert(src, s, i)`, so aliasing and the capacity of `s` come
+from the assignment; `Concat` is a chain of `+`; `Length`, `Pos`, `Copy` are ordinary System routines.
+Arguments of System routines are diagnosed like TP built-ins (67 string expected, 106 character
+expected, 38 integer expected). A missing argument list is reported at the token that follows the name.
+`Char` operands become one-character literals or `CharToStr` nodes. Strings are indexed as
+`array[0..n] of Char`; the length byte is `s[0]`.
+**Reason.** Decision 13 with the least compiler code: the helpers are Pascal.
+**Rejected.** Open string parameters carrying a capacity (TP7): the rewrite gives the capacity
+for free. Inline `memory.copy` for the truncating store: needs a clamp and locals; the Pascal helper is
+shorter and is removed by function-level elimination when unused (decision 14); aggregate copies
+still use `memory.copy`.

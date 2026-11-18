@@ -166,18 +166,7 @@ const ERR: &[(&str, &str, u16, u32)] = &[
 ];
 
 /// TP accepts these; the compiler reports 200 (decision 6) on the given line.
-const UNSUPPORTED: &[(&str, &str, u32)] = &[
-    (
-        "string_result",
-        "program Prog;\nfunction F: String;\nbegin\nend;\nbegin\nend.",
-        2,
-    ),
-    (
-        "string_parameter",
-        "program Prog;\nprocedure Q(s: String);\nbegin\nend;\nbegin\nend.",
-        2,
-    ),
-];
+const UNSUPPORTED: &[(&str, &str, u32)] = &[];
 
 fn tmp_dir() -> PathBuf {
     let d = root().join("tmp/integers");

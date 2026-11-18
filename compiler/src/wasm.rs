@@ -99,6 +99,12 @@ impl Code {
         self.idx(0x11, ty).op(0)
     }
 
+    /// Appends the instructions of another balanced body.
+    pub fn append(&mut self, other: Code) {
+        assert!(other.open.is_empty(), "unbalanced blocks");
+        self.buf.extend_from_slice(&other.buf);
+    }
+
     /// `memory.copy` of (dest, src, len) on the stack, memory 0 to memory 0.
     pub fn memory_copy(&mut self) -> &mut Self {
         self.idx(0xFC, 0x0A).op(0).op(0)

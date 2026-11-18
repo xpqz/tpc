@@ -117,6 +117,10 @@ pub enum Kind {
     Field(Id, u32),
     /// Record designators whose fields are visible in the body.
     With(List, Id),
+    /// `String[size]` with a constant size expression.
+    StrType(Id),
+    /// A Char operand used as a String.
+    CharToStr(Id),
 }
 
 pub const NO_NAME: u32 = u32::MAX;
@@ -138,6 +142,9 @@ pub struct Ast {
     pub strs: Vec<Vec<u8>>,
     /// Number of leading declarations of the program that come from System.
     pub system: usize,
+    /// For each identifier used as an operand without arguments, the line of the token that
+    /// follows it, where TP reports a missing argument list.
+    pub follow: Vec<(Id, u32)>,
 }
 
 impl Ast {
