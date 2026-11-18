@@ -173,3 +173,18 @@ before literals.
 
 The plan's Phase 2 exit test "a function returning through the hidden result pointer"
 needs strings; it lands in `tests/abi` with the strings slice.
+
+## 16. Enumeration and subrange storage and typing (measured on TP 5.0)
+
+**Decision.** An enumeration or subrange is stored in the smallest of ShortInt, Byte, Integer,
+Word, LongInt that holds both bounds, in that order of preference, so `(a,b,c)` and `0..100` are
+signed bytes (`Pred` of the first value reads back -1) while `0..200` and a 200-value enum are
+unsigned bytes and `0..1000` and a 257-value enum are signed words. Arithmetic uses the type's own
+range (`0..100` plus a Word wraps like Byte plus Word; `-w` of `0..60000` is LongInt); `Succ`,
+`Pred` and `not` of an integer subrange keep the subrange type, `not` of a Boolean subrange is
+Boolean. Enumerations are compatible only with the same enumeration (and its subranges). A
+constant outside the destination's range is error 76 for every ordinal family; run-time values
+are not checked (`{$R+}` is Phase 4). `T(x)` casts an ordinal value to an ordinal type;
+`SizeOf` of a type identifier or a variable is a folded constant.
+**Reason.** Probes in `docs/prs/35.md` (`e4`, `e5`, `e6`).
+**Rejected.** Treating the smallest predefined type with Byte first: contradicts the `-1` readback.

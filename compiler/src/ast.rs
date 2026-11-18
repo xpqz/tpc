@@ -97,10 +97,12 @@ pub enum Kind {
     Block(List, Id),
     /// Variable name, type name.
     VarDecl(u32, u32),
-    /// Type name and its definition: `Name` or `ProcType`.
+    /// Type name and its definition: `Name`, `Range` (a subrange), `Enum` or `ProcType`.
     TypeDecl(u32, Id),
     /// Parameters (None when omitted), result type name (`NO_NAME` for a procedure), function.
     ProcType(Option<List>, u32, bool),
+    /// An enumerated type: its identifiers as `Name` nodes.
+    Enum(List),
 }
 
 pub const NO_NAME: u32 = u32::MAX;
