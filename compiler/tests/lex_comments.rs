@@ -85,7 +85,7 @@ fn mismatched_closer_does_not_terminate() {
 #[test]
 fn directive_brace() {
     let t = one("{$R+}");
-    assert_eq!(t.kind, Directive);
+    assert_eq!(k(&t), Directive);
     assert_eq!(t.text, b"R+");
     assert_eq!((t.line, t.col), (1, 1));
 }
@@ -93,7 +93,7 @@ fn directive_brace() {
 #[test]
 fn directive_paren_star() {
     let t = one("(*$R-*)");
-    assert_eq!(t.kind, Directive);
+    assert_eq!(k(&t), Directive);
     assert_eq!(t.text, b"R-");
 }
 
@@ -125,7 +125,7 @@ fn directive_does_not_nest_and_ends_at_first_closer() {
     let v = toks("{$A {} x");
     assert_eq!(v.len(), 2);
     assert_eq!(v[0].text, b"A {");
-    assert_eq!(v[1].kind, Ident);
+    assert_eq!(k(&v[1]), Ident);
 }
 
 #[test]

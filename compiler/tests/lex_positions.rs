@@ -3,7 +3,7 @@ use lex_util::*;
 use Tk::*;
 
 fn pos(src: &str) -> Vec<(Tk, u32, u32)> {
-    toks(src).iter().map(|t| (t.kind, t.line, t.col)).collect()
+    toks(src).iter().map(|t| (k(t), t.line, t.col)).collect()
 }
 
 #[test]
@@ -87,7 +87,7 @@ fn positions_after_strings() {
 fn eof_position() {
     let v = lex(b"ab\ncd").unwrap();
     let e = v.last().unwrap();
-    assert_eq!(e.kind, Eof);
+    assert_eq!(k(e), Eof);
     assert_eq!((e.line, e.col), (2, 3));
     let v = lex(b"ab\n").unwrap();
     assert_eq!((v.last().unwrap().line, v.last().unwrap().col), (2, 1));

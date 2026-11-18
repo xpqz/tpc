@@ -1,12 +1,13 @@
 mod lex_util;
 use lex_util::*;
+use tp5c::lex::Tk as RawTk;
 use Tk::*;
 
 #[test]
 fn empty_source_is_just_eof() {
     let v = lex(b"").unwrap();
     assert_eq!(v.len(), 1);
-    assert_eq!(v[0].kind, Eof);
+    assert_eq!(k(&v[0]), Eof);
     assert_eq!((v[0].line, v[0].col), (1, 1));
 }
 
@@ -87,14 +88,54 @@ fn every_reserved_word() {
 }
 
 #[test]
+fn keyword_tokens_are_kw_with_uppercase_text() {
+    for (src, text) in [
+        ("begin", "BEGIN"),
+        ("BeGiN", "BEGIN"),
+        ("implementation", "IMPLEMENTATION"),
+        ("string", "STRING"),
+        ("interrupt", "INTERRUPT"),
+    ] {
+        assert_eq!(
+            raw_kind(src),
+            (RawTk::Kw, text.as_bytes().to_vec()),
+            "{src}"
+        );
+    }
+    assert_eq!(raw_kind("Foo"), (RawTk::Ident, b"FOO".to_vec()));
+}
+
+#[test]
+fn symbol_tokens_are_sym_with_canonical_text() {
+    for (src, text) in [
+        (":=", ":="),
+        ("<>", "<>"),
+        ("(.", "["),
+        (".)", "]"),
+        ("[", "["),
+        ("]", "]"),
+        ("..", ".."),
+        ("^", "^"),
+        ("@", "@"),
+        (";", ";"),
+    ] {
+        assert_eq!(
+            raw_kind(src),
+            (RawTk::Sym, text.as_bytes().to_vec()),
+            "{src}"
+        );
+    }
+}
+
+#[test]
 fn keywords_carry_no_ident_text() {
-    assert_eq!(one("begin").kind, Begin);
+    assert_eq!(k(&one("begin")), Begin);
 }
 
 #[test]
 fn identifiers_are_uppercased() {
     let t = one("fooBar_9");
-    assert_eq!(t.kind, Ident);
+    assert_eq!(k(&t), Ident);
     assert_eq!(t.text, b"FOOBAR_9");
     assert_eq!(one("_x").text, b"_X");
     assert_eq!(one("X").text, b"X");
@@ -112,7 +153,7 @@ fn keyword_prefix_and_suffix_are_identifiers() {
         "ends", "begins", "xend", "ifx", "_end", "end_", "end1", "andy", "string1", "tO0",
     ] {
         let t = one(w);
-        assert_eq!(t.kind, Ident, "{w}");
+        assert_eq!(k(&t), Ident, "{w}");
         assert_eq!(t.text, w.to_uppercase().as_bytes());
     }
 }
@@ -122,7 +163,7 @@ fn unreserved_names_are_identifiers() {
     for w in [
         "integer", "byte", "writeln", "true", "self", "object", "private", "far", "near",
     ] {
-        assert_eq!(one(w).kind, Ident, "{w}");
+        assert_eq!(k(&one(w)), Ident, "{w}");
     }
 }
 
@@ -193,6 +234,46 @@ fn caret_after_identifier_is_dereference() {
     assert_eq!(kinds("p^.x"), [Ident, Caret, Dot, Ident]);
     assert_eq!(kinds("p^^"), [Ident, Caret, Caret]);
     assert_eq!(kinds("^integer"), [Caret, Ident]);
+    assert_eq!(
+        kinds("type P = ^Integer;"),
+        [Type, Ident, Eq, Caret, Ident, Semi]
+    );
+    assert_eq!(kinds("p: ^Word"), [Ident, Colon, Caret, Ident]);
+}
+
+#[test]
+fn caret_after_closer_is_dereference() {
+    assert_eq!(kinds("a[1]^"), [Ident, LBrack, IntLit, RBrack, Caret]);
+    assert_eq!(kinds("f(x)^"), [Ident, LParen, Ident, RParen, Caret]);
+    assert_eq!(
+        kinds("f(x)^.y"),
+        [Ident, LParen, Ident, RParen, Caret, Dot, Ident]
+    );
+    assert_eq!(kinds("p^^.x"), [Ident, Caret, Caret, Dot, Ident]);
+    assert_eq!(kinds("p^M"), [Ident, Caret, Ident]);
+}
+
+#[test]
+fn standalone_control_characters() {
+    assert_eq!(kinds("c := ^M;"), [Ident, Assign, StrLit, Semi]);
+    assert_eq!(toks("c := ^M;")[2].text, [13]);
+    assert_eq!(
+        kinds("Write(^G, 'x')"),
+        [Ident, LParen, StrLit, Comma, StrLit, RParen]
+    );
+    assert_eq!(toks("Write(^G, 'x')")[2].text, [7]);
+    assert_eq!(string("^A"), [1]);
+    assert_eq!(string("^Z"), [26]);
+    assert_eq!(string("^[^]"), [27, 29]);
+    assert_eq!(string("^M^J"), [13, 10]);
+    assert_eq!(kinds("x = ^A'b'"), [Ident, Eq, StrLit]);
+    assert_eq!(kinds("write(^G)"), [Ident, LParen, StrLit, RParen]);
+}
+
+#[test]
+fn control_character_position_is_the_caret() {
+    let v = toks("c := ^M;");
+    assert_eq!((v[2].line, v[2].col), (1, 6));
 }
 
 #[test]

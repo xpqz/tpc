@@ -21,7 +21,7 @@ fn string_case_is_preserved() {
 #[test]
 fn empty_string() {
     let t = one("''");
-    assert_eq!(t.kind, StrLit);
+    assert_eq!(k(&t), StrLit);
     assert!(t.text.is_empty());
 }
 
@@ -110,7 +110,7 @@ fn string_followed_by_other_tokens() {
 }
 
 #[test]
-fn caret_after_string_inside_expression_context_differs_from_deref() {
+fn caret_after_identifier_is_not_a_string() {
     assert_eq!(kinds("p^ A"), [Ident, Caret, Ident]);
 }
 

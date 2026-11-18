@@ -152,6 +152,6 @@ fn number_positions() {
 #[test]
 fn int_tokens_have_no_text_requirement_but_reals_keep_value() {
     let t = one("2.5");
-    assert_eq!(t.kind, RealLit);
+    assert_eq!(k(&t), RealLit);
     assert_eq!(t.real, 2.5);
 }
