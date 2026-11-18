@@ -1,0 +1,3 @@
+Mixed|100|rs/a.rs js/j.js
+Other|100|other
+TOTAL|200

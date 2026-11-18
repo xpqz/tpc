@@ -1,0 +1,4 @@
+Rust alpha|8|rs
+Pascal beta|10|pas
+JS gamma|9|js
+TOTAL|100
