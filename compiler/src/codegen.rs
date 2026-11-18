@@ -1,5 +1,6 @@
 //! Walks the checked AST and emits the module (docs/abi.md).
-//! Static data: a fixed header, the globals (`check::GLOBALS`..), then string literals.
+//! Static data: a fixed header, the globals (`check::GLOBALS`..), then the string literals that
+//! live bodies use. Bodies are emitted from a worklist (decision 14).
 use crate::ast::{Ast, Id, Kind, List, Op};
 use crate::check::Info;
 use crate::types::{Routine, SymKind, Symbol, Tag, Ty, Type};
@@ -63,21 +64,47 @@ const QUOT: u32 = 4;
 /// Index of the first user routine; the main program follows the last.
 const ROUTINES: u32 = 5;
 
-/// Module-wide numbers the bodies refer to.
+/// Module-wide numbers the bodies refer to, assigned on first reference.
 struct Layout {
-    /// Address of each string literal.
-    addr: Vec<u32>,
+    /// Address of each string literal that a live body uses.
+    addr: Vec<Option<u32>>,
+    /// The bytes of those literals, from `data_end` on.
+    lits: Vec<u8>,
+    data_end: u32,
+    /// WASM function index of each referenced routine.
+    index: Vec<Option<u32>>,
+    /// The referenced routines in index order; their bodies are emitted in this order.
+    order: Vec<u32>,
     /// WASM type of each procedural type, by `Ty` index.
     wtypes: Vec<u32>,
     /// Table index of each routine whose address is taken.
     slots: Vec<u32>,
 }
 
+impl Layout {
+    fn func(&mut self, r: u32) -> u32 {
+        if self.index[r as usize].is_none() {
+            self.index[r as usize] = Some(ROUTINES + self.order.len() as u32);
+            self.order.push(r);
+        }
+        self.index[r as usize].unwrap_or_default()
+    }
+
+    fn lit(&mut self, s: u32, bytes: &[u8]) -> u32 {
+        let at = self.data_end + self.lits.len() as u32;
+        let addr = *self.addr[s as usize].get_or_insert(at);
+        if addr == at {
+            self.lits.extend_from_slice(bytes);
+        }
+        addr
+    }
+}
+
 struct Gen<'a> {
     ast: &'a Ast,
     info: &'a Info,
     code: Code,
-    layout: &'a Layout,
+    layout: &'a mut Layout,
     /// Number of WASM locals in use: parameters, the result, declared locals, temporaries.
     locals: u32,
     /// The local holding the frame pointer, when the routine has a frame.
@@ -90,12 +117,6 @@ struct Gen<'a> {
 }
 
 pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
-    let mut lits = Vec::new();
-    let mut addr = Vec::new();
-    for s in &ast.strs {
-        addr.push(info.data_end + lits.len() as u32);
-        lits.extend_from_slice(s);
-    }
     let mut m = Module::new();
     let mut wtypes = vec![0; info.types.v.len()];
     for (i, t) in info.types.v.iter().enumerate() {
@@ -112,8 +133,12 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
             *slots.last_mut().unwrap() = 0;
         }
     }
-    let layout = Layout {
-        addr,
+    let mut layout = Layout {
+        addr: vec![None; ast.strs.len()],
+        lits: Vec::new(),
+        data_end: info.data_end,
+        index: vec![None; info.routines.len()],
+        order: Vec::new(),
         wtypes,
         slots,
     };
@@ -128,38 +153,45 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
     m.func(two, &[I32, I32, I32], write_integer());
     let three = m.ty(&[I32, I32, I32], &[I32]);
     m.func(three, &[], quotient());
-    for r in &info.routines {
-        let results: &[u8] = if r.func { &[I32] } else { &[] };
-        let ty = m.ty(&vec![I32; r.params.len() + (r.depth > 1) as usize], results);
-        let (code, locals) = body(ast, info, &layout, Some(r), r.body);
-        m.func(ty, &vec![I32; locals], code);
-    }
+    // Roots: the main program and every address-taken routine; the rest by reference.
     let Kind::Program(_, _, main) = ast.nodes[root as usize].kind else {
         unreachable!("the root is a program")
     };
-    let (code, locals) = body(ast, info, &layout, None, main);
+    let (main_code, main_locals) = body(ast, info, &mut layout, None, main);
+    for (i, r) in info.routines.iter().enumerate() {
+        if r.addressed {
+            layout.func(i as u32);
+        }
+    }
+    let mut done = 0;
+    while done < layout.order.len() {
+        let r = &info.routines[layout.order[done] as usize];
+        let results: &[u8] = if r.func { &[I32] } else { &[] };
+        let ty = m.ty(&vec![I32; r.params.len() + (r.depth > 1) as usize], results);
+        let (code, locals) = body(ast, info, &mut layout, Some(r), r.body);
+        m.func(ty, &vec![I32; locals], code);
+        done += 1;
+    }
     let ty = m.ty(&[], &[]);
-    let f = m.func(ty, &vec![I32; locals], code);
+    let f = m.func(ty, &vec![I32; main_locals], main_code);
     let stub = {
         let mut c = Code::new();
         c.op(UNREACHABLE);
         m.func(ty, &[], c)
     };
     let mut table = vec![stub];
-    table.extend(
-        info.routines
-            .iter()
-            .enumerate()
-            .filter(|(_, r)| r.addressed)
-            .map(|(i, _)| ROUTINES + i as u32),
-    );
+    for (i, r) in info.routines.iter().enumerate() {
+        if r.addressed {
+            table.push(layout.func(i as u32));
+        }
+    }
     m.table(table.len() as u32);
     m.elem(0, &table);
     m.export("main", FUNC, f);
     m.export("sp", GLOBAL, SP);
     m.export("memory", MEM, 0);
     m.data(HEADER, b"\n FALSETRUE");
-    m.data(info.data_end, &lits);
+    m.data(info.data_end, &layout.lits);
     m.finish()
 }
 
@@ -169,7 +201,7 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
 fn body(
     ast: &Ast,
     info: &Info,
-    layout: &Layout,
+    layout: &mut Layout,
     routine: Option<&Routine>,
     stmt: Id,
 ) -> (Code, usize) {
@@ -469,7 +501,8 @@ impl Gen<'_> {
             self.frame_ptr(self.depth + 1 - routine.depth);
         }
         self.push_args(args, &routine.params, &routine.byref);
-        self.code.idx(CALL, ROUTINES + r);
+        let index = self.layout.func(r);
+        self.code.idx(CALL, index);
     }
 
     /// Value arguments converted to the parameter types, `var` arguments as addresses.
@@ -524,16 +557,14 @@ impl Gen<'_> {
                 let step = if op == Op::Succ { 1 } else { -1 };
                 self.code.i32_const(step).op(I32_ADD);
             }
-            Op::Abs | Op::Sqr => {
+            Op::Abs => {
+                let index = self.layout.func(self.info.abs);
+                self.code.idx(CALL, index);
+            }
+            Op::Sqr => {
                 let t = self.new_local();
                 self.code.idx(LOCAL_SET, t);
-                if op == Op::Sqr {
-                    self.code.idx(LOCAL_GET, t).idx(LOCAL_GET, t).op(I32_MUL);
-                } else {
-                    self.code.i32_const(0).idx(LOCAL_GET, t).op(I32_SUB);
-                    self.code.idx(LOCAL_GET, t).idx(LOCAL_GET, t);
-                    self.code.i32_const(0).op(I32_LT_S).op(SELECT);
-                }
+                self.code.idx(LOCAL_GET, t).idx(LOCAL_GET, t).op(I32_MUL);
             }
             _ => {}
         }
@@ -664,10 +695,11 @@ impl Gen<'_> {
         let n = self.ast.nodes[e as usize];
         match (self.info.types.tag(n.ty), n.kind) {
             (None, Kind::StrLit(s)) => {
-                let len = self.ast.strs[s as usize].len();
+                let bytes = &self.ast.strs[s as usize];
+                let addr = self.layout.lit(s, bytes);
                 self.code
-                    .i32_const(self.layout.addr[s as usize] as i32)
-                    .i32_const(len as i32);
+                    .i32_const(addr as i32)
+                    .i32_const(bytes.len() as i32);
                 self.width(w);
                 self.code.idx(CALL, WSTR);
             }

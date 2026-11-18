@@ -1,0 +1,14 @@
+const SysK = 7;
+var SysV: Integer;
+procedure SysShow(n: Integer);
+begin
+  WriteLn('show ', n)
+end;
+function SysSquare(n: Integer): Integer;
+begin
+  SysSquare := n * n + SysK
+end;
+function AbsLong(x: LongInt): LongInt;
+begin
+  if x < 0 then AbsLong := -x else AbsLong := x
+end;
