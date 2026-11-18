@@ -168,11 +168,6 @@ const ERR: &[(&str, &str, u16, u32)] = &[
 /// TP accepts these; the compiler reports 200 (decision 6) on the given line.
 const UNSUPPORTED: &[(&str, &str, u32)] = &[
     (
-        "nested_procedure",
-        "program Prog;\nprocedure Q;\n  procedure R;\n  begin\n  end;\nbegin\nend;\nbegin\nend.",
-        3,
-    ),
-    (
         "string_result",
         "program Prog;\nfunction F: String;\nbegin\nend;\nbegin\nend.",
         2,
