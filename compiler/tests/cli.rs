@@ -91,3 +91,47 @@ fn non_utf8_source_is_read_as_bytes() {
     assert_eq!(o.status.code(), Some(1));
     assert!(err(&o).starts_with("b.pas(1,1): Error "));
 }
+
+/// Every `.pas` under `root`, found recursively.
+fn pascal_files(root: &Path, found: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            pascal_files(&path, found);
+        } else if path.extension().is_some_and(|e| e == "pas") {
+            found.push(path);
+        }
+    }
+}
+
+#[test]
+fn compiling_no_corpus_program_panics() {
+    let tests = driver::root().join("tests");
+    let mut files = Vec::new();
+    pascal_files(&tests, &mut files);
+    assert!(files.len() > 500, "found only {} programs", files.len());
+    let out = driver::scratch("guard")
+        .parent()
+        .unwrap()
+        .join("guard.wasm");
+    let mut panicked = Vec::new();
+    for file in &files {
+        let dir = file.parent().unwrap();
+        let o = tp5c(
+            dir,
+            &[
+                file.to_str().unwrap(),
+                "-o",
+                out.to_str().unwrap(),
+                "--dir",
+                dir.to_str().unwrap(),
+            ],
+        );
+        // A panic exits with 101 and prints `panicked at`; errors in the source exit 1.
+        if o.status.code() != Some(0) && o.status.code() != Some(1) || err(&o).contains("panicked")
+        {
+            panicked.push(format!("{}: {:?} {}", file.display(), o.status, err(&o)));
+        }
+    }
+    assert!(panicked.is_empty(), "{}", panicked.join("\n"));
+}
