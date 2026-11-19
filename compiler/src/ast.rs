@@ -198,6 +198,7 @@ pub enum Kind {
     SetType(Id),
 }
 
+/// The name handle of an absent name: no program header, no result type.
 pub const NO_NAME: u32 = u32::MAX;
 
 #[derive(Clone, Copy)]
