@@ -32,3 +32,13 @@ fn terminal_renders_the_grid() {
 fn worker_runs_and_stops_programs() {
     node("worker.mjs");
 }
+
+#[test]
+fn browser_key_mapping_agrees_with_the_key_table() {
+    node("key_bytes.mjs");
+}
+
+#[test]
+fn persistence_store_and_write_hook() {
+    node("persistence.mjs");
+}

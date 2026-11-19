@@ -1,6 +1,6 @@
-// Draft of host/ide.js: the two imports behind the IDE host unit (decision 40). Added to
-// `host.imports` only for the IDE program. Everything environment-specific is injected:
-//   compiler    { compile(mainName, bytes, files) } (draft/compiler.js)
+// The two imports behind the IdeHost unit (runtime/idehost.pas). Added to `host.imports` only
+// for the IDE program. Everything environment-specific is injected:
+//   compiler    { compile(mainName, bytes, files) } (compiler.js)
 //   runModule   (moduleBytes, files) -> exit code: runs a compiled program to its end, on the
 //               shared screen and keyboard, and returns how it ended (-1 when stopped)
 // Record layout of CompileResult in IDE memory (Pascal, packed, little endian): Code: Integer

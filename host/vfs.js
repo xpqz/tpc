@@ -1,9 +1,8 @@
-// File system and console input behind the host imports (contract: docs/abi.md section 8).
-// The file system is a snapshot held in memory: a program can create, rewrite and append
-// files, and none of it reaches the source of the snapshot or the next run. Both classes work
-// on Uint8Array, so they run in a browser and in Node alike.
-
-import { LF, CR } from "./terminal.js";
+// File system behind the host imports (contract: docs/abi.md section 8). It is a snapshot held
+// in memory: a program can create, rewrite and append files, and none of it reaches the source
+// of the snapshot or the next run, unless the owner asks to hear about it: `onWritten(name,
+// bytes)` is called when a file opened for writing is closed. It works on Uint8Array, so it
+// runs in a browser and in Node alike.
 
 export const RESET = 0;
 export const REWRITE = 1;
@@ -31,9 +30,10 @@ function concat(a, b) {
 
 export class Vfs {
   // `snapshot` maps file names to their bytes (a Map, or null for an empty file system).
-  constructor(snapshot) {
+  constructor(snapshot, onWritten = () => {}) {
     this.files = new Map(); // upper-case name -> { data: Uint8Array }
-    this.handles = new Map(); // handle -> { file, position, mode }
+    this.handles = new Map(); // handle -> { file, name, position, mode }
+    this.onWritten = onWritten;
     for (const [name, data] of snapshot ?? []) {
       this.files.set(name.toUpperCase(), { data: new Uint8Array(data) });
     }
@@ -55,7 +55,7 @@ export class Vfs {
     const position = mode === APPEND ? file.data.length : 0;
     let handle = 1;
     while (this.handles.has(handle)) handle++;
-    this.handles.set(handle, { file, position, mode });
+    this.handles.set(handle, { file, name: key, position, mode });
     return handle;
   }
 
@@ -80,27 +80,10 @@ export class Vfs {
   }
 
   close(handle) {
-    return this.handles.delete(handle) ? 0 : BAD_HANDLE;
-  }
-}
-
-// Console input held as bytes and split into lines on demand.
-export class LineInput {
-  constructor(bytes) {
-    this.bytes = bytes;
-    this.position = 0;
-  }
-
-  // The next line without its terminator (LF or CRLF), cut to `max` bytes; null at the end.
-  readLine(max) {
-    const text = this.bytes;
-    if (this.position >= text.length) return null;
-    let end = text.indexOf(LF, this.position);
-    const next = end === -1 ? text.length : end + 1;
-    if (end === -1) end = text.length;
-    if (end > this.position && text[end - 1] === CR && next > end) end--;
-    const line = text.slice(this.position, Math.min(end, this.position + max));
-    this.position = next;
-    return line;
+    const open = this.handles.get(handle);
+    if (open === undefined) return BAD_HANDLE;
+    this.handles.delete(handle);
+    if (open.mode !== RESET) this.onWritten(open.name, open.file.data.slice());
+    return 0;
   }
 }

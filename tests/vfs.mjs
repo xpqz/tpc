@@ -2,7 +2,8 @@
 // directory and the process stdin, and hand results back as Buffers.
 import fs from "node:fs";
 import path from "node:path";
-import { Vfs as HostVfs, LineInput } from "../host/vfs.js";
+import { Vfs as HostVfs } from "../host/vfs.js";
+import { LF, CR } from "../host/terminal.js";
 
 export { RESET, REWRITE, APPEND } from "../host/vfs.js";
 
@@ -39,6 +40,27 @@ export class Input {
     this.lines ??= new LineInput(this.buffer);
     const line = this.lines.readLine(max);
     return line === null ? null : Buffer.from(line);
+  }
+}
+
+// Splits console input held as bytes into lines on demand.
+class LineInput {
+  constructor(bytes) {
+    this.bytes = bytes;
+    this.position = 0;
+  }
+
+  // The next line without its terminator (LF or CRLF), cut to `max` bytes; null at the end.
+  readLine(max) {
+    const text = this.bytes;
+    if (this.position >= text.length) return null;
+    let end = text.indexOf(LF, this.position);
+    const next = end === -1 ? text.length : end + 1;
+    if (end === -1) end = text.length;
+    if (end > this.position && text[end - 1] === CR && next > end) end--;
+    const line = text.slice(this.position, Math.min(end, this.position + max));
+    this.position = next;
+    return line;
   }
 }
 

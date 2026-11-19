@@ -16,7 +16,7 @@ else console.log("SKIP firefox: not installed");
 
 let failed = 0;
 for (const browser of browsers) {
-  for (const name of ["stop", "keys", "latency", "snake"]) {
+  for (const name of ["stop", "keys", "latency", "snake", "ide"]) {
     console.log(`[${browser}] ${name}`);
     const run = spawnSync("node", [new URL(`${name}.mjs`, import.meta.url).pathname], {
       encoding: "utf8", timeout: 120000, env: { ...process.env, BROWSER: browser },
