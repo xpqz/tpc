@@ -142,13 +142,16 @@ pub enum Kind {
     ConstDecl(u32, Id),
     /// A procedure or function, stamped after its header. `params` is None when the header
     /// has no parameter list, `result` is `NO_NAME` when it has no result type, `block` is
-    /// None for a `forward` declaration.
+    /// None for a `forward` or `external` declaration. `external`, allowed only in the runtime
+    /// source, is the name of the host import: the string after the directive, else the
+    /// routine's own name.
     Routine {
         name: u32,
         params: Option<List>,
         result: u32,
         is_function: bool,
         block: Option<Id>,
+        external: Option<u32>,
     },
     /// `by_ref` is set for a `var` parameter.
     Param {

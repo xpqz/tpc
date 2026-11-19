@@ -76,3 +76,6 @@ function RangeChk(v, lo, hi: LongInt): LongInt;
 begin
   RangeChk := v
 end;
+procedure HostWrite(fd, address, count: LongInt); external 'write';
+procedure RtError(code: LongInt); external;
+function Fmt_Real(x: Real; width, decimals, buffer: LongInt): LongInt; external;

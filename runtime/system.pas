@@ -5,11 +5,23 @@
   Copy, Pos, UpCase, ...). The others are helpers that the compiler calls on its own, found by
   name after this part is checked (compiler/src/check.rs, `Helper`): AbsLong, RangeChk, StrCat,
   StrCmp, StrAssign, StrInt, ValLong, ValReal, StrDelete, StrInsert, SetOp, SetAdd, SetIn,
-  SetCmp, HeapGet, HeapPut, HeapMark, HeapRelease. HeapOrg is also found by name.
+  SetCmp, HeapGet, HeapPut, HeapMark, HeapRelease, HostWrite, RtError, Fmt_Real. HeapOrg is
+  also found by name.
+
+  A routine declared `external` has no body: it is a WASM import from module `host`, named
+  like the routine in lower case or by the string after `external`, and present in a program
+  only if the program reaches it (docs/abi.md section 8). The compiler's own output code calls
+  HostWrite, RtError and Fmt_Real directly; Write and WriteLn are expanded by the compiler,
+  not written here. Only the runtime sources may use `external`.
 
   Strings are length-prefixed byte arrays, so a `var` parameter of type String accepts a string
   of any declared size and the helpers read and write the length in byte 0. A function that
   returns a String receives the address of its result as a hidden first parameter. }
+
+{ Host imports. HostWrite cannot be called Write, a predeclared name, so it names its import. }
+procedure HostWrite(fd, address, count: LongInt); external 'write';
+procedure RtError(code: LongInt); external;
+function Fmt_Real(x: Real; width, decimals, buffer: LongInt): LongInt; external;
 
 var
   ExitCode: Integer;
