@@ -10,9 +10,12 @@ export const REPO = path.resolve(import.meta.dirname, "../../..");
 export const CHROME =
   process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 export const chromeInstalled = () => fs.existsSync(CHROME);
+const HANG_GUARD_MS = 90000;
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function until(what, probe, ms = 15000) {
+// Polls `probe` until it returns something truthy. The deadline is only a hang guard for a
+// condition that can no longer become true; no test asserts on it.
+async function until(what, probe, ms = HANG_GUARD_MS) {
   const start = Date.now();
   for (;;) {
     const value = await probe();
@@ -20,6 +23,26 @@ async function until(what, probe, ms = 15000) {
     if (Date.now() - start > ms) throw new Error(`timed out waiting for ${what}`);
     await sleep(20);
   }
+}
+
+// Resolves with the first match of `pattern` in the child's output stream (`stream` is "stdout"
+// or "stderr"): the browser or server announces its endpoint once it is really listening, so
+// start-up waits on that announcement instead of probing. Rejects if the child exits first.
+function announced(child, stream, pattern, what) {
+  return new Promise((resolve, reject) => {
+    let seen = "";
+    const guard = setTimeout(() => reject(new Error(`timed out waiting for ${what}`)), HANG_GUARD_MS);
+    child[stream].setEncoding("utf8");
+    child[stream].on("data", (chunk) => {
+      seen += chunk;
+      const match = pattern.exec(seen);
+      if (match) { clearTimeout(guard); resolve(match); }
+    });
+    child.once("exit", (code) => {
+      clearTimeout(guard);
+      reject(new Error(`${what}: process exited (${code}) before it was ready:\n${seen}`));
+    });
+  });
 }
 
 // One WebSocket, JSON messages with ids; `send` resolves with the reply's result.
@@ -52,15 +75,9 @@ function connect(url) {
 async function startServer() {
   const port = 20000 + Math.floor(Math.random() * 20000);
   const server = spawn("node", [path.join(REPO, "tools/serve.mjs"), String(port)], {
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "ignore"],
   });
-  await until("the dev server", async () => {
-    try {
-      return (await fetch(`http://localhost:${port}/host/index.html`)).ok;
-    } catch {
-      return false;
-    }
-  });
+  await announced(server, "stdout", /http:\/\/localhost/, "the dev server");
   return { port, stop: () => server.kill() };
 }
 
@@ -71,11 +88,10 @@ async function startChrome(profile) {
     CHROME,
     ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
      "--no-first-run", "--no-default-browser-check", "--disable-gpu", "about:blank"],
-    { stdio: "ignore" },
+    { stdio: ["ignore", "ignore", "pipe"] },
   );
-  const portFile = path.join(profile, "DevToolsActivePort");
-  const port = await until("Chrome's debugging port", () =>
-    fs.existsSync(portFile) ? fs.readFileSync(portFile, "utf8").split("\n")[0] : null);
+  const [, port] = await announced(chrome, "stderr", /DevTools listening on ws:\/\/[^:\s]+:(\d+)\//,
+    "Chrome's debugging port");
   return { port, stop: () => chrome.kill() };
 }
 
@@ -123,12 +139,13 @@ async function firefoxBackend(profile) {
     process.env.FIREFOX ?? FIREFOX,
     ["--headless", "--no-remote", "--remote-debugging-port", String(port), "--profile", profile,
      "about:blank"],
-    { stdio: "ignore" },
+    { stdio: ["ignore", "ignore", "pipe"] },
   );
-  const bidi = await until("Firefox's BiDi socket", async () => {
-    const socket = connect(`ws://localhost:${port}/session`);
-    return socket.opened.then(() => socket, () => null);
-  });
+  // Firefox prints this line only once the BiDi server accepts connections.
+  const [, host, listening] = await announced(firefox, "stderr",
+    /WebDriver BiDi listening on ws:\/\/([^:\s]+):(\d+)/, "Firefox's BiDi socket");
+  const bidi = connect(`ws://${host}:${listening}/session`);
+  await bidi.opened;
   await bidi.send("session.new", { capabilities: {} });
   const { contexts } = await bidi.send("browsingContext.getTree");
   const context = contexts[0].context;
