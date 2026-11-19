@@ -169,7 +169,7 @@ EXPECTED=$(cat <<EOT
 2500|ide
 350|$SRC/wasm.rs
 450|$SRC/lex.rs
-500|host
+600|host
 EOT
 )
 # Paths within an entry are compared as sorted sets; entries sorted as strings.
@@ -181,8 +181,8 @@ if [ -f "$B" ]; then
         while IFS='|' read -r _ lim paths; do
             printf '%s|%s\n' "$lim" "$(printf '%s\n' $paths | sort | tr '\n' ' ')"
         done | sort)
-    if [ "$ACTUAL" = "$EXPECTED" ]; then pass "budget.txt: components, limits and paths match plan"
-    else fail "budget.txt: components, limits and paths match plan" \
+    if [ "$ACTUAL" = "$EXPECTED" ]; then pass "budget.txt: components, limits and paths match plan (with decision 45)"
+    else fail "budget.txt: components, limits and paths match plan (with decision 45)" \
         "expected:
 $EXPECTED
 actual:
@@ -196,7 +196,7 @@ $ACTUAL"; fi
     if [ "$sum" -eq 14600 ]; then pass "budget.txt: component limits sum to 14600"
     else fail "budget.txt: component limits sum to 14600" "sum $sum"; fi
 else
-    fail "budget.txt: components, limits and paths match plan" "$B missing"
+    fail "budget.txt: components, limits and paths match plan (with decision 45)" "$B missing"
     fail "budget.txt: total is 15000" "$B missing"
     fail "budget.txt: component limits sum to 14600" "$B missing"
 fi
