@@ -1,7 +1,7 @@
 //! Batch drivers for tests/lang, tests/rt and tests/neg (decision 7). Each returns one message per
 //! failing program so a run reports every failure.
 #![allow(dead_code)]
-use crate::common::CALL;
+use crate::common::{CALL, I32_LT_S, I32_SUB, LOCAL_GET, LOCAL_SET};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -53,20 +53,21 @@ pub fn real_compile(src: &Path, out: &Path) -> Res {
     res(o.unwrap())
 }
 
-/// Stand-in compiler for driver fixtures. A source starting `#error N LINE COL` fails with
-/// that diagnostic, `#raw TEXT` fails with TEXT on stderr; any other source becomes a module that prints the source text.
+/// Stand-in compiler for driver fixtures. A source starting `#error N LINE COL [FILE]` fails
+/// with that diagnostic (in FILE when given, else in the source), `#raw TEXT` fails with TEXT
+/// on stderr. A source whose first line is `#do` becomes a module that runs one directive per
+/// following line: `#file NAME` prints what `fs_read` returns for the file NAME (runtime
+/// error `-h` when `fs_open` fails), `#stdin` prints the next `readline` result and `|`,
+/// `#rt N` calls `rterror(N)`. Any other source becomes a module that prints the source text.
 pub fn fake_compile(src: &Path, out: &Path) -> Res {
     let text = std::fs::read(src).unwrap();
     if let Some(rest) = text.strip_prefix(b"#error ") {
         let spec = String::from_utf8_lossy(rest);
         let f: Vec<&str> = spec.lines().next().unwrap().split(' ').collect();
-        let stderr = format!(
-            "{}({},{}): Error {}: fake\n",
-            src.display(),
-            f[1],
-            f[2],
-            f[0]
-        );
+        let file = f
+            .get(3)
+            .map_or(src.display().to_string(), |n| n.to_string());
+        let stderr = format!("{}({},{}): Error {}: fake\n", file, f[1], f[2], f[0]);
         return Res { code: 1, stderr };
     }
     if let Some(rest) = text.strip_prefix(b"#raw ") {
@@ -75,25 +76,96 @@ pub fn fake_compile(src: &Path, out: &Path) -> Res {
             stderr: String::from_utf8_lossy(rest).into(),
         };
     }
-    let mut m = Module::new();
-    let write = m.ty(&[I32, I32, I32], &[]);
-    let main = m.ty(&[], &[]);
-    m.import_func("host", "write", write);
-    m.memory(1);
-    m.data(256, &text);
-    let mut c = Code::new();
-    c.i32_const(1)
-        .i32_const(256)
-        .i32_const(text.len() as i32)
-        .idx(CALL, 0);
-    let f = m.func(main, &[], c);
-    m.export("memory", MEM, 0);
-    m.export("main", FUNC, f);
-    std::fs::write(out, m.finish()).unwrap();
+    std::fs::write(out, fake_module(&text)).unwrap();
     Res {
         code: 0,
         stderr: String::new(),
     }
+}
+
+fn fake_module(text: &[u8]) -> Vec<u8> {
+    const WRITE: u32 = 0;
+    const RTERROR: u32 = 1;
+    const READLINE: u32 = 2;
+    const FS_OPEN: u32 = 3;
+    const FS_READ: u32 = 4;
+    const FS_CLOSE: u32 = 5;
+    const BUFFER: i32 = 4096;
+    let mut m = Module::new();
+    let write = m.ty(&[I32, I32, I32], &[]);
+    let rterror = m.ty(&[I32], &[]);
+    let readline = m.ty(&[I32, I32], &[I32]);
+    let file_op = m.ty(&[I32, I32, I32], &[I32]);
+    let close = m.ty(&[I32], &[I32]);
+    m.import_func("host", "write", write);
+    m.import_func("host", "rterror", rterror);
+    m.import_func("host", "readline", readline);
+    m.import_func("host", "fs_open", file_op);
+    m.import_func("host", "fs_read", file_op);
+    m.import_func("host", "fs_close", close);
+    let main = m.ty(&[], &[]);
+    m.memory(1);
+    let mut data = Vec::new();
+    let mut at = |bytes: &[u8]| {
+        let ptr = 256 + data.len() as i32;
+        data.extend_from_slice(bytes);
+        (ptr, bytes.len() as i32)
+    };
+    let mut c = Code::new();
+    let source = String::from_utf8_lossy(text).into_owned();
+    match source.strip_prefix("#do\n") {
+        None => {
+            let (ptr, len) = at(text);
+            c.i32_const(1)
+                .i32_const(ptr)
+                .i32_const(len)
+                .idx(CALL, WRITE);
+        }
+        Some(directives) => {
+            let (bar, _) = at(b"|");
+            for line in directives.lines() {
+                let (word, arg) = line.split_once(' ').unwrap_or((line, ""));
+                match word {
+                    "#file" => {
+                        let (ptr, len) = at(arg.as_bytes());
+                        c.i32_const(ptr)
+                            .i32_const(len)
+                            .i32_const(0)
+                            .idx(CALL, FS_OPEN);
+                        c.idx(LOCAL_SET, 0);
+                        c.idx(LOCAL_GET, 0).i32_const(0).op(I32_LT_S).if_(VOID);
+                        c.i32_const(0)
+                            .idx(LOCAL_GET, 0)
+                            .op(I32_SUB)
+                            .idx(CALL, RTERROR);
+                        c.end();
+                        c.i32_const(1).i32_const(BUFFER);
+                        c.idx(LOCAL_GET, 0)
+                            .i32_const(BUFFER)
+                            .i32_const(255)
+                            .idx(CALL, FS_READ);
+                        c.idx(CALL, WRITE);
+                        c.idx(LOCAL_GET, 0).idx(CALL, FS_CLOSE).op(0x1A);
+                    }
+                    "#stdin" => {
+                        c.i32_const(1).i32_const(BUFFER);
+                        c.i32_const(BUFFER).i32_const(255).idx(CALL, READLINE);
+                        c.idx(CALL, WRITE);
+                        c.i32_const(1).i32_const(bar).i32_const(1).idx(CALL, WRITE);
+                    }
+                    "#rt" => {
+                        c.i32_const(arg.parse().unwrap()).idx(CALL, RTERROR);
+                    }
+                    _ => panic!("unknown directive {line}"),
+                }
+            }
+        }
+    }
+    let f = m.func(main, &[I32], c);
+    m.data(256, &data);
+    m.export("memory", MEM, 0);
+    m.export("main", FUNC, f);
+    m.finish()
 }
 
 /// Sorted program stems in `dir` (files `STEM.pas`).

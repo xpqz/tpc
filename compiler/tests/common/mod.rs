@@ -28,6 +28,17 @@ pub const F64_ADD: u8 = 0xA0;
 pub const F64_MUL: u8 = 0xA2;
 pub const F64_CONVERT_I32_S: u8 = 0xB7;
 
+/// Size target for the hello-world module (docs/size.md); every size-guard test uses it.
+pub const HELLO_SIZE_LIMIT: usize = 2048;
+
+pub fn assert_hello_fits(wasm: &[u8]) {
+    assert!(
+        wasm.len() <= HELLO_SIZE_LIMIT,
+        "hello-world is {} bytes, limit {HELLO_SIZE_LIMIT}",
+        wasm.len()
+    );
+}
+
 /// Section with id and exact content bytes (content length < 128).
 pub fn section(id: u8, content: &[u8]) -> Vec<u8> {
     assert!(content.len() < 128);

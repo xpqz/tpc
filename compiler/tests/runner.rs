@@ -50,7 +50,7 @@ const HOST: &[(&str, &[u8], &[u8])] = &[
     ("fs_open", &[I32, I32, I32], &[I32]),
     ("fs_read", &[I32, I32, I32], &[I32]),
     ("fs_write", &[I32, I32, I32], &[I32]),
-    ("fs_close", &[I32, I32, I32], &[I32]),
+    ("fs_close", &[I32], &[I32]),
     ("fmt_real", &[F64, I32, I32, I32], &[I32]),
     ("halt", &[I32], &[]),
     ("rterror", &[I32], &[]),

@@ -111,3 +111,31 @@ fn failing_compile_is_accepted_for_pending_programs() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn aux_directory_is_available_to_the_program() {
+    assert_eq!(lang("aux_file"), Vec::<String>::new());
+}
+
+#[test]
+fn program_does_not_see_files_that_are_not_in_its_aux_directory() {
+    let f = lang("aux_missing");
+    assert_eq!(f.len(), 1, "{f:?}");
+    assert!(has(&f, &["p: run exited 1", "Runtime error 002"]), "{f:?}");
+}
+
+#[test]
+fn input_file_is_the_program_stdin() {
+    assert_eq!(lang("stdin"), Vec::<String>::new());
+}
+
+#[test]
+fn runtime_error_programs_get_their_aux_directory_and_input() {
+    for dir in ["rt/aux_file", "rt/stdin"] {
+        assert_eq!(
+            check_rt(&fixture(dir), &fake_compile),
+            Vec::<String>::new(),
+            "{dir}"
+        );
+    }
+}
