@@ -1,0 +1,3 @@
+# Data files of test fixtures keep their bytes (CRLF included).
+*.TXT -text
+*.DAT -text
