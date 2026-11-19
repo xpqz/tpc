@@ -156,6 +156,9 @@ struct Reached {
     routines: Vec<u32>,
     imports: Vec<u32>,
     builtins: Builtins,
+    /// Whether a body calls through each procedural type, by `Ty` index; only those types get
+    /// a WASM type.
+    called_types: Vec<bool>,
 }
 
 /// WASM function numbers: the imports first, in the order they were reached (`write` always
@@ -227,8 +230,10 @@ struct Layout {
     external: Vec<bool>,
     builtins: Builtins,
     indexes: Indexes,
-    /// WASM type of each procedural type, by `Ty` index.
+    /// WASM type of each procedural type that is called through, by `Ty` index.
     wasm_types: Vec<u32>,
+    /// Marking: whether a body calls through each procedural type, by `Ty` index.
+    called_types: Vec<bool>,
     /// Table index of each routine whose address is taken, 0 for the others.
     table_slots: Vec<u32>,
 }
@@ -249,6 +254,7 @@ impl Layout {
             builtins: Builtins::default(),
             indexes: Indexes::new(0, None, 0, Builtins::default()),
             wasm_types: vec![0; info.types.count()],
+            called_types: vec![false; info.types.count()],
             table_slots: vec![0; info.routines.len()],
         }
     }
@@ -308,6 +314,12 @@ impl Layout {
         } else {
             self.indexes.first_routine + position
         }
+    }
+
+    /// The WASM type of the procedural type `ty`; asking marks it as called through.
+    fn procedural_type_index(&mut self, ty: Ty) -> u32 {
+        self.called_types[ty.0 as usize] = true;
+        self.wasm_types[ty.0 as usize]
     }
 
     /// The function numbers of the built-in functions; asking marks the function as needed.
@@ -406,6 +418,7 @@ fn mark(ast: &Ast, info: &Info, root: Id) -> Reached {
         routines: layout.reached,
         imports: layout.imports,
         builtins: layout.builtins,
+        called_types: layout.called_types,
     }
 }
 
@@ -430,11 +443,11 @@ fn generate_bodies(ast: &Ast, info: &Info, root: Id, layout: &mut Layout) -> (Bo
     (main, routines)
 }
 
-/// The WASM function type of each procedural type, registered in `m`.
-fn register_procedural_types(m: &mut Module, info: &Info) -> Vec<u32> {
+/// The WASM function type of each procedural type that is called through, registered in `m`.
+fn register_procedural_types(m: &mut Module, info: &Info, called: &[bool]) -> Vec<u32> {
     let mut wasm_types = vec![0; info.types.count()];
     for (i, t) in info.types.iter().enumerate() {
-        if let Type::Proc { params, result } = t {
+        if let (true, Type::Proc { params, result }) = (called[i], t) {
             let results: &[u8] = if *result == Ty::NONE { &[] } else { &[I32] };
             wasm_types[i] = m.ty(&vec![I32; params.len()], results);
         }
@@ -445,7 +458,7 @@ fn register_procedural_types(m: &mut Module, info: &Info) -> Vec<u32> {
 /// The emit phase: the module with the routines found by `mark`, numbered.
 fn emit(ast: &Ast, info: &Info, root: Id, reached: &Reached) -> Vec<u8> {
     let mut m = Module::new();
-    let wasm_types = register_procedural_types(&mut m, info);
+    let wasm_types = register_procedural_types(&mut m, info, &reached.called_types);
     let mut layout = Layout::for_emitting(ast, info, reached, wasm_types);
     emit_imports(&mut m, ast, info, reached);
     m.memory(PAGES);
@@ -1386,8 +1399,8 @@ impl Gen<'_> {
         let (params, _) = self.info.types.sig(ty).expect("procedural callee");
         self.push_args(args, &params, RealArgs::ByAddress);
         self.expr(callee);
-        self.code
-            .call_indirect(self.layout.wasm_types[ty.0 as usize]);
+        let wasm_type = self.layout.procedural_type_index(ty);
+        self.code.call_indirect(wasm_type);
     }
 
     /// A unary operator or intrinsic of result type `ty`.
