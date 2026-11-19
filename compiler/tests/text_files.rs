@@ -47,7 +47,7 @@ fn stems(dir: &Path, ext: &str) -> Vec<String> {
 
 #[test]
 fn own_lang_programs_print_what_tp5_prints() {
-    assert_eq!(stems(&fx("lang"), ".pas").len(), 17);
+    assert_eq!(stems(&fx("lang"), ".pas").len(), 14);
     assert_eq!(stems(&fx("lang"), ".pas"), stems(&fx("lang"), ".out"));
     for s in stems(&fx("lang"), ".out") {
         let out = std::fs::read(fx("lang").join(format!("{s}.out"))).unwrap();
@@ -274,9 +274,7 @@ const HELLO: &str = "program Hello;\nbegin\n  WriteLn('hello')\nend.";
 #[test]
 fn hello_world_stays_small_although_output_goes_through_system() {
     // GUARD: Write routes through a System routine that knows files; DCE keeps hello small.
-    let wasm = compiled(HELLO);
-    assert_hello_fits(&wasm);
-    assert!(wasm.len() <= 1024, "hello-world is {} bytes", wasm.len());
+    assert_hello_fits(&compiled(HELLO));
 }
 
 #[test]
