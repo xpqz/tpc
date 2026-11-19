@@ -684,3 +684,14 @@ still comes from TP 5.0. It counts against the runtime budget (at most 130 lines
 nothing to System, so programs that declare these names themselves are unaffected.
 Rejected: adding them to System (not TP, and would clash with programs' own declarations);
 a compiler-side intrinsic set (costs Rust lines, cannot be checked by the oracle).
+
+## 54. Erase and Rename stay omitted (#99)
+
+**Decision.** `Erase(f)` and `Rename(f, name)` are not provided. They need a delete and a
+rename in the host file system (docs/abi.md section 8 has open, read, write and close only),
+which means new host imports, `Vfs` methods and test-runner adapters. Host glue is 600 of 600,
+so there is no line-neutral way to add them (D49).
+**Reason.** Everything else in the issue is runtime Pascal and one intrinsic (`Addr`). If the
+lead later moves host lines to the glue, the contract needs `fs_delete(namePtr, nameLen)` and
+`fs_rename(oldPtr, oldLen, newPtr, newLen)` returning 0 or a negated DOS error (2 file not
+found, 5 access denied for an open file), and `System` needs the two routines on a `Text`.
