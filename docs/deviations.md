@@ -144,3 +144,9 @@ scanned. The rows below are what remains.
 An include whose name has a directory part (`{$I c:\ra\x.inc}`) that cannot be found is error 14
 as in TP when the directory is missing; TP says 15 when the directory exists and the file does
 not, which a flat file table cannot tell apart (14 is reported).
+
+## Additions (#100)
+
+| # | Deviation | TP5 | This compiler | Notes |
+|---|---|---|---|---|
+| D47 | The `Utils` unit | No such unit: `uses Utils` is error 15 unless the program supplies its own `UTILS.PAS` | An embedded unit (`runtime/utils.pas`) with `Power`, `Tan`, `ArcSin`, `ArcCos`, `Log10`, `Hex`, `TrimLeft`, `TrimRight`, `Trim`, `UpperCase`, `LowerCase`, `Min`, `Max`, `LeadingZero` | An addition, not a change of TP behaviour (decision 53). The unit is plain TP 5.0 Pascal, so the oracle compiles the same file (`NAME.dirs` names `runtime/utils.pas`) and the tests `tests/*/utils_*` have TP 5.0 output. A program that has its own `UTILS.PAS` next to it still gets the embedded unit, as for `Crt` and `Dos` |
