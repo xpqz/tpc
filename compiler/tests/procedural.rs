@@ -132,9 +132,7 @@ const UNSUPPORTED: &[(&str, &str, u32)] =
     &[("other_directive", "program Prog;\n{$B+}\nbegin\nend.", 2)];
 
 fn tmp_dir() -> PathBuf {
-    let d = root().join("tmp/procedural");
-    std::fs::create_dir_all(&d).unwrap();
-    d
+    crate::common::fresh_dir("procedural")
 }
 
 /// Copies `names` with the given extensions into a fresh directory (no PENDING file).

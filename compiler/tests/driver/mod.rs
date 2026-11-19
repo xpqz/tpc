@@ -5,7 +5,6 @@ use crate::common::{CALL, I32_LT_S, I32_SUB, LOCAL_GET, LOCAL_SET};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU32, Ordering};
 use tp5c::wasm::*;
 
 pub struct Res {
@@ -26,15 +25,9 @@ pub fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// A path inside a directory no other call has used (`common::fresh_dir`).
 pub fn scratch(name: &str) -> PathBuf {
-    static N: AtomicU32 = AtomicU32::new(0);
-    let dir = root().join("tmp/driver").join(format!(
-        "{}-{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::SeqCst)
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir.join(name)
+    crate::common::fresh_dir("driver").join(name)
 }
 
 fn res(o: std::process::Output) -> Res {

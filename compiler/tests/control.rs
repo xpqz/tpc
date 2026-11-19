@@ -276,9 +276,7 @@ const ERR: &[(&str, &str, u16, u32)] = &[
 ];
 
 fn tmp_dir() -> PathBuf {
-    let d = root().join("tmp/integers");
-    std::fs::create_dir_all(&d).unwrap();
-    d
+    crate::common::fresh_dir("integers")
 }
 
 /// Copies `names` with the given extensions into a fresh directory (no PENDING file).

@@ -18,9 +18,7 @@ fn aux_dir() -> PathBuf {
 }
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = root().join("tmp/runner_files");
-    std::fs::create_dir_all(&dir).unwrap();
-    dir.join(name)
+    fresh_dir("runner_files").join(name)
 }
 
 // Import indices, in the order `module` declares them.

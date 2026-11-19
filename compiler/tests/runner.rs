@@ -9,9 +9,7 @@ fn root() -> PathBuf {
 }
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = root().join("tmp/runner");
-    std::fs::create_dir_all(&dir).unwrap();
-    dir.join(name)
+    fresh_dir("runner").join(name)
 }
 
 fn runner(args: &[&std::ffi::OsStr]) -> Output {

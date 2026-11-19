@@ -178,9 +178,7 @@ console.log(sp0 + ' ' + sp.value + ' ' + seen.join(','));";
 const TOP: u32 = 16 * 65536;
 
 fn tmp_dir() -> PathBuf {
-    let d = root().join("tmp/nested");
-    std::fs::create_dir_all(&d).unwrap();
-    d
+    crate::common::fresh_dir("nested")
 }
 
 /// Copies `names` with the given extensions into a fresh directory (no PENDING file).

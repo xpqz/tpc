@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 pub const HEADER: [u8; 8] = [0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00];
 
@@ -98,4 +100,26 @@ pub fn node(js: &str, wasm: &[u8]) -> String {
 
 pub fn validates(wasm: &[u8]) -> bool {
     node("console.log(WebAssembly.validate(b))", wasm).trim() == "true"
+}
+
+/// A new, empty directory `tmp/KIND/PID-COUNTER` at the repository root, used by exactly one
+/// caller. Process ids are reused, so a directory left by an earlier process can carry the
+/// same name; `create_dir` fails on an existing directory and the counter moves on, so no
+/// directory is ever shared and none is ever cleared.
+pub fn fresh_dir(kind: &str) -> PathBuf {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tmp")
+        .join(kind);
+    std::fs::create_dir_all(&base).unwrap();
+    loop {
+        let n = NEXT.fetch_add(1, Ordering::SeqCst);
+        let dir = base.join(format!("{}-{n}", std::process::id()));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return dir,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => panic!("{}: {e}", dir.display()),
+        }
+    }
 }
