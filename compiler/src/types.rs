@@ -190,6 +190,7 @@ pub enum Intrinsic {
     Mark,
     Release,
     RunError,
+    Halt,
     Round,
     Trunc,
     Sqrt,
