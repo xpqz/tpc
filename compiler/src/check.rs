@@ -1009,14 +1009,14 @@ impl Cx<'_> {
     }
 
     /// An argument of a `var` parameter of type `ty`: a variable of that very type. `at` is
-    /// the call.
-    fn var_arg(&mut self, at: Id, arg: Id, ty: Ty) -> R<()> {
-        self.var_arg_of(at, arg, &[ty])
+    /// the call, `origin` the routine's.
+    fn var_arg(&mut self, at: Id, arg: Id, ty: Ty, origin: Origin) -> R<()> {
+        self.var_arg_of(at, arg, &[ty], origin)
     }
 
     /// Like `var_arg`, for a parameter that takes a variable of any of the types `tys`; the
     /// variable is passed by address, so the types must have the same size.
-    fn var_arg_of(&mut self, at: Id, arg: Id, tys: &[Ty]) -> R<()> {
+    fn var_arg_of(&mut self, at: Id, arg: Id, tys: &[Ty], origin: Origin) -> R<()> {
         if let Some(error) = self.var_arg_error(arg) {
             return Err(self.err(arg, error));
         }
@@ -1024,7 +1024,7 @@ impl Cx<'_> {
             Kind::Name(name) if self.with_field(name).is_none() => {
                 let (sym, symbol) = self.resolve(arg, name)?;
                 if !tys.contains(&symbol.ty) {
-                    return Err(self.var_mismatch(at, tys[0]));
+                    return Err(self.var_mismatch(at, tys[0], origin));
                 }
                 self.symbols.capture(sym, true);
                 self.ast.resolve(arg, Kind::Var(sym), symbol.ty);
@@ -1036,7 +1036,7 @@ impl Cx<'_> {
                     self.expr(arg)?;
                 }
                 if !tys.contains(&self.ast.ty(arg)) {
-                    return Err(self.var_mismatch(at, tys[0]));
+                    return Err(self.var_mismatch(at, tys[0], origin));
                 }
             }
         }
@@ -1432,7 +1432,7 @@ impl Cx<'_> {
                 return Err(self.err(at, code::RIGHT_PAREN_EXPECTED));
             }
             if param.by_ref {
-                self.var_arg(at, arg, param.ty)?;
+                self.var_arg(at, arg, param.ty, origin)?;
             } else if self.types.sig(param.ty).is_some() {
                 self.proc_value(at, param.ty, arg)?;
             } else {
@@ -1999,9 +1999,30 @@ impl Cx<'_> {
     fn addr_call(&mut self, at: Id, args: List) -> R<(Kind, Ty)> {
         let items = self.ast.items_vec(args);
         self.expect_arg_count(at, items.len(), 1, 1)?;
+        // TP reads a variable reference and then expects `)`: an argument that starts with one
+        // and continues (`Addr(a + 1)`) is a missing parenthesis, any other non-variable is 20.
+        let is_binary = matches!(self.ast.kind(items[0]), Kind::Binary { .. });
+        if is_binary && self.starts_with_reference(items[0]) {
+            return Err(self.err(items[0], code::RIGHT_PAREN_EXPECTED));
+        }
         let address = self.ast.typed(Kind::AddrOf(items[0]), Ty::POINTER, at);
         self.expr(address)?;
         Ok((self.ast.kind(address), Ty::POINTER))
+    }
+
+    /// Whether the leftmost operand of `e` is a name, element, field, dereference or call.
+    fn starts_with_reference(&self, e: Id) -> bool {
+        match self.ast.kind(e) {
+            Kind::Binary { left, .. } => self.starts_with_reference(left),
+            kind => matches!(
+                kind,
+                Kind::Name(_)
+                    | Kind::Index { .. }
+                    | Kind::Field(..)
+                    | Kind::Deref(_)
+                    | Kind::Call(..)
+            ),
+        }
     }
 
     /// `SizeOf(type name or variable)`, a constant.
@@ -2159,9 +2180,10 @@ impl Cx<'_> {
         self.ast.list(&[input])
     }
 
-    /// The error for a `var` argument of type other than `ty`: a file is asked for by name.
-    fn var_mismatch(&self, at: Id, ty: Ty) -> Diag {
-        let wrong_file = self.types.is_file(ty);
+    /// The error for a `var` argument of type other than `ty`. TP names the missing file only
+    /// for its own file routines (`Reset`, `Close`, ...); any other routine gets a type mismatch.
+    fn var_mismatch(&self, at: Id, ty: Ty, origin: Origin) -> Diag {
+        let wrong_file = origin == Origin::System && self.types.is_file(ty);
         let error = if wrong_file {
             code::FILE_VARIABLE_EXPECTED
         } else {
@@ -2294,7 +2316,7 @@ impl Cx<'_> {
             .map_err(|code| self.err(target, code))?;
         self.expr(source)?;
         self.argument_assignable(at, Ty::STRING, source, Origin::System)?;
-        self.var_arg_of(at, error_code, &[Ty::INTEGER, Ty::WORD])
+        self.var_arg_of(at, error_code, &[Ty::INTEGER, Ty::WORD], Origin::System)
             .map_err(|d| Diag {
                 code: if d.code == code::TYPE_MISMATCH {
                     code::INTEGER_VARIABLE_EXPECTED
@@ -2399,7 +2421,7 @@ impl Cx<'_> {
     fn set_text_buf(&mut self, at: Id, args: List) -> R<Kind> {
         let items = self.ast.items_vec(args);
         self.expect_arg_count(at, items.len(), 2, 3)?;
-        self.var_arg(at, items[0], self.types.text)?;
+        self.var_arg(at, items[0], self.types.text, Origin::System)?;
         self.address_of_variable(at, items[1])?;
         if let Some(&size) = items.get(2) {
             self.byte_count(at, size)?;
