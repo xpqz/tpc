@@ -11,9 +11,19 @@
   Every operation takes 0-based screen coordinates; GotoXY and WhereX count from 1 inside the
   window.
 
+  Why the state is kept here and not in the host (decision 39): WhereX, WhereY, WindMin and
+  TextAttr are plain variables a program reads without a host call, and the host stays a store
+  of cells that any front end (browser canvas, test dump) can show.
+
   The initialisation hooks Crt into System's console (ConsoleHooked): from then on Write and
   WriteLn draw on the window, and ReadLn reads a line from the keyboard with its own editing:
-  Backspace erases the last character, Esc the whole line, extended keys are ignored. }
+  Backspace erases the last character, Esc the whole line, extended keys are ignored.
+
+  The path of a Write: the compiler expands it to TextOut calls, System's ConsoleWrite collects
+  the bytes until the end of the statement (TextFlush), then ConsoleOut (DrawBytes here) draws
+  them one by one (DrawChar) with `screen` calls. The path of a ReadLn: System's
+  FillFromConsole calls ConsoleLine (EditLine here), which reads keys with ReadKey, a host
+  import that blocks until the page delivers a key. }
 unit Crt;
 
 interface
@@ -63,6 +73,8 @@ procedure NoSound;
 
 implementation
 
+{ Host imports (docs/abi.md section 8). `readkey` blocks until a key is available; at the end
+  of scripted keys in the test runner the program stops with exit code 255. `sleep` is Delay. }
 procedure ScreenOp(op, a, b, c: LongInt); external 'screen';
 function HostReadKey: LongInt; external 'readkey';
 function HostKeyPressed: LongInt; external 'keypressed';
@@ -164,7 +176,8 @@ begin
   end
 end;
 
-{ System's console writer while Crt is in use. }
+{ System's console writer while Crt is in use. The cursor is placed once per batch of
+  characters, not once per character. }
 procedure DrawBytes(address, count: LongInt);
 var i: LongInt;
 begin
@@ -284,6 +297,7 @@ begin
   HostSleep(ms)
 end;
 
+{ There is no speaker: Sound and NoSound do nothing. }
 procedure Sound(hertz: Word);
 begin
 end;
@@ -293,7 +307,8 @@ begin
 end;
 
 { System's console line reader while Crt is in use: reads keys until Enter, echoing them, and
-  stores the line at `address`, at most `max` characters. Returns its length. }
+  stores the line at `address`, at most `max` characters. Returns its length. Any other
+  control key, and any key beyond `max`, is ignored. }
 function EditLine(address, max: LongInt): LongInt;
 var key: Char; count: LongInt; entered: Boolean;
 
@@ -342,6 +357,7 @@ begin
   DirectVideo := True;
   CursorColumn := 0;
   CursorRow := 0;
+  { ConsoleHooked goes last: from then on System calls the two hooks. }
   ConsoleOut := DrawBytes;
   ConsoleLine := EditLine;
   ConsoleHooked := True

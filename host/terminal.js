@@ -1,5 +1,6 @@
-// Canvas renderer for the 80x25 text screen. The screen is a byte array any thread can write
-// (a SharedArrayBuffer view in the browser): a char and an attribute byte per cell, row by
+// Canvas renderer for the 80x25 text screen. The screen is a byte array (a SharedArrayBuffer
+// view in the browser): the program's Worker writes it, the page only reads it, one copy per
+// frame (see main.js): a char and an attribute byte per cell, row by
 // row, then the cursor column and row. An attribute is the foreground colour in bits 0-3,
 // the background in bits 4-6 and the blink flag in bit 7, as in the PC text mode.
 export const COLS = 80;
@@ -7,6 +8,15 @@ export const ROWS = 25;
 export const CURSOR = COLS * ROWS * 2;
 export const GRID_BYTES = CURSOR + 2;
 export const DEFAULT_ATTR = 7;
+
+// The control characters a screen reacts to.
+export const BEL = 7;
+export const BS = 8;
+export const LF = 10;
+export const CR = 13;
+
+// Offset of a cell's character byte; its attribute byte follows.
+export const cellOffset = (col, row) => (row * COLS + col) * 2;
 
 // The glyph of every byte in code page 437: pictures for the control codes, ASCII, then the
 // accented letters, box drawing and maths symbols of the high half.
@@ -60,7 +70,7 @@ export class Terminal {
   }
 
   drawCell(frame, row, col, phase) {
-    const at = (row * COLS + col) * 2;
+    const at = cellOffset(col, row);
     const attr = frame[at + 1];
     const [x, y] = [col * CELL_W, row * CELL_H];
     this.ctx.fillStyle = PALETTE[(attr >> 4) & 7];
@@ -73,7 +83,7 @@ export class Terminal {
   // The cursor is a bar along the bottom of its cell, in the cell's foreground colour.
   drawCursor(frame) {
     const [col, row] = [frame[CURSOR], frame[CURSOR + 1]];
-    this.ctx.fillStyle = PALETTE[frame[(row * COLS + col) * 2 + 1] & 15];
+    this.ctx.fillStyle = PALETTE[frame[cellOffset(col, row) + 1] & 15];
     this.ctx.fillRect(col * CELL_W, (row + 1) * CELL_H - CURSOR_H, CELL_W, CURSOR_H);
   }
 

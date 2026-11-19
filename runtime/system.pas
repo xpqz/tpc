@@ -10,6 +10,9 @@
   ReadLnEnd.
   HeapOrg, Text and Input are also found by name.
 
+  The console hooks (ConsoleOut, ConsoleLine, ConsoleHooked) are how Crt takes over Write and
+  ReadLn; they are declared with the Text files below.
+
   A routine declared `external` has no body: it is a WASM import from module `host`, named
   like the routine in lower case or by the string after `external`, and present in a program
   only if the program reaches it (docs/abi.md section 8). The compiler's own output code calls
@@ -479,7 +482,8 @@ end;
 
 { Text files. A Text is a record: the host handle, what the file is open for, a buffer of the
   bytes read and not yet used (Pos to Len) and the name given by Assign. Writing is not
-  buffered: every piece of output goes to the host at once. Input and Output are typed
+  buffered: a file's output goes to the host at once, and so does the console's, unless Crt
+  hooks the console (see TextFlush). Input and Output are typed
   constants naming only the first fields; their buffer is zero. The compiler writes to the
   console by passing the file address 0 to TextOut.
 
@@ -563,7 +567,8 @@ end;
 { Under Crt the console's output is held back until the end of the Write or WriteLn
   statement, as TP holds it in the file's buffer (128 bytes, flushed when full): the arguments
   of the statement are evaluated, WhereX among them, before any of its text reaches the
-  screen. The compiler calls TextFlush at the end of every Write and WriteLn. }
+  screen. A statement that writes more than 128 bytes shows its first part early, as in TP.
+  The compiler calls TextFlush at the end of every Write and WriteLn. }
 const ConsoleBufferSize = 128;
 
 type
@@ -587,8 +592,8 @@ end;
 procedure ConsoleWrite(address, count: LongInt);
 var i: LongInt;
 begin
-  if not ConsoleHooked then HostWrite(StdOut, address, count)
-  else
+  if not ConsoleHooked then HostWrite(StdOut, address, count) { the host's console }
+  else { Crt's screen: collect until TextFlush }
     for i := 0 to count - 1 do
     begin
       if ConsolePendingCount = ConsoleBufferSize then TextFlush;
