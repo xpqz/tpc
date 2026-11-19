@@ -423,3 +423,176 @@ unchanged.
 ~450 estimate; TP itself keeps this state in Crt; the Pascal runtime has ~800 lines free.
 **Rejected.** A terminal model with window and attribute state in JS (does not fit; would
 duplicate state Crt needs anyway for `WhereX`/`WhereY`).
+
+## 40. IDE oracle pattern (accepted, #67)
+
+**Proposal.** An IDE module is differential-tested like any Crt program: a fixture
+`NAME.pas` (`uses Crt, <module>`), a key script `NAME.keys` that ends with a Quit key (Alt-X)
+and a golden `NAME.out` made by `tools/tp5.sh` (program output, then the screen dump of
+decision 37). The program leaves the screen as the last key left it; a script that forgets
+the Quit key ends with `exit 255` in the dump, so the omission is visible. The IDE host is
+the only unit the real TP 5.0 cannot compile (`external` is error 200 in user code), so the
+fixture directory holds `IDEHOST.PAS`, a stand-in with the same interface and canned
+behaviour (compile fails with error 3 at the first line containing `ERROR`; run returns the
+line count modulo 256, -2 when the last compile failed or there was none). The compiler finds embedded units first (`driver.rs`, `EMBEDDED_UNITS`), so with the
+embedded `IdeHost` in place TP compiles the stand-in and this compiler compiles the embedded
+unit; the Node runner then injects a canned compiler with the same two rules
+(`tests/ide/draft/canned.mjs`; its test replays the texts and results of the toy editor's
+run on TP 5.0: `Error 3 in P.PAS 2:1; Run -2; Compiled; Run 2`). `tools/tp5.sh` gains
+`DIR/NAME.dirs`: directories (from the repository root) whose files are copied before the
+fixture's own, so an IDE module under `ide/` is found by TP and a fixture's `IDEHOST.PAS`
+replaces nothing shared. The same list must reach `tp5c` and `tests/run.mjs --dir` (a merged
+temporary directory in the Rust driver); until `ide/` exists only the oracle side needs it.
+**Shown end to end** by `tests/lang/crt_ide_oracle_pattern_editor_unit_with_host_stub`: two
+units (Editor, IdeHost) and a main program, 32 keys including `^K b`, `^Y`, F9, F10, Ctrl-F9
+and Alt-X; identical dump on TP 5.0 and this compiler.
+**Limits found** (compiler gaps, not fixed here): no `Move`/`FillChar` (a gap buffer shifts
+text with loops or System gains a `Move`), `Halt` unknown (Error 3), untyped `var` parameters
+(Error 200) and `Bytes(P^)[i]` (typecast then index, Error 85) are rejected.
+**Rejected.** Testing against a TP IDE (TURBO.EXE is not in the oracle set and has no
+scriptable host); a Pascal-side fake for both runs (it would not exercise the embedded
+unit's imports).
+
+## 41. Key chords: table, browser mapping, reachable bindings (accepted, #67)
+
+**Decision (done in #67).** `tools/crt/KEYS.TBL` holds the Reference Guide's Table C.2
+(Appendix C, Extended Key Codes, page 424) and the control codes: `^A`..`^Z` (Ctrl+letter,
+word `scan*256 + n`, ReadKey returns 1..26), `Alt-A`..`Alt-Z`, `Alt-1`..`Alt-=`, `Shift-F1`..
+`Alt-F12`, `F11`, `F12`, `Shift-Tab`, `Ctrl-Left/Right/Home/End/PgUp/PgDn`, `Ctrl-PrtSc`
+(135 keys). The Node runner reads the same table, so `tests/keys.mjs` needed no change.
+`^H`, `^I`, `^M` give the bytes of Backspace, Tab and Enter, as on a PC. `F13` replaces
+`F11` as the example of an unknown key in three runner tests.
+**Proposal (browser).** `host/keys.js` `keyBytes` today maps Ctrl+letter correctly but
+turns Shift/Ctrl/Alt+F-key into the plain F-key, Alt+letter into the letter, Ctrl-cursor
+into the cursor key and Shift-Tab into Tab. The replacement in `tests/ide/draft/key_bytes.js`
+(38 lines against 19 now, +20 in `host/keys.js`) follows Table C.2, identifies Alt+letter by
+`event.code` (Option changes `event.key` on macOS), lets typing win where a layout makes Alt
+or AltGr (Ctrl+Alt) produce a character, and leaves Alt+digit out. A test
+(`tests/ide/draft/key_bytes_test.mjs`) builds the event of every table key and compares the
+bytes with the runner's, so the two cannot drift. Applying it makes `F11`/`F12` mapped keys
+(extended 133/134): the negative case in `tests/host/keys.mjs` moves to `F13`.
+**Reachability.** Measured: Chrome 157 (CDP) and Firefox 160 (WebDriver BiDi) deliver all
+77 probed chords to the page, identically; but injected events bypass the browser's own
+shortcuts (tab count unchanged after Ctrl+T/N/W), so this proves the page-side mapping, not
+what a user's browser leaves alone. **Read from source** (Firefox `browser-sets.inc`, fetched
+from gecko-dev): reserved, so never delivered to the page, are Ctrl+N, Ctrl+T, Ctrl+W,
+Ctrl+Shift+W, Ctrl+Shift+P, and quit: Ctrl+Q on Linux, Ctrl+Shift+Q on Windows (so Ctrl+Q
+reaches the page on Windows, not on Linux; macOS quits by another route). Chromium's
+`IsReservedCommandOrKey` says no key is reserved in app windows and, in fullscreen, every
+command except fullscreen/exit goes to the page (so Chrome fullscreen frees Ctrl+W/N/T); the
+list of reserved commands in normal windows I could not locate in the source: from memory
+it is new/close tab and window, tab switching (Ctrl+Tab, Ctrl+PgUp/PgDn) and exit
+(Ctrl+Shift+Q). **Unverified, needs a person at a real keyboard:** everything on macOS (the
+browsers use Cmd, so Ctrl chords should arrive, except probably Ctrl+Tab, Ctrl+PgUp/PgDn and
+the Spaces shortcut Ctrl+Left/Right; F9 to F12 need Fn unless the user changed the keyboard
+setting), Alt+letter menu activation on Windows/Linux, F10, and Chrome's reserved list.
+Consequently: ^K B/K/C/V, ^Y, Alt-X, F9, Ctrl-F9 are expected reachable everywhere with Fn
+caveat on macOS; ^Q F is not on Linux Firefox. **Substitutes (IDE side, a few lines in
+Keys):** Alt-K and Alt-Q as synonyms of ^K and ^Q; every F-key command also in the menus
+(Alt-R, Alt-F letters), so no command depends on F9/F10; ^A/^F (WordStar word left/right)
+for Ctrl-Left/Right. Out of Phase 7 scope and unreachable in normal Win/Linux windows: ^W,
+^N, ^T.
+
+## 42. IDE host unit and the compile/run contract (accepted, #67)
+
+**Proposal.** `IdeHost` is a runtime unit embedded in the compiler beside Crt (decision 29),
+with the interface the oracle stand-in has (decision 40):
+`type CompileResult = record Code, Line, Col: Integer; FileName: string[12] end;`
+`procedure Compile(Name: string; Text: Pointer; Len: LongInt; var Result: CompileResult);`
+`function Run: Integer;` (`Line` and `Col` are LongInt: a 64 KB buffer of short lines passes
+32767 lines) over two `external` routines, imports `ide_compile(namePtr, textPtr,
+textLen, resultPtr)` and `ide_run() -> i32` of module `host`, present only in the IDE module.
+- **Compile.** `Text` is the unsaved buffer, contiguous (the IDE closes the gap first), `Name`
+  the file name shown in errors. The host registers every `.PAS`/`.INC` file of its file
+  system except `Name` with the compiler (`add_file`, decision 27), compiles the buffer as the
+  main program and writes `Result`: `Code` 0 and nothing else on success, else the error
+  code, line, column and the file of the error (`err_file`, decision 28; `Name` for the main
+  program). The module stays in the host and never enters IDE memory. A unit being edited is
+  compiled from its saved file, not from the buffer.
+- **Run.** `Run` runs the last successful module and blocks the IDE until the program ends
+  or Stop. It returns the exit code (0..255; a runtime error is printed on the screen by
+  the program and returns its number), -1 when stopped, -2 when there is nothing to run.
+  The screen is cleared first (a program's Crt does not read the screen; its state is its
+  own) and left as the program left it; the keyboard queue is shared. The IDE shows
+  "press a key" with ReadKey, then repaints everything (its Crt state is untouched).
+- **Files.** Writing happens through ordinary Pascal text files (`fs_*`): File->Open by typed
+  name is `Assign`/`Reset`, Save is `Rewrite`/`WriteLn`. No directory listing.
+- **Browser.** Plan section 3's two Workers. The IDE Worker is the program Worker with the
+  two imports added (compiler.wasm bytes in the start message). `ide_run` posts
+  `{ run: module, files }` to the page and sleeps in `Atomics.wait` on a one-cell
+  SharedArrayBuffer; the page starts the program Worker with the shared grid and key queue
+  (today's `run`), and when it posts `done`, or Stop is clicked (terminate, as today), stores
+  exit code + 2 (stop: 1) in the cell and notifies. A blocked Worker cannot receive messages,
+  so files a program writes **do not come back**: the program Worker gets the page's file Map
+  and its writes are discarded when it ends, as in Phase 6 (`host/vfs.js`: "none of it
+  reaches the next run"), in the browser and in the Node runner alike. Compile and File->Open
+  read the IDE Worker's file system, which holds the files saved by the IDE. Costs of
+  upgrading: persisting a program's files for later runs and sessions is a `{ saved }` post
+  from the program Worker (+3 lines, Node must then keep a store across runs); making them
+  visible to Open in the same session needs an inbox in shared memory (about 25 lines).
+- **Persistence.** The page owns it: `localStorage` keys `tp5:NAME` hold Latin-1 text, read
+  at page load into a Map that goes to both Workers. `Vfs` gets an `onWritten(name, bytes)`
+  callback fired when a file opened for writing is closed; the IDE Worker posts it as
+  `{ saved }` and the page stores it and updates its Map (so the next run sees saved files). (`localStorage` is not available in Workers and IndexedDB is
+  asynchronous, which a Worker blocked in wasm cannot use.)
+- **Node runner.** `tests/run.mjs --compiler compiler.wasm` adds the imports to the `Host`:
+  the compiler is instantiated once, `ide_run` is a nested synchronous run (a second `Host`
+  sharing screen, keys, sink and clock; no Stop). For oracle tests `--compiler canned`
+  injects `tests/ide/draft/canned.mjs`. A nested run discards the program's files
+  (`keepFiles` exists in the draft only to show the cost of the alternative). `tests/ide/draft/` holds working drafts of
+  `compiler.js` and `ide.js` (42 + 25 lines) with 9 tests against the real compiler.wasm.
+**Proof so far.** `tests/ide/draft/draft_test.mjs`: error in main (code 3, line 3 and the
+file; the oracle line from TP), error in a unit (file `U.PAS`, line 7), the unsaved buffer
+beats a saved file of the same name, nothing to run is -2, a runtime-error run returns 200, run after a failed compile is -2 (the stand-in and
+the canned compiler agree, from TP's run),
+a Crt program run starts on a cleared screen, reads the shared keys and ends with the dump TP
+prints, a bad pointer is a host error. Not exercised: a real IDE program (no embedded unit
+yet), the browser path (drafted, not built), Stop.
+
+## 43. Host budget transfer (accepted, #67)
+
+Host glue is 471 of 500. Estimated need for decisions 41 and 42. Counted with the `tools/loc.sh` rules on working
+drafts: `compiler.js` 42, `ide.js` 25, chord mapping +20. Estimated from sketches, not built:
+IDE Worker wiring +12,
+page (run relay, persistence, startup files) +28, `Vfs` write hook +5: +132. Removable test-only
+code in `host/`: `UNAVAILABLE` stubs for `compile` -6, `LineInput` (the runner's `Input` uses it;
+the Worker needs only `{ readLine: () => null }`; move it to
+`tests/vfs.mjs`) -18: -24. Kept although only the runner needs them: the `readline`/`input` plumbing (about 8
+lines; a program without Crt reads stdin through it) and `KEYS_EXHAUSTED` (4). Net +108, so about 579 (±20), 79 over. **Proposal:** raise the Host
+glue budget to 600 and lower the margin from 500 to 400 (`tools/budget.txt`, plan section 1),
+total still 15,000. The embedded `IdeHost` unit (about 20 lines of Pascal in `runtime/`, 1020
+of 1500) and its `EMBEDDED_UNITS` entry (4 lines of Rust, 861 of 1100) fit their budgets.
+
+## 44. Limits for a 64 KB gap buffer, measured on TP 5.0 (accepted, #67)
+
+Probes in `tests/ide/limits/` (outputs from `tools/tp5.sh`; the two shared with this compiler
+run in `compiler/tests/ide_tooling.rs`):
+- `GetMem` takes a Word. The Reference Guide (GetMem, Restrictions) gives 65521 bytes
+  (64K - $F) as the largest block; 65535 is accepted but a block of it that starts at a
+  heap offset above 0 wraps in its segment: a probe filled one after a 100-byte block and
+  overwrote 3 bytes of the first block, while 65521 overwrote none (`tp_only/getmem_block_*`).
+  MaxAvail was about 536,000 bytes under DOSBox. A LongInt size is truncated (70000 gives 4464 bytes; error 201 under
+  `{$R+}`); a constant 65536 is error 76. This compiler's `GetMem` takes a LongInt (a
+  deviation that costs nothing, but a Buffer must not rely on it).
+- An array type of 65535 bytes is accepted (the Guide says 65520), 65536 is error 22; global
+  data above 65535 bytes is error 96. The buffer is therefore a pointer to
+  `array[0..65520] of Char` allocated with `GetMem(P, 65521)`: capacity 65521.
+- `Integer` wraps at 32768 (`32767 + 1 = -32768`, `20000 + 20000 = -25536` even into a
+  LongInt, `Integer := Word 40000` is -25536). `Word` wraps silently at 65536 and 0
+  (`65535 + 1 = 0`, also when stored in a LongInt, `3 - 5 = 65534`); `Word := LongInt`
+  truncates. Comparison of Word with Integer is done in LongInt. `for` over 65530..65535
+  with a Word runs 6 times. A LongInt index, and `LongInt - Word`, address bytes above 32767
+  correctly. This compiler gives the same output for all of these.
+**Recommendation.** `Buffer` uses `LongInt` for every position, size and index (gap start,
+gap end, text length, cursor offset, line starts), `Integer` only for screen coordinates and
+small counts, never `Word` for arithmetic (a decrement at 0 gives 65535 silently), and a
+capacity of 65521 (`MaxText = 65521`, which is also all TP can allocate in one block). Gap shifting without `Move` is a `for` loop over
+`Char`; ask for a `Move` in System if the loop shows in a profile.
+
+## 45. Margin transfer to host glue (accepts 43)
+
+The Host glue component goes from 500 to 600 lines; the plan's unallocated margin goes from
+500 to 400 (components now sum to 14,600 under the unchanged 15,000 total). Plan §1 makes
+the margin available from Phase 7. Reason: moving the host runtime into host/ (decision
+36) for one tested implementation cost ~180 lines the plan did not foresee, and the IDE
+needs compile, run handoff and persistence (~130 lines measured from working drafts).

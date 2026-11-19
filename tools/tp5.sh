@@ -9,14 +9,20 @@
 # to the program, so units and include files are found (`tpc /M` compiles used units from
 # source) and data files can be opened by the program. Files named *.PAS and *.INC are
 # given CRLF line endings, as the compiler expects; all others are copied byte for byte.
+# DIR/NAME.dirs adds shared directories (see below), for tests of units that live elsewhere.
 # If DIR/NAME.in exists, it is the program's stdin (LF is converted to CRLF); stdin and
 # stdout are both redirected, which DOSBox-X supports. Without it stdin is not redirected.
 # Crt programs (decision 37): a program whose uses clause names Crt gets ScrDump and KeyFeed
 # (tools/crt/) as its first units, so the program's own output goes to the screen, which is
 # cleared (`cls`) before the program starts. The keys come from DIR/NAME.keys, a text file of
 # whitespace-separated tokens: a key name from tools/crt/KEYS.TBL (Enter, Esc, Tab, Backspace,
-# Space, Up, Down, Left, Right, Home, End, PgUp, PgDn, Ins, Del, F1 to F10; any case) or one
-# printable character, typed literally. `h i Enter` types hi and Enter. A blocking read after
+# Space, Up, Down, Left, Right, Home, End, PgUp, PgDn, Ins, Del, F1 to F12; any case) or one
+# printable character, typed literally. `h i Enter` types hi and Enter. The table also has the
+# chords of the Reference Guide's Table C.2 (Appendix C, page 424): ^A to ^Z (Ctrl+letter,
+# the control codes 1 to 26), Alt-A to Alt-Z, Alt-1 to Alt-=, Shift-F1 to Shift-F12, Ctrl-F1 to
+# Ctrl-F12, Alt-F1 to Alt-F12, Shift-Tab, Ctrl-Left, Ctrl-Right, Ctrl-Home, Ctrl-End, Ctrl-PgUp,
+# Ctrl-PgDn and Ctrl-PrtSc. ReadKey returns the control code for ^A.. and 0 plus the extended
+# code for the others; ^H, ^I and ^M give the same byte as Backspace, Tab and Enter. A blocking read after
 # the last key halts the program with exit code 255. After the program's own stdout the script
 # prints the screen dump (tools/crt/SCRDUMP.PAS): the 25 text rows with trailing blanks cut,
 # `cursor COL ROW`, `exit CODE` and `attr ROW COL LEN HEX` runs for cells whose attribute is
@@ -32,8 +38,17 @@ trap 'rm -rf "$w"' EXIT
 cp "$home/TPC.EXE" "$home/TURBO.TPL" "$w/"
 sed 's/$/\r/' "$1" > "$w/P.PAS"
 base=${1%.pas}
-if [ -d "$base" ]; then
-  cp "$base"/* "$w/"
+# DIR/NAME.dirs lists directories (paths from the repository root, one per line) whose files
+# are copied first, so a test of the IDE's modules finds them in ide/ and its own directory
+# NAME/ can hold a stand-in for a unit (the IDE host unit) that replaces a shared file.
+if [ -f "$base.dirs" ]; then
+  repo=$(cd "$(dirname "$0")/.." && pwd)
+  while read -r shared; do
+    [ -z "$shared" ] || cp "$repo/$shared"/* "$w/"
+  done < "$base.dirs"
+fi
+if [ -d "$base" ] || [ -f "$base.dirs" ]; then
+  [ ! -d "$base" ] || cp "$base"/* "$w/"
   for f in "$w"/*.[Pp][Aa][Ss] "$w"/*.[Ii][Nn][Cc]; do
     [ -f "$f" ] && sed 's/$/\r/' "$f" > "$f.crlf" && mv "$f.crlf" "$f"
   done

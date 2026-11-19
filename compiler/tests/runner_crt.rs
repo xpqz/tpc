@@ -296,7 +296,7 @@ fn sleep_moves_the_clock_by_that_many_milliseconds_and_returns_at_once() {
 #[test]
 fn an_unknown_key_in_the_script_is_a_runner_error() {
     let w = module(&["screen", "readkey"], &[Step::Key(0)]);
-    for bad in ["a Bogus", "ab", "F11"] {
+    for bad in ["a Bogus", "ab", "F13"] {
         let o = run("bad_key", &w, Some(bad), "0");
         assert_eq!(o.status.code(), Some(2), "{bad}: {}", stderr(&o));
         assert!(

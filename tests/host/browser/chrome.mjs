@@ -97,16 +97,22 @@ async function chromeBackend(profile) {
       if (reply.exceptionDetails) throw new Error(reply.exceptionDetails.exception?.description);
       return reply.result.value;
     },
-    async key({ vk, w3c, ...event }) {
-      const base = { ...event, windowsVirtualKeyCode: vk };
+    async key({ vk, w3c, modifiers = 0, ...event }) {
+      const base = { ...event, modifiers, windowsVirtualKeyCode: vk };
       await press("rawKeyDown", base);
       if (event.text) await press("char", base);
       await press("keyUp", base);
+    },
+    async contexts() {
+      return (await (await fetch(`http://localhost:${chrome.port}/json/list`)).json())
+        .filter((t) => t.type === "page").length;
     },
     stop: chrome.stop,
   };
 }
 
+// CDP's `modifiers` bits (Alt 1, Ctrl 2, Meta 4, Shift 8) and the WebDriver modifier keys.
+export const MODIFIER_KEYS = [[1, "\uE00A"], [2, "\uE009"], [4, "\uE03D"], [8, "\uE008"]];
 export const FIREFOX = "/Applications/Firefox.app/Contents/MacOS/firefox";
 
 async function firefoxBackend(profile) {
@@ -136,9 +142,17 @@ async function firefoxBackend(profile) {
       if (reply.type === "exception") throw new Error(reply.exceptionDetails.text);
       return reply.result.value;
     },
-    async key({ w3c }) {
+    async key({ w3c, modifiers = 0 }) {
+      const held = MODIFIER_KEYS.filter(([bit]) => modifiers & bit).map(([, value]) => value);
+      const press = (type, values) => values.map((value) => ({ type, value }));
       await bidi.send("input.performActions", { context, actions: [{ type: "key", id: "kbd",
-        actions: [{ type: "keyDown", value: w3c }, { type: "keyUp", value: w3c }] }] });
+        actions: [...press("keyDown", [...held, w3c]),
+                  ...press("keyUp", [w3c, ...held.reverse()])] }] });
+    },
+    // The browser's own view of how many tabs and windows exist (a swallowed chord such as
+    // Ctrl+T would change it).
+    async contexts() {
+      return (await bidi.send("browsingContext.getTree")).contexts.length;
     },
     stop: () => firefox.kill(),
   };
@@ -167,6 +181,7 @@ export async function withPage(body) {
         return JSON.parse(await backend.run(wrapped));
       },
       key: (spec) => backend.key(spec),
+      contexts: () => backend.contexts(),
       click: (id) => page.eval(`document.getElementById(${JSON.stringify(id)}).click()`),
       status: () => page.eval(`document.getElementById("status").textContent`),
       // Text of one screen row, read from the shared grid (80 columns, char then attribute).

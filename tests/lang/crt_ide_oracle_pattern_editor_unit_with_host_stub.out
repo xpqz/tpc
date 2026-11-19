@@ -1,0 +1,41 @@
+ File  Edit  Run  Options
+begin
+end.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Ready; Error 3 in P.PAS 2:1; Run -2; Compiled; Run 2; Compiled; Exit code 2; Un
+  2: 3  B2 K2  Unknown ^K command
+cursor 3 3
+exit 0
+attr 1 1 79 70
+attr 2 1 60 1E
+attr 3 1 60 1E
+attr 4 1 60 1E
+attr 5 1 60 1E
+attr 6 1 60 1E
+attr 7 1 60 1E
+attr 8 1 60 1E
+attr 9 1 60 1E
+attr 10 1 60 1E
+attr 11 1 60 1E
+attr 12 1 60 1E
+attr 13 1 60 1E
+attr 25 1 65 70

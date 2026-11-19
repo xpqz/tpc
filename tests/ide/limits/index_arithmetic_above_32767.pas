@@ -1,0 +1,75 @@
+program IndexArithmetic;
+{ What Integer and Word do at 32767 and 65535, for the index types of a 64 KB gap buffer
+  (range checking off, the default). }
+type
+  Bytes = array[0..65520] of Byte;
+var
+  Buf: ^Bytes;
+  I, J: Integer;
+  W, V: Word;
+  L: LongInt;
+  Count: Integer;
+begin
+  New(Buf);
+  I := 32767;
+  Inc(I);
+  WriteLn('Integer 32767 + 1 by Inc: ', I);
+  I := 32767;
+  I := I + 1;
+  WriteLn('Integer 32767 + 1: ', I);
+  I := 20000;
+  J := 20000;
+  L := I + J;
+  WriteLn('Integer 20000 + 20000 into LongInt: ', L);
+  L := LongInt(I) + J;
+  WriteLn('LongInt(20000) + 20000: ', L);
+  W := 65535;
+  Inc(W);
+  WriteLn('Word 65535 + 1 by Inc: ', W);
+  W := 65535;
+  W := W + 1;
+  WriteLn('Word 65535 + 1: ', W);
+  W := 65535;
+  L := W + 1;
+  WriteLn('Word 65535 + 1 into LongInt: ', L);
+  W := 40000;
+  V := 40000;
+  L := W + V;
+  WriteLn('Word 40000 + 40000 into LongInt: ', L);
+  W := 3;
+  V := 5;
+  WriteLn('Word 3 - 5: ', W - V);
+  W := 3;
+  W := W - 5;
+  WriteLn('Word 3 - 5 stored: ', W);
+  L := 40000;
+  I := L;
+  WriteLn('Integer := LongInt 40000: ', I);
+  W := 40000;
+  I := W;
+  WriteLn('Integer := Word 40000: ', I);
+  W := 40000;
+  I := -1;
+  WriteLn('Word 40000 < Integer -1: ', W < I);
+  WriteLn('Word 40000 > Integer -1: ', W > I);
+  Buf^[0] := 1;
+  W := 60000;
+  Buf^[W] := 7;
+  WriteLn('Buf^[Word 60000]: ', Buf^[W]);
+  W := 65520;
+  Buf^[W] := 9;
+  WriteLn('Buf^[Word 65520]: ', Buf^[W], ' and [W - 1 + 1]: ', Buf^[W - 1 + 1]);
+  Count := 0;
+  for W := 65530 to 65535 do Inc(Count);
+  WriteLn('for W := 65530 to 65535 runs ', Count, ' times');
+  Count := 0;
+  for I := 32760 to 32767 do Inc(Count);
+  WriteLn('for I := 32760 to 32767 runs ', Count, ' times');
+  L := 65536;
+  W := L;
+  WriteLn('Word := LongInt 65536: ', W);
+  L := 70000;
+  W := L;
+  WriteLn('Word := LongInt 70000: ', W);
+  WriteLn('Ord of Word 65535: ', Ord(W - W + 65535));
+end.

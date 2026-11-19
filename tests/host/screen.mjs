@@ -159,7 +159,7 @@ test("a key script: names in any case, one printable character per other token",
 });
 
 test("a key script rejects unknown names and non-printable characters", () => {
-  for (const bad of ["Bogus", "ab", "F11", "é"]) {
+  for (const bad of ["Bogus", "ab", "F13", "é"]) {
     assert.throws(() => parseKeys(`a ${bad}`), KeyScriptError, bad);
   }
 });
