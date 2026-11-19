@@ -71,3 +71,11 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | D20 | Width wider than the target in `Str` of a Real | The width is cut to the capacity of the target string (`Str(1.5:8:2, t)` with `String[6]` is `  1.50`) | Done for integers; a Real is formatted at the full width and then truncated on the left | |
 | D21 | `Inc`/`Dec` of a subrange under `{$R+}` | `Inc(s)` of `s: 1..10` at 10 is runtime error 201 (a Byte at 255 wraps, unchecked) | `Inc` and `Dec` are never range-checked; the value wraps into the storage size (D17 rewrite) | `lang/inc_dec_of_byte_at_the_limit_is_not_checked` covers the Byte case only |
 | D22 | `Succ` of the last and `Pred` of the first value under `{$R+}` | Runtime error 201 | Not checked; the value is stored truncated | |
+
+## Typed constants (Phase 5)
+
+| # | Deviation | TP5 | This compiler | Notes |
+|---|---|---|---|---|
+| D23 | Line of the error for a list with too many elements | Error 89 is reported at the comma before the first extra element | Reported at the first extra element | Differs only when the element starts a new line; `neg/typedconst_too_many_elements` and the own tests keep the list on one line |
+| D24 | A number for a `string[n]` constant | `n: string[5] = 42` is error 102 (String constant expected) | Error 26 (Type mismatch) | Still rejected; no test |
+| D25 | Fields after a record prefix | `(x: 1)` for a record with more fields is accepted and the rest is undefined | The remaining fields are zero | No test reads them |

@@ -40,6 +40,7 @@ pub enum Tag {
 }
 
 /// A record field and its byte offset.
+#[derive(Clone, Copy)]
 pub struct Field {
     pub name: u32,
     pub ty: Ty,
@@ -96,6 +97,15 @@ pub enum Type {
 /// Index into the symbol table.
 #[derive(Clone, Copy)]
 pub struct Sym(pub u32);
+
+/// A typed constant: a static variable at `address` whose initial memory image is built from
+/// the checked initialiser `init`.
+#[derive(Clone, Copy)]
+pub struct TypedConst {
+    pub address: u32,
+    pub ty: Ty,
+    pub init: Id,
+}
 
 /// The value of a named constant.
 #[derive(Clone, Copy, PartialEq)]
@@ -501,6 +511,14 @@ impl Types {
 
     pub fn record(&mut self, fields: Vec<Field>, size: u32) -> Ty {
         self.add(Type::Record { fields, size })
+    }
+
+    /// The fields of a record type in declaration order.
+    pub fn record_fields(&self, t: Ty) -> Vec<Field> {
+        match self.get(t) {
+            Type::Record { fields, .. } => fields.clone(),
+            _ => Vec::new(),
+        }
     }
 
     /// (type, offset) of a record field.
