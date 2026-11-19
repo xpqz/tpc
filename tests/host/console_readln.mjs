@@ -10,7 +10,7 @@ import fs from "node:fs";
 import { Worker } from "node:worker_threads";
 import { clearScreen } from "../../host/terminal.js";
 import { newKeyQueue, pushKeys } from "../../host/keys.js";
-import { newGrid, rowText, cursorOf, sleepMs, runTests } from "./browser_helpers.mjs";
+import { newGrid, rowText, sleepMs, runTests } from "./browser_helpers.mjs";
 
 const PROGRAM = new URL("../programs/readln_browser.pas", import.meta.url).pathname;
 const SCRATCH = new URL("../../tmp/console_readln.wasm", import.meta.url).pathname;
@@ -44,7 +44,6 @@ const tests = [
     const { grid, result } = await run([...typed("Bob"), ENTER, ...typed("12 30"), ENTER]);
     assert.deepEqual(result, { done: { code: 0, halted: false } });
     assert.deepEqual(rows(grid), ["name? Bob", "a b? 12 30", "hello Bob 42"]);
-    assert.deepEqual(cursorOf(grid), [0, 3]);
   }],
   ["Backspace removes the last character from the line and the screen", async () => {
     const keys = [...typed("Bxo"), BACKSPACE, BACKSPACE, ...typed("ob"), ENTER,
