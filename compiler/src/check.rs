@@ -1231,6 +1231,7 @@ impl Cx<'_> {
             Kind::Name(name) if self.with_field(name).is_none() => name,
             _ => {
                 // A selector chain, or a field named through `with`.
+                self.resolve_result_indexed(target);
                 self.expr(target)?;
                 let ty = self.ast.ty(target);
                 return self.assign_value(id, ty, value);
@@ -1243,11 +1244,7 @@ impl Cx<'_> {
                 (Kind::Var(sym), symbol.ty)
             }
             // Assigning to the name of the function being defined sets its result.
-            SymKind::Routine(r) if self.is_enclosing_function(r) => {
-                let result = self.routines[r as usize].result_sym;
-                self.symbols.capture(result, false);
-                (Kind::Var(result), self.routines[r as usize].result)
-            }
+            SymKind::Routine(r) if self.is_enclosing_function(r) => self.result_variable(r),
             SymKind::Routine(r) if self.routines[r as usize].is_function => {
                 return Err(self.err(target, code::INVALID_VARIABLE_REFERENCE));
             }
@@ -1256,6 +1253,36 @@ impl Cx<'_> {
         };
         self.ast.resolve(target, kind, ty);
         self.assign_value(id, ty, value)
+    }
+
+    /// The result variable of the function `r` being defined, with its type.
+    fn result_variable(&mut self, r: u32) -> (Kind, Ty) {
+        let result = self.routines[r as usize].result_sym;
+        self.symbols.capture(result, false);
+        (Kind::Var(result), self.routines[r as usize].result)
+    }
+
+    /// In `Name[i] := v` with `Name` the function being defined, `Name` is the result variable
+    /// (a string whose elements the body may set), not a recursive call. The base is resolved
+    /// here; reads of `Name[i]` stay calls, as in Turbo Pascal.
+    fn resolve_result_indexed(&mut self, target: Id) {
+        let Kind::Index { base, .. } = self.ast.kind(target) else {
+            return;
+        };
+        let Kind::Name(name) = self.ast.kind(base) else {
+            return;
+        };
+        if self.with_field(name).is_some() {
+            return;
+        }
+        if let Ok((_, symbol)) = self.resolve(base, name) {
+            if let SymKind::Routine(r) = symbol.kind {
+                if self.is_enclosing_function(r) {
+                    let (kind, ty) = self.result_variable(r);
+                    self.ast.resolve(base, kind, ty);
+                }
+            }
+        }
     }
 
     /// True if routine `r` is a function being defined now (this one or one around it).
@@ -1591,6 +1618,8 @@ impl Cx<'_> {
                 _ => (node.kind, Ty::STRING),
             },
             Kind::Name(name) => self.name_expr(e, name)?,
+            // Already resolved: the result variable of the function being defined.
+            Kind::Var(_) => (node.kind, node.ty),
             Kind::Index {
                 base,
                 index,
@@ -1638,6 +1667,12 @@ impl Cx<'_> {
     /// `base[index]`: the base is an array or a string, the index of the index type.
     fn index_expr(&mut self, e: Id, base: Id, index: Id, continues: bool) -> R<(Kind, Ty)> {
         self.expr(base)?;
+        // Only a variable has elements to address; a constant string or a call result does not.
+        match self.ast.kind(base) {
+            Kind::Var(_) | Kind::Field(..) | Kind::Index { .. } | Kind::Deref(_) => {}
+            Kind::StrLit(_) => return Err(self.err(e, code::RIGHT_PAREN_EXPECTED)),
+            _ => return Err(self.err(e, code::INVALID_QUALIFIER)),
+        }
         let Some(array) = self.types.array_of(self.ast.ty(base)) else {
             let error = if continues {
                 code::RIGHT_BRACKET_EXPECTED
