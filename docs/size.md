@@ -24,3 +24,4 @@ Measured stripped (custom sections removed) at phase-4: compiler 160,907 B, hell
 | IDE WASM | 120 KB | 120 KB (kept) | not yet measurable |
 | phase-5 | 8340 | 264704 B unstripped / 210655 B stripped | 683 B | units, includes, conditionals, typed consts, text files, Dos; checker 1887 / 2200 |
 | phase-6 | 9183 | 276165 B unstripped / 222182 B stripped | 875 B | Crt unit, browser terminal and workers; Chrome and Firefox browser tests pass; host 471 / 500 |
+| phase-7 | 10844 | 283090 B unstripped / 228901 B stripped | 875 B | IDE in Pascal (IDE WASM 21364 B, target 120 KB); exit test passes in Chrome and Firefox |
