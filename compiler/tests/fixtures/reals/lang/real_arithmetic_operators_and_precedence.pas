@@ -1,0 +1,44 @@
+program RealOps;
+var i, j: Integer; x, y, z: Real; l: LongInt;
+begin
+  i := 7; j := 2; x := 1.5; y := 0.25; l := 100000;
+  WriteLn((x + y):0:3);
+  WriteLn((x - y):0:3);
+  WriteLn((x * y):0:4);
+  WriteLn((x / y):0:3);
+  WriteLn((i / j):0:2);
+  WriteLn((j / i * i):0:6);
+  WriteLn((i + x):0:2);
+  WriteLn((x + i):0:2);
+  WriteLn((i - x):0:2);
+  WriteLn((x - i):0:2);
+  WriteLn((i * x):0:2);
+  WriteLn((x * i):0:2);
+  WriteLn((i / x):0:4);
+  WriteLn((x / i):0:4);
+  WriteLn(-x:0:2);
+  WriteLn(-(x + y):0:2);
+  WriteLn(-i / 1:0:1);
+  WriteLn(x + y * 2:0:3);
+  WriteLn((x + y) * 2:0:3);
+  WriteLn(x - y - y:0:3);
+  WriteLn(x / y / 2:0:3);
+  WriteLn(8 / 2 / 2:0:2);
+  WriteLn(1 / 4:0:2);
+  WriteLn(0 / 5:0:1);
+  WriteLn(-6 / 4:0:2);
+  WriteLn(i div j, ' ', i mod j, ' ', i / j:0:1);
+  z := x * x + y * y * 4 - x / 2;
+  WriteLn(z:0:4);
+  z := (l / 8) * 8 - l;
+  WriteLn(z:0:1);
+  z := l * 0.5;
+  WriteLn(z:0:1);
+  z := i;
+  z := z * z * z;
+  WriteLn(z:0:0);
+  x := 10;
+  y := x - 0.5 - 0.25 - 0.125;
+  WriteLn(y:0:3);
+  WriteLn(1 + 2 * 3.5 - 4 / 8:0:3)
+end.
