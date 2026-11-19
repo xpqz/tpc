@@ -629,7 +629,6 @@ Titles and items are typed-constant record tables. `CmdNew = 7` lives in Menu; `
 public so a test can look at an open menu (a program blocked in `ReadKey` fails the corpus).
 **Reason.** Smallest menu that covers the plan; no screen-saving code.
 
-<<<<<<< HEAD
 ## 49. IDE Files: names, questions, messages, modified flag (accepted, #79)
 
 **Decision.** `Files` keeps the current name (`NONAME.PAS` until the first Save). Typed names are
@@ -647,7 +646,7 @@ shared by Keys (find) and Files. Main calls `ResetKeys` after New and Open so bl
 point into replaced text.
 **Reason.** The exact flag is simpler than a text fingerprint; one prompt editor, in View.
 **Rejected.** Hash fingerprint in Files (not exact); a copy of the prompt editor in Files.
-=======
+
 ## 50. Scope calls from the SWAG sweep (#83)
 
 Typed and untyped files (`file of T`, `file`, `BlockRead`, `BlockWrite`) stay omitted as
@@ -659,7 +658,6 @@ The remaining findings are Phase 8 issues: harmless compiler switches and `{$M}`
 `FillChar`/`Move`, `Exp`/`Sin`/`Cos`/`Ln`/`ArcTan`/`Pi`/`MaxInt`, Dos additions, `Val` into
 `Word` (D18 retired), large hex literals, Crt `LastMode`, `SetTextBuf`, `Assign(f, '')` as
 the console, error 11 for long lines, and heap exhaustion ending in 203.
->>>>>>> main
 
 ## 51. Rebalance: 400 lines from codegen to the checker
 
