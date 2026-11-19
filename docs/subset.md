@@ -20,7 +20,9 @@ Intrinsics and runtime routines named in later phases of `plan.md` §5 (not part
 `Insert`, `Concat`, `New`, `Dispose`, `GetMem`, `Mark`, `Release`, `MemAvail`, `MaxAvail`,
 `Include`, `Exclude`; `Crt` (`ClrScr`, `GotoXY`, `WhereX`, `WhereY`, `TextColor`,
 `TextBackground`, `ReadKey`, `KeyPressed`, `Delay`, `Window`, `ClrEol`, `Sound`/`NoSound` as
-no-ops); `Dos` subset (`GetDate`, `GetTime`).
+no-ops); `Dos` subset (`GetDate`, `GetTime`, `PackTime`, `UnpackTime`, `FSplit`, `FExpand`, `GetDir`,
+the types `DateTime`, `SearchRec`, `PathStr`, `DirStr`, `NameStr`, `ExtStr`, the attribute and
+file-mode constants, `DosError`).
 
 ## Deliberately omitted
 
@@ -43,6 +45,7 @@ defines a "distinct 'not supported' error" but no numbers.
 | Binary `.TPU` | "not supported" error (number TBD) |
 | Untyped `var` parameters (`procedure P(var a)`) | error 200 "Feature not supported" |
 | `Chain`, `Execute` | "not supported" error (number TBD) |
+| Dos routines that need a directory listing, a disk or a changeable current directory: `FindFirst`, `FindNext`, `FSearch`, `DiskSize`, `DiskFree`, `ChDir`, `GetFAttr`, `GetFTime` (the type `SearchRec` is declared) | error 3 Unknown identifier: the flat VFS has no listing or disks, and the host glue budget (600 of 600) has no room for one (#88) |
 
 Error numbers and wording for omitted features are an open item for the Phase 1
 diagnostics issue; they are not decided here.
