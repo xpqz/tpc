@@ -95,3 +95,10 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | D29 | Length of a console input line | A redirected line may be any length | A line longer than 254 characters is cut (`readline` is given the 256-byte buffer less the CR LF it appends) | Interactive TP5 input is limited to 127 characters; no test pins the cut |
 | D30 | Size and fields of `Text` | `SizeOf(Text)` is 256 and a text file has no visible fields | `SizeOf(Text)` is 347 (System's record); fields of a `Text` are error 121 in user code | A System-internal layout |
 | D31 | Text file output is not buffered | Data reaches the file when the buffer fills or at `Close`/`Flush` | Every `Write` piece goes to the host at once | Unobservable except through a second handle on the same file |
+
+## Crt (Phase 6)
+
+| # | Deviation | TP5 | This compiler | Notes |
+|---|---|---|---|---|
+| D32 | Crt names left out | `TextMode`, `LastMode`, `AssignCrt` and the mode constants `BW40` to `Font8x8` exist | They are error 3 (Unknown identifier) | No text modes: the screen is always 80x25 colour. `CheckBreak`, `CheckEof`, `CheckSnow`, `DirectVideo` exist as variables and change nothing |
+| D33 | Sound and ReadLn length | `Sound` makes a tone; a `ReadLn` line is at most 127 characters | `Sound` and `NoSound` do nothing; the line editor takes up to 254 characters (as D29) | |

@@ -12,10 +12,16 @@ use std::path::Path;
 const USAGE: &str = "usage: tp5c in.pas -o out.wasm [--dir AUXDIR]";
 
 /// The units of the runtime that `uses` finds without a file (docs/decisions.md).
-const EMBEDDED_UNITS: &[EmbeddedUnit] = &[EmbeddedUnit {
-    name: "DOS",
-    source: include_bytes!("../../runtime/dos.pas"),
-}];
+const EMBEDDED_UNITS: &[EmbeddedUnit] = &[
+    EmbeddedUnit {
+        name: "CRT",
+        source: include_bytes!("../../runtime/crt.pas"),
+    },
+    EmbeddedUnit {
+        name: "DOS",
+        source: include_bytes!("../../runtime/dos.pas"),
+    },
+];
 
 /// Compiles the program `src` with no unit files.
 pub fn compile(src: &[u8]) -> Result<Vec<u8>, Diag> {

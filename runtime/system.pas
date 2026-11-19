@@ -6,7 +6,8 @@
   name after this part is checked (compiler/src/symbols.rs, `Helper`): AbsLong, RangeChk, StrCat,
   StrCmp, StrAssign, StrInt, ValLong, ValReal, StrDelete, StrInsert, SetOp, SetAdd, SetIn,
   SetCmp, HeapGet, HeapPut, HeapMark, HeapRelease, HostWrite, RtError, Fmt_Real, TextOut,
-  TextNewLine, CheckIo, Assign, Eof, Eoln, ReadChar, ReadLong, ReadReal, ReadStr, ReadLnEnd.
+  TextNewLine, TextFlush, CheckIo, Assign, Eof, Eoln, ReadChar, ReadLong, ReadReal, ReadStr,
+  ReadLnEnd.
   HeapOrg, Text and Input are also found by name.
 
   A routine declared `external` has no body: it is a WASM import from module `host`, named
@@ -528,6 +529,19 @@ const
 
 var InOutRes: Integer;
 
+{ The console is the host's by default. Crt takes it over by setting ConsoleHooked and the two
+  hooks in its initialisation: ConsoleOut receives the bytes written to the console (a line end
+  is CR LF), ConsoleLine reads a console line like ReadLine does. A procedural variable cannot
+  be tested for nil, so the flag says whether the hooks are set. }
+type
+  ConsoleWriter = procedure(address, count: LongInt);
+  ConsoleLineReader = function(address, max: LongInt): LongInt;
+
+var
+  ConsoleHooked: Boolean;
+  ConsoleOut: ConsoleWriter;
+  ConsoleLine: ConsoleLineReader;
+
 function IOResult: Integer;
 begin
   IOResult := InOutRes;
@@ -546,17 +560,54 @@ begin
   end
 end;
 
+{ Under Crt the console's output is held back until the end of the Write or WriteLn
+  statement, as TP holds it in the file's buffer (128 bytes, flushed when full): the arguments
+  of the statement are evaluated, WhereX among them, before any of its text reaches the
+  screen. The compiler calls TextFlush at the end of every Write and WriteLn. }
+const ConsoleBufferSize = 128;
+
+type
+  { A view of the bytes of one piece of output, of any length up to 32 KB. }
+  OutputBytes = array[0..32767] of Char;
+  POutputBytes = ^OutputBytes;
+
+var
+  ConsolePending: array[0..ConsoleBufferSize - 1] of Char;
+  ConsolePendingCount: Integer;
+
+procedure TextFlush;
+begin
+  if ConsolePendingCount > 0 then
+  begin
+    ConsoleOut(LongInt(@ConsolePending[0]), ConsolePendingCount);
+    ConsolePendingCount := 0
+  end
+end;
+
+procedure ConsoleWrite(address, count: LongInt);
+var i: LongInt;
+begin
+  if not ConsoleHooked then HostWrite(StdOut, address, count)
+  else
+    for i := 0 to count - 1 do
+    begin
+      if ConsolePendingCount = ConsoleBufferSize then TextFlush;
+      ConsolePending[ConsolePendingCount] := POutputBytes(address)^[i];
+      ConsolePendingCount := ConsolePendingCount + 1
+    end
+end;
+
 { Writes count bytes at address to the Text at address target, or to the console when target
   is 0. }
 procedure TextOut(target, address, count: LongInt);
 var f: PText; written: LongInt;
 begin
   if InOutRes <> 0 then Exit;
-  if target = 0 then HostWrite(StdOut, address, count)
+  if target = 0 then ConsoleWrite(address, count)
   else
   begin
     f := PText(target);
-    if f^.Mode = ModeConsoleOutput then HostWrite(StdOut, address, count)
+    if f^.Mode = ModeConsoleOutput then ConsoleWrite(address, count)
     else if f^.Mode <> ModeOutput then InOutRes := IoNotOutput
     else
     begin
@@ -566,12 +617,13 @@ begin
   end
 end;
 
-{ The end of a line: LF on the console, CR LF in a file, as TP writes them. }
+{ The end of a line: LF on the host's console, CR LF in a file and on Crt's screen, as TP
+  writes them. }
 const LineEnd: array[0..1] of Char = (#13, #10);
 
 procedure TextNewLine(target: LongInt);
 begin
-  if (target = 0) or (PText(target)^.Mode = ModeConsoleOutput) then
+  if ((target = 0) or (PText(target)^.Mode = ModeConsoleOutput)) and not ConsoleHooked then
     TextOut(target, LongInt(@LineEnd[1]), 1)
   else
     TextOut(target, LongInt(@LineEnd[0]), 2)
@@ -645,7 +697,8 @@ end;
 procedure FillFromConsole(var f: Text);
 var count: LongInt;
 begin
-  count := ReadLine(LongInt(@f.Buffer[0]), ConsoleLineMax);
+  if ConsoleHooked then count := ConsoleLine(LongInt(@f.Buffer[0]), ConsoleLineMax)
+  else count := ReadLine(LongInt(@f.Buffer[0]), ConsoleLineMax);
   if count < 0 then f.Ended := True
   else
   begin

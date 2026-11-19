@@ -283,8 +283,8 @@ pub struct Routine {
     pub result_sym: Sym,
     /// Value parameters moved to the frame.
     pub copies: Vec<FrameCopy>,
-    /// Declared in System: its arguments are diagnosed like those of a TP built-in.
-    pub builtin: bool,
+    /// Where it is declared, which decides how TP diagnoses its arguments.
+    pub origin: Origin,
     /// The result is a String, Real or other in-memory value: the caller passes its address
     /// as a hidden parameter.
     pub result_ptr: bool,
@@ -294,9 +294,19 @@ pub struct Routine {
     pub import: Option<u32>,
 }
 
+/// The source a routine is declared in. TP diagnoses the arguments of a System routine like
+/// those of a built-in; a routine of the runtime units (Crt, Dos) takes a parameterless call
+/// with arguments like a built-in (error 85) but argument types like a user routine.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Origin {
+    User,
+    Unit,
+    System,
+}
+
 impl Routine {
     /// A routine as just declared: no body, no frame yet.
-    pub fn new(signature: Signature, depth: u32, result_ptr: bool, builtin: bool) -> Self {
+    pub fn new(signature: Signature, depth: u32, result_ptr: bool, origin: Origin) -> Self {
         Routine {
             params: signature.params,
             names: signature.names,
@@ -311,7 +321,7 @@ impl Routine {
             frame: 0,
             result_sym: Sym(0),
             copies: Vec::new(),
-            builtin,
+            origin,
             result_ptr,
             addressed: false,
             import: None,

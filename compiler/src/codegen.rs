@@ -1589,7 +1589,8 @@ impl Gen<'_> {
     }
 
     /// `Write(file, items)`: the file's address, 0 for the console, is computed once into a local
-    /// that every item is written to; then the line end of `WriteLn` and the I/O check.
+    /// that every item is written to; then the line end of `WriteLn`, the flush of the console's
+    /// pending output and the I/O check.
     fn write_statement(&mut self, id: Id, args: List, newline: bool) {
         let items = self.ast.items(args);
         let file = self.new_local();
@@ -1607,6 +1608,7 @@ impl Gen<'_> {
             self.code.local_get(file);
             self.helper(Helper::TextNewLine);
         }
+        self.helper(Helper::TextFlush);
         self.io_check(id);
     }
 

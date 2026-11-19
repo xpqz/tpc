@@ -157,7 +157,7 @@ epilogue:  sp = fp + framesize
 ### How a host import is declared
 
 A host import is a routine declared `external` in an embedded runtime source (`runtime/system.pas` and
-`runtime/dos.pas`, Crt later): `procedure RtError(code: LongInt); external;`. `external` is
+`runtime/dos.pas`, `runtime/crt.pas`): `procedure RtError(code: LongInt); external;`. `external` is
 accepted only there; in a user program it is error 200. The import is from module `host`; its
 name is the routine's name in lower case, or the string after the directive when the routine
 cannot have that name (`procedure HostWrite(...); external 'write';`, because `Write` is
@@ -238,6 +238,19 @@ It is, line by line: the 25 rows (trailing blanks cut), `cursor COL ROW` (1-base
 and one `attr ROW COL LEN HEX` line (1-based, two hex digits) for each run of cells in a row
 whose attribute is not `07`, in reading order. A runtime error prints its `Runtime error NNN`
 line first (to stdout), then the dump with `exit NNN`.
+
+### The Crt unit
+
+`runtime/crt.pas` is an embedded unit like Dos (`uses Crt` never finds a user `CRT.PAS`). It keeps
+the window (`WindMin`, `WindMax`), cursor and `TextAttr` and draws with `screen`; `ReadKey`,
+`KeyPressed` and `Delay` call `readkey`, `keypressed` and `sleep`. Its initialisation sets
+System's `ConsoleHooked` and two procedural variables: `ConsoleOut(address, count)` receives
+console output (a `WriteLn` ends with CR LF), `ConsoleLine(address, max)` reads a console line
+like `readline` and does the editing (Backspace, Esc, extended keys ignored). Without Crt the
+hooks are unused and output goes to `write`. While hooked, System holds console output in a
+128-byte buffer until the end of the statement: the compiler calls `TextFlush` after every
+`Write` and `WriteLn`, so `WhereX` inside a statement sees the cursor before the statement's text,
+as in TP.
 
 ### Text files in System
 

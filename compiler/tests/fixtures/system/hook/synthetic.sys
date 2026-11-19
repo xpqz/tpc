@@ -91,6 +91,10 @@ begin
   c := Chr(10);
   HostWrite(1, LongInt(@c), 1)
 end;
+procedure TextFlush;
+begin
+end;
+
 procedure CheckIo;
 begin
 end;
