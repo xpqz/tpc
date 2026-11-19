@@ -50,6 +50,7 @@ const
 var
   TextAttr: Byte;
   WindMin, WindMax: Word;
+  LastMode: Word;
   CheckBreak, CheckEof, CheckSnow, DirectVideo: Boolean;
 
 procedure ClrScr;
@@ -351,6 +352,7 @@ begin
   TextAttr := StartAttr;
   WindMin := 0;
   WindMax := (Columns - 1) + (Rows - 1) * 256;
+  LastMode := 3;
   CheckBreak := True;
   CheckEof := False;
   CheckSnow := True;

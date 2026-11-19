@@ -66,7 +66,6 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
 | D17 | Side effects in the variable of `Inc`/`Dec` | The designator is evaluated once | `Inc(x, n)` is `x := Ord(x) + n`, so a designator with a function call (`Inc(a[F]);`) runs the call twice | No test depends on it |
-| D18 | Word code in `Val` | `Val(s, v, code)` accepts an `Integer` or `Word` variable for `code` | Only `Integer` (26 reported as 98 for others) | |
 | D19 | `ParamStr(0)` | The path of the program | `''`; `ParamCount` is 0 and `ParamStr(n)` is `''` | |
 | D20 | Width wider than the target in `Str` of a Real | The width is cut to the capacity of the target string (`Str(1.5:8:2, t)` with `String[6]` is `  1.50`) | Done for integers; a Real is formatted at the full width and then truncated on the left | |
 | D21 | `Inc`/`Dec` of a subrange under `{$R+}` | `Inc(s)` of `s: 1..10` at 10 is runtime error 201 (a Byte at 255 wraps, unchecked) | `Inc` and `Dec` are never range-checked; the value wraps into the storage size (D17 rewrite) | `lang/inc_dec_of_byte_at_the_limit_is_not_checked` covers the Byte case only |
@@ -117,3 +116,5 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
 | D38 | `{$A B D F L O S V}` switches and `{$M stack,heapmin,heapmax}` | Change code generation, the stack and the heap | Checked as TP checks them (stack 1024 to 65520, heap sizes 0 to 655360) and ignored | `{$N}` and `{$E}`, which TP accepts, stay error 200 (8087 code is omitted); other letters are error 17 as in TP. Odd forms TP tolerates (`{$A++}`, `{$A+B-}`, a `;` between the `$M` numbers) are error 17 here |
+| D39 | `SetTextBuf(f, buf[, size])` | Gives the file a program-supplied buffer | Checked as TP checks it (a Text variable, any variable, an optional Word size) and ignored: buffering is internal to System. Output is the same unless the program relies on the buffer's contents | `lang/settextbuf_with_and_without_size_is_ignored` |
+| D40 | `LastMode` and `TextMode` | `LastMode` is the video mode before the program started; `TextMode(m)` switches mode, clears the screen and sets `LastMode` to `m` | `LastMode` is a Word variable fixed at 3 (`CO80`); `TextMode` is omitted (error 3) | `lang/swag_crt_lastmode` |

@@ -202,6 +202,7 @@ pub enum Intrinsic {
     Val,
     FillChar,
     Move,
+    SetTextBuf,
     Exp,
     Ln,
     Sin,

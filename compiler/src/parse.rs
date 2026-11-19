@@ -1227,9 +1227,10 @@ impl Parser<'_> {
         let t = self.tok();
         match t.kind {
             Tk::Ident => self.identifier_factor(line, col),
-            Tk::IntLit if t.int > i32::MAX as i64 => Err(self.err(code::INTEGER_CONSTANT_ERROR)),
             Tk::IntLit => {
-                let value = t.int;
+                // Only a hexadecimal literal can exceed LongInt (the lexer caps decimal ones):
+                // `$80000000`..`$FFFFFFFF` is the 32-bit pattern of a negative LongInt.
+                let value = t.int as u32 as i32 as i64;
                 self.advance();
                 Ok(self.ast.add(Kind::IntLit(value), line, col))
             }

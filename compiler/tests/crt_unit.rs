@@ -58,7 +58,7 @@ fn crt_corpus(kind: &str) -> PathBuf {
         }
     }
     let want = match kind {
-        "lang" => 45,
+        "lang" => 46,
         "rt" => 4,
         _ => 12,
     };
