@@ -4,6 +4,7 @@
 //! Notes from the oracle: the end-of-file error (10) is reported on the last line of the
 //! file, a statement followed by anything but `;` or `end` is 85 (never 37), and a header
 //! name that is not an identifier is 2.
+mod common;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -224,9 +225,7 @@ const ERR: &[(&str, &str, u16, u32)] = &[
 ];
 
 fn wasm_dir() -> PathBuf {
-    let d = root().join("tmp/skeleton");
-    std::fs::create_dir_all(&d).unwrap();
-    d
+    crate::common::fresh_dir("skeleton")
 }
 
 fn run_wasm(name: &str, wasm: &[u8]) -> Result<Vec<u8>, String> {
