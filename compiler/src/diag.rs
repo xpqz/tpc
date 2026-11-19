@@ -21,6 +21,7 @@ pub mod code {
     pub const REAL_CONSTANT_ERROR: u16 = 6;
     pub const INTEGER_CONSTANT_ERROR: u16 = 7;
     pub const STRING_EXCEEDS_LINE: u16 = 8;
+    pub const TOO_MANY_NESTED_FILES: u16 = 9;
     pub const UNEXPECTED_END_OF_FILE: u16 = 10;
     pub const TYPE_IDENTIFIER_EXPECTED: u16 = 12;
     pub const FILE_NOT_FOUND: u16 = 15;
@@ -78,7 +79,10 @@ pub mod code {
     pub const CHAR_EXPRESSION_EXPECTED: u16 = 106;
     pub const CASE_CONSTANT_OUT_OF_RANGE: u16 = 112;
     pub const ERROR_IN_STATEMENT: u16 = 113;
+    pub const INCLUDE_NOT_ALLOWED: u16 = 118;
     pub const INVALID_QUALIFIER: u16 = 121;
+    pub const MISPLACED_CONDITIONAL: u16 = 128;
+    pub const ENDIF_MISSING: u16 = 129;
     pub const INVALID_VARIABLE_REFERENCE: u16 = 122;
     pub const IMPLEMENTATION_EXPECTED: u16 = 73;
     pub const HEADER_MISMATCH: u16 = 131;
@@ -99,6 +103,7 @@ pub const TABLE: &[(u16, &str)] = &[
     (6, "Error in real constant"),
     (7, "Error in integer constant"),
     (8, "String constant exceeds line"),
+    (9, "Too many nested files"),
     (10, "Unexpected end of file"),
     (12, "Type identifier expected"),
     (15, "File not found"),
@@ -158,7 +163,10 @@ pub const TABLE: &[(u16, &str)] = &[
     (101, "Invalid ordering of fields"),
     (112, "CASE constant out of range"),
     (113, "Error in statement"),
+    (118, "Include files are not allowed here"),
     (121, "Invalid qualifier"),
+    (128, "Misplaced conditional directive"),
+    (129, "ENDIF directive missing"),
     (133, "Cannot evaluate this expression"),
     (200, "Feature not supported"),
 ];

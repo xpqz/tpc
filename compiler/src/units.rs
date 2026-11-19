@@ -15,6 +15,7 @@
 //! which is how implementation parts may use each other (Turbo Pascal's rule, measured).
 use crate::ast::{Ast, Id, Kind, List, Plan};
 use crate::diag::{code, Diag};
+use crate::directives::{expand, in_file};
 use crate::lex::{lex, Tok};
 use crate::parse::{parse_program, parse_system, parse_unit};
 use crate::symbols::name_of;
@@ -45,31 +46,26 @@ struct Loader<'a> {
     init_order: Vec<Id>,
 }
 
-/// TP reports end of file on the last line of the file, not after its final newline.
-fn last_line(text: &[u8]) -> u32 {
-    let newlines = text.iter().filter(|&&c| c == b'\n').count() as u32;
-    let unterminated = !text.ends_with(b"\n") as u32;
-    (newlines + unterminated).max(1)
-}
-
-/// A diagnostic of file number `file` whose text is `text`. System's own diagnostics stay at
-/// line 0, as its tokens are.
-fn in_file(d: Diag, file: u32, text: &[u8]) -> Diag {
-    let end_of_file = d.code == code::UNEXPECTED_END_OF_FILE && d.line != 0;
-    let line = if end_of_file { last_line(text) } else { d.line };
-    Diag { line, file, ..d }
-}
-
-/// Lexes and parses `text` as file number `file` with `parse`.
+/// Reads `text` as file number `file` through the directives front end and parses it with
+/// `parse`.
 fn parse_file(
     ast: &mut Ast,
     file: u32,
     text: &[u8],
+    files: &[SourceFile],
     parse: fn(&mut Ast, Vec<Tok>) -> Result<Id, Diag>,
 ) -> Result<Id, Diag> {
     ast.file = file;
-    let tokens = lex(text).map_err(|d| in_file(d, file, text))?;
-    parse(ast, tokens).map_err(|d| in_file(d, file, text))
+    let tokens = expand(file, text, files)?;
+    parse(ast, tokens).map_err(|d| in_file(d, d.file, text))
+}
+
+/// The position in the file table of the file called `name`, any case. Of two files with the
+/// same name the later registration wins.
+pub fn find_file(files: &[SourceFile], name: &[u8]) -> Option<usize> {
+    files
+        .iter()
+        .rposition(|f| f.name.as_bytes().eq_ignore_ascii_case(name))
 }
 
 /// Parses System, the program and every unit the program uses.
@@ -79,7 +75,7 @@ pub fn load(system: &[u8], program: &[u8], files: &[SourceFile]) -> Result<(Ast,
     let mut system_tokens = lex(system).map_err(|d| Diag { line: 0, ..d })?;
     system_tokens.iter_mut().for_each(|t| t.line = 0);
     let system_node = parse_system(&mut ast, system_tokens).map_err(|d| in_file(d, 0, system))?;
-    let program_node = parse_file(&mut ast, 0, program, parse_program)?;
+    let program_node = parse_file(&mut ast, 0, program, files, parse_program)?;
     let Kind::Program { uses, .. } = ast.kind(program_node) else {
         unreachable!("parse_program makes a program")
     };
@@ -159,16 +155,12 @@ impl Loader<'_> {
     fn load_unit(&mut self, file: u32, entry: Id, name: u32) -> Result<(Id, u32), Diag> {
         let mut wanted = self.ast.names[name as usize].clone();
         wanted.extend_from_slice(b".PAS");
-        let found = self
-            .files
-            .iter()
-            .rposition(|f| f.name.as_bytes().eq_ignore_ascii_case(&wanted));
-        let Some(position) = found else {
+        let Some(position) = find_file(self.files, &wanted) else {
             return Err(self.at_entry(entry, code::FILE_NOT_FOUND, file));
         };
         let unit_file = position as u32 + 1;
         let text = &self.files[position].text;
-        let node = parse_file(&mut self.ast, unit_file, text, parse_unit)?;
+        let node = parse_file(&mut self.ast, unit_file, text, self.files, parse_unit)?;
         let Kind::Unit { name: declared, .. } = self.ast.kind(node) else {
             unreachable!("parse_unit makes a unit")
         };

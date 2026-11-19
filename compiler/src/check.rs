@@ -76,6 +76,8 @@ struct Cx<'a> {
 /// Two phases, because a unit's implementation may use a unit whose interface completes
 /// later (`Plan` has the orders).
 pub fn check(ast: &mut Ast, plan: &Plan) -> R<Info> {
+    // Nodes the checker makes are not range checked unless they copy a checked node.
+    ast.range_checks = false;
     let symbols = Symbols::new(ast);
     let mut cx = Cx {
         ast,
@@ -1921,8 +1923,8 @@ impl Cx<'_> {
             right: step,
         };
         let sum = self.ast.typed(sum, result, at);
-        // Line 0: outside every `{$R+}` region, so `Inc` and `Dec` are never range checked.
-        self.ast.nodes[sum as usize].line = 0;
+        // `Inc` and `Dec` are never range checked.
+        self.ast.nodes[sum as usize].range_checks = false;
         Ok(Kind::Assign(target, sum))
     }
 

@@ -14,7 +14,7 @@
 //! A unit name (System, the unit itself, each name in a `uses` clause) followed by `.` and an
 //! identifier is a qualified name. The parser replaces the pair by one interned name `U.X`
 //! and records it in `Ast::qualified`; the symbol table resolves it in the unit's exports.
-use crate::ast::{Ast, FollowLine, Id, Kind, List, Op, Qualified, RangeSwitch, NO_NAME};
+use crate::ast::{Ast, FollowLine, Id, Kind, List, Op, Qualified, NO_NAME};
 use crate::diag::{code, Diag};
 use crate::lex::{Tk, Tok};
 
@@ -62,14 +62,6 @@ struct IdentAt {
     col: u32,
 }
 
-/// A compiler switch `{$X+}` or `{$X-}`.
-enum Switch {
-    /// A switch this compiler accepts and ignores.
-    Ignored,
-    /// `{$R+}` (true) or `{$R-}`.
-    RangeChecks(bool),
-}
-
 struct Parser<'a> {
     tokens: Vec<Tok>,
     pos: usize,
@@ -86,47 +78,7 @@ struct Parser<'a> {
 
 type R<T> = Result<T, Diag>;
 
-/// One item of a comma separated directive: `F+`, `R-`, ... Anything else is error 17, and a
-/// well-formed switch this compiler does not know is error 200.
-fn parse_switch(item: &[u8]) -> Result<Switch, u16> {
-    match item.to_ascii_uppercase().as_slice() {
-        b"F+" | b"F-" => Ok(Switch::Ignored),
-        b"R+" | b"R-" => Ok(Switch::RangeChecks(item[1] == b'+')),
-        [letter, b'+' | b'-'] if letter.is_ascii_alphabetic() => Err(code::NOT_SUPPORTED),
-        _ => Err(code::INVALID_DIRECTIVE),
-    }
-}
-
 impl Parser<'_> {
-    /// Removes the directive tokens, recording the range-check switches with their position.
-    fn drop_directives(&mut self, tokens: Vec<Tok>) -> R<Vec<Tok>> {
-        for directive in tokens.iter().filter(|t| t.kind == Tk::Directive) {
-            for item in directive.text.split(|&c| c == b',') {
-                match parse_switch(item) {
-                    Ok(Switch::Ignored) => {}
-                    Ok(Switch::RangeChecks(on)) => self.ast.range.push(RangeSwitch {
-                        file: self.ast.file,
-                        line: directive.line,
-                        col: directive.col,
-                        on,
-                    }),
-                    Err(code) => {
-                        return Err(Diag {
-                            code,
-                            line: directive.line,
-                            col: directive.col,
-                            file: 0,
-                        })
-                    }
-                }
-            }
-        }
-        Ok(tokens
-            .into_iter()
-            .filter(|t| t.kind != Tk::Directive)
-            .collect())
-    }
-
     /// `[program Name [(files)];]`; returns the name, `NO_NAME` when there is no header.
     fn program_header(&mut self) -> R<u32> {
         if !self.kw(b"PROGRAM") {
@@ -154,7 +106,7 @@ impl Parser<'_> {
                         code: code::DUPLICATE_IDENTIFIER,
                         line,
                         col,
-                        file: 0,
+                        file: self.previous().file,
                     });
                 }
                 self.unit_names.push(name);
@@ -205,24 +157,23 @@ impl Parser<'_> {
 }
 
 /// A parser over `toks` that adds to `ast`.
-fn parser<'a>(ast: &'a mut Ast, toks: Vec<Tok>) -> R<Parser<'a>> {
+fn parser(ast: &mut Ast, tokens: Vec<Tok>) -> Parser<'_> {
     let system = ast.intern(b"SYSTEM");
-    let mut parser = Parser {
-        tokens: Vec::new(),
+    ast.range_checks = false;
+    Parser {
+        tokens,
         pos: 0,
         ast,
         stops: StopWords::default(),
         in_system: false,
         in_interface: false,
         unit_names: vec![system],
-    };
-    parser.tokens = parser.drop_directives(toks)?;
-    Ok(parser)
+    }
 }
 
 /// System's declaration part, as a unit whose declarations are all in its interface.
 pub fn parse_system(ast: &mut Ast, toks: Vec<Tok>) -> R<Id> {
-    let mut parser = parser(ast, toks)?;
+    let mut parser = parser(ast, toks);
     parser.in_system = true;
     let declarations = parser.declarations()?;
     if parser.tok().kind != Tk::Eof {
@@ -243,12 +194,12 @@ pub fn parse_system(ast: &mut Ast, toks: Vec<Tok>) -> R<Id> {
 
 /// The unit in `toks`.
 pub fn parse_unit(ast: &mut Ast, toks: Vec<Tok>) -> R<Id> {
-    parser(ast, toks)?.unit()
+    parser(ast, toks).unit()
 }
 
 /// The program in `toks`.
 pub fn parse_program(ast: &mut Ast, toks: Vec<Tok>) -> R<Id> {
-    let mut parser = parser(ast, toks)?;
+    let mut parser = parser(ast, toks);
     let name = parser.program_header()?;
     let uses = parser.uses_clause()?;
     let declarations = parser.declarations()?;
@@ -306,7 +257,11 @@ impl Parser<'_> {
         &self.tokens[self.pos - 1]
     }
 
+    /// Consumes the lookahead. New nodes belong to the file and `{$R}` state of the last token
+    /// consumed.
     fn advance(&mut self) {
+        self.ast.file = self.tokens[self.pos].file;
+        self.ast.range_checks = self.tokens[self.pos].range_checks;
         self.pos += 1;
     }
 
@@ -326,7 +281,7 @@ impl Parser<'_> {
             code,
             line: t.line,
             col: t.col,
-            file: 0,
+            file: t.file,
         }
     }
 

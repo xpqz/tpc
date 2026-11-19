@@ -177,9 +177,17 @@ fn corpus_lists_are_sorted_name_existing_programs_and_leave_pending() {
                 let p = root().join(format!("tests/{kind}/{n}.{e}"));
                 assert!(p.exists(), "{}", p.display());
             }
-            let needs_files = !n.starts_with("ifdef_") && !n.starts_with("ifndef_");
+            // These name an include that is never read, or none at all.
+            let no_files = [
+                "include_file_not_found",
+                "include_skipped_by_conditional_is_not_read",
+            ];
+            let needs_files = n.contains("include") && !no_files.contains(n);
             let has_files = root().join(format!("tests/{kind}/{n}")).is_dir();
-            assert!(has_files || !needs_files || *n == "include_file_not_found");
+            assert!(
+                has_files || !needs_files,
+                "{kind}/{n} has no auxiliary directory"
+            );
             assert!(
                 !pending.lines().any(|l| l.trim() == *n),
                 "{kind}/{n} is still in PENDING"
