@@ -1,7 +1,7 @@
 CARGO_TARGET_DIR := $(shell scripts/cargo-target.sh)
 export CARGO_TARGET_DIR
 
-.PHONY: build test fmt clippy check wasm loc hooks oracle oracle-tables
+.PHONY: build test test-browser fmt clippy check wasm loc hooks oracle oracle-tables
 
 build:
 	cargo build
@@ -11,6 +11,10 @@ test:
 	sh tests/tools/loc_test.sh
 	sh tests/tools/tp5_test.sh
 	sh tests/tools/oracle_test.sh
+
+# Drives the installed Chrome headless; needs a machine that can run it, so not part of `check`.
+test-browser:
+	node tests/host/browser/run.mjs
 
 fmt:
 	cargo fmt
