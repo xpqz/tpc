@@ -1,9 +1,11 @@
 { Menu: the menu bar on row 1 and its pull-down menus.
 
   Main paints with View.Paint, which writes a placeholder on row 1, and then calls DrawBar to
-  write the real bar over it. Run opens the pull-down for the letter in Keys.MenuLetter (#0,
-  from F10, opens the first menu) and returns the command chosen, in the codes of Keys. Run
-  reads keys itself until a command is chosen or the menu is cancelled.
+  write the real bar over it: the titles at the left and the current file name at the right
+  end. Show draws the same bar, so the file name stays while a pull-down is open.
+  Run opens the pull-down for the letter in Keys.MenuLetter (#0, from F10, opens the first
+  menu) and returns the command chosen, in the codes of Keys. Run reads keys itself until a
+  command is chosen or the menu is cancelled.
 
   The menus are one table of titles and one table of items; a menu owns the items from
   FirstItem to LastItem. A pull-down covers part of the edit area, so closing it, and
@@ -20,10 +22,11 @@ function Run(Letter: Char): Integer;
 
 implementation
 
-uses Crt, View, Keys;
+uses Crt, View, Keys, Files;
 
 const
   MenuRow = 1;
+  ScreenWidth = 80;
   PullDownRow = 2;
   PullDownWidth = 20;
   SelectedAttr = $07;   { light grey on black }
@@ -82,6 +85,17 @@ begin
   TitleColumn := Column;
 end;
 
+{ Writes the current file name at the right end of the bar. }
+procedure WriteFileName;
+var
+  Name: string;
+begin
+  TextAttr := BarAttr;
+  Name := ' ' + CurrentName + ' ';
+  GotoXY(ScreenWidth - Length(Name) + 1, MenuRow);
+  Write(Name);
+end;
+
 { Writes the bar; the title of Open is shown selected, 0 selects none. The cursor stays where
   it was. }
 procedure WriteBar(Open: Integer);
@@ -103,6 +117,7 @@ begin
     GotoXY(TitleColumn(Menu) - 1, MenuRow);
     Write(' ' + Titles[Menu].Text + ' ');
   end;
+  WriteFileName;
   GotoXY(SavedX, SavedY);
 end;
 
