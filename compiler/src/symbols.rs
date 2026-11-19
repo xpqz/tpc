@@ -121,8 +121,9 @@ pub const HELPERS: &[(Helper, &[u8])] = &[
 /// The most bytes of one structure, of all globals, or of one routine's locals.
 pub const MAX_DATA: u32 = 65535;
 
-/// Static data: globals start here, after the code generator's fixed header (bytes 256 to
-/// 278: the characters it writes and its digit buffer), rounded up to a multiple of 8.
+/// Static data: globals start here, after the code generator's fixed header (the characters
+/// it writes and its digit buffer, which `codegen.rs` checks fit below this address), rounded
+/// up to a multiple of 8.
 pub const GLOBALS: u32 = 280;
 
 /// The first 4 bytes of a frame hold the static link of a nested routine.
