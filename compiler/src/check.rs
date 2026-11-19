@@ -2354,7 +2354,7 @@ impl Cx<'_> {
     }
 
     /// `SetTextBuf(f, buffer[, size])` is checked and then dropped: file buffering is
-    /// internal to System, so a program's own buffer is never used (deviation D39).
+    /// internal to System, so a program's own buffer is never used (deviation D40).
     fn set_text_buf(&mut self, at: Id, args: List) -> R<Kind> {
         let items = self.ast.items_vec(args);
         self.expect_arg_count(at, items.len(), 2, 3)?;

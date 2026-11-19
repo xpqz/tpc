@@ -116,5 +116,11 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
 | D38 | `{$A B D F L O S V}` switches and `{$M stack,heapmin,heapmax}` | Change code generation, the stack and the heap | Checked as TP checks them (stack 1024 to 65520, heap sizes 0 to 655360) and ignored | `{$N}` and `{$E}`, which TP accepts, stay error 200 (8087 code is omitted); other letters are error 17 as in TP. Odd forms TP tolerates (`{$A++}`, `{$A+B-}`, a `;` between the `$M` numbers) are error 17 here |
-| D39 | `SetTextBuf(f, buf[, size])` | Gives the file a program-supplied buffer | Checked as TP checks it (a Text variable, any variable, an optional Word size) and ignored: buffering is internal to System. Output is the same unless the program relies on the buffer's contents | `lang/settextbuf_with_and_without_size_is_ignored` |
-| D40 | `LastMode` and `TextMode` | `LastMode` is the video mode before the program started; `TextMode(m)` switches mode, clears the screen and sets `LastMode` to `m` | `LastMode` is a Word variable fixed at 3 (`CO80`); `TextMode` is omitted (error 3) | `lang/swag_crt_lastmode` |
+| D40 | `SetTextBuf(f, buf[, size])` | Gives the file a program-supplied buffer | Checked as TP checks it (a Text variable, any variable, an optional Word size) and ignored: buffering is internal to System. Output is the same unless the program relies on the buffer's contents | `lang/settextbuf_with_and_without_size_is_ignored` |
+| D41 | `LastMode` and `TextMode` | `LastMode` is the video mode before the program started; `TextMode(m)` switches mode, clears the screen and sets `LastMode` to `m` | `LastMode` is a Word variable fixed at 3 (`CO80`); `TextMode` is omitted (error 3) | `lang/swag_crt_lastmode` |
+
+## Dos file names (#88)
+
+| # | Deviation | TP5 | This compiler | Notes |
+|---|---|---|---|---|
+| D39 | `FExpand`, `GetDir`, `DosError` on a flat virtual file system | `FExpand` and `GetDir` use the real current directory of each drive (the oracle runs with `C:\` current, so the corpus cannot tell); `DosError` holds whatever the unit data held at start | The current directory of every drive is its root; `GetDir(d)` is the letter `Chr(64 + d)` (0 is `C`) and `:\`, with no check that the drive exists; `DosError` is 0 and nothing sets it. `FExpand` upper-cases ASCII only | `FindFirst`, `FindNext`, `FSearch`, `DiskSize`, `DiskFree`, `ChDir`, `GetFAttr`, `GetFTime` are omitted (see subset.md) |
