@@ -10,16 +10,18 @@ import { readKey, keyPressed } from "./keys.js";
 import { Screen } from "./screen.js";
 import { LineInput } from "./vfs.js";
 
+// The browser clock is real: `sleep` really waits. (The test runner's clock is virtual, see
+// runtime.js.)
 const localNowMs = () => Date.now() - new Date().getTimezoneOffset() * 60000;
 
 export async function runProgram({ bytes, files, keys, grid, post }) {
-  const pause = new Int32Array(new SharedArrayBuffer(4)); // never notified: waits time out
+  // A word nobody notifies: Atomics.wait on it is a sleep that times out.
+  const pause = new Int32Array(new SharedArrayBuffer(4));
   const screen = new Screen(grid);
   const host = new Host({
     write: (_fd, bytes) => screen.print(bytes),
     input: new LineInput(new Uint8Array(0)),
     files,
-    // Sleeping waits for real, so the clock only needs to read the real time.
     clock: { nowMs: localNowMs, advance: (ms) => Atomics.wait(pause, 0, 0, ms) },
     keys: { available: () => keyPressed(keys), next: () => readKey(keys) },
     screen,
@@ -33,6 +35,7 @@ export async function runProgram({ bytes, files, keys, grid, post }) {
   }
 }
 
+// Only inside a real Worker; the test runner imports runProgram and calls it itself.
 if (typeof WorkerGlobalScope !== "undefined") {
   onmessage = ({ data }) => runProgram({ ...data, post: postMessage });
 }

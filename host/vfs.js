@@ -3,6 +3,8 @@
 // files, and none of it reaches the source of the snapshot or the next run. Both classes work
 // on Uint8Array, so they run in a browser and in Node alike.
 
+import { LF, CR } from "./terminal.js";
+
 export const RESET = 0;
 export const REWRITE = 1;
 export const APPEND = 2;
@@ -81,9 +83,6 @@ export class Vfs {
     return this.handles.delete(handle) ? 0 : BAD_HANDLE;
   }
 }
-
-const LF = 0x0a;
-const CR = 0x0d;
 
 // Console input held as bytes and split into lines on demand.
 export class LineInput {
