@@ -902,6 +902,17 @@ begin
   f.Name := name
 end;
 
+{ A file assigned the empty name is the console: opened for input it reads standard input (or
+  Crt's keyboard line), opened for output it writes standard output (or Crt's screen), the way
+  Input and Output do. There is no host handle, so Close has nothing to release. }
+procedure OpenConsole(var f: Text; textMode: Integer);
+begin
+  f.Mode := textMode;
+  f.Pos := 0;
+  f.Len := 0;
+  f.Ended := False
+end;
+
 { Reset, Rewrite and Append: open the assigned name with the host mode, for reading or writing.
   A file that is open is closed first; a failure leaves it closed. }
 procedure OpenFile(var f: Text; hostMode, textMode: Integer);
@@ -910,6 +921,12 @@ begin
   if f.Mode = ModeUnassigned then
   begin
     InOutRes := IoNotAssigned;
+    Exit
+  end;
+  if f.Name[0] = Chr(0) then
+  begin
+    if textMode = ModeInput then OpenConsole(f, ModeConsoleInput)
+    else OpenConsole(f, ModeConsoleOutput);
     Exit
   end;
   if f.Mode >= ModeConsoleInput then Exit;
