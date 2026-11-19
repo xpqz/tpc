@@ -164,8 +164,8 @@ EXPECTED=$(cat <<EOT
 1400|$SRC/types.rs $SRC/symbols.rs
 1500|runtime
 2000|$SRC/ast.rs $SRC/parse.rs
-2200|$SRC/check.rs
-2500|$SRC/codegen.rs
+2600|$SRC/check.rs
+2100|$SRC/codegen.rs
 2500|ide
 350|$SRC/wasm.rs
 450|$SRC/lex.rs
@@ -181,8 +181,8 @@ if [ -f "$B" ]; then
         while IFS='|' read -r _ lim paths; do
             printf '%s|%s\n' "$lim" "$(printf '%s\n' $paths | sort | tr '\n' ' ')"
         done | sort)
-    if [ "$ACTUAL" = "$EXPECTED" ]; then pass "budget.txt: components, limits and paths match plan (with decision 45)"
-    else fail "budget.txt: components, limits and paths match plan (with decision 45)" \
+    if [ "$ACTUAL" = "$EXPECTED" ]; then pass "budget.txt: components, limits and paths match plan (with decisions 45 and 51)"
+    else fail "budget.txt: components, limits and paths match plan (with decisions 45 and 51)" \
         "expected:
 $EXPECTED
 actual:
@@ -196,7 +196,7 @@ $ACTUAL"; fi
     if [ "$sum" -eq 14600 ]; then pass "budget.txt: component limits sum to 14600"
     else fail "budget.txt: component limits sum to 14600" "sum $sum"; fi
 else
-    fail "budget.txt: components, limits and paths match plan (with decision 45)" "$B missing"
+    fail "budget.txt: components, limits and paths match plan (with decisions 45 and 51)" "$B missing"
     fail "budget.txt: total is 15000" "$B missing"
     fail "budget.txt: component limits sum to 14600" "$B missing"
 fi

@@ -660,3 +660,11 @@ The remaining findings are Phase 8 issues: harmless compiler switches and `{$M}`
 `Word` (D18 retired), large hex literals, Crt `LastMode`, `SetTextBuf`, `Assign(f, '')` as
 the console, error 11 for long lines, and heap exhaustion ending in 203.
 >>>>>>> main
+
+## 51. Rebalance: 400 lines from codegen to the checker
+
+User direction: the checker may borrow from components with spare lines. Checker 2,200 to
+2,600; codegen 2,500 to 2,100 (it used 1,585). The checker + codegen pair stays at 4,700 and
+the total at 15,000. The plan's checkpoint (pair at most 5,200) is unchanged. Readability
+still comes first (decision 31): the extra room is for Phase 8's compatibility work, not
+for denser code elsewhere.
