@@ -181,6 +181,14 @@ impl Ast {
         self.nodes.len() as Id - 1
     }
 
+    /// A node of type `ty` at the position of `at`.
+    pub fn typed(&mut self, kind: Kind, ty: Ty, at: Id) -> Id {
+        let (line, col) = (self.nodes[at as usize].line, self.nodes[at as usize].col);
+        let id = self.add(kind, line, col);
+        self.nodes[id as usize].ty = ty;
+        id
+    }
+
     pub fn list(&mut self, items: &[Id]) -> List {
         let start = self.lists.len() as u32;
         self.lists.extend_from_slice(items);

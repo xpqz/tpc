@@ -73,8 +73,8 @@ const WSTR: u32 = 2;
 const WINT: u32 = 3;
 const QUOT: u32 = 4;
 const RDIV: u32 = 5;
-/// With Real arithmetic the module imports `fmt_real` (index 2) and defines `RDIV`; every
-/// later index shifts by `Layout::shift` (imports) and once more for the routines.
+/// A module that formats Reals imports `fmt_real` (index 2): every later index shifts by
+/// `Layout::fmt`. A module that divides Reals defines `RDIV`: the routines shift by `Layout::div`.
 const HOST_FMT: u32 = 2;
 /// Index of the first user routine; the main program follows the last.
 const ROUTINES: u32 = 5;
@@ -94,14 +94,18 @@ struct Layout {
     wtypes: Vec<u32>,
     /// Table index of each routine whose address is taken.
     slots: Vec<u32>,
-    /// 1 when the module uses Real, else 0.
-    shift: u32,
+    /// 1 when the module imports `fmt_real`, else 0.
+    fmt: u32,
+    /// 1 when the module defines `RDIV`, else 0.
+    div: u32,
+    /// The support (`FMT`, `DIV`) that the bodies called.
+    used: u8,
 }
 
 impl Layout {
     fn func(&mut self, r: u32) -> u32 {
         if self.index[r as usize].is_none() {
-            let first = ROUTINES + 2 * self.shift;
+            let first = ROUTINES + self.fmt + self.div;
             self.index[r as usize] = Some(first + self.order.len() as u32);
             self.order.push(r);
         }
@@ -143,7 +147,23 @@ struct Gen<'a> {
     withs: Vec<(Id, u32)>,
 }
 
+const FMT: u8 = 1;
+const DIV: u8 = 2;
+
+/// Generates with the Real support found so far until the bodies need no more.
 pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
+    let mut have = 0;
+    loop {
+        let (m, used) = pass(ast, info, root, have);
+        if used & !have == 0 {
+            return m;
+        }
+        have |= used;
+    }
+}
+
+/// One generation of the module with the support in `have`; returns the support the bodies called.
+fn pass(ast: &Ast, info: &Info, root: Id, have: u8) -> (Vec<u8>, u8) {
     let mut m = Module::new();
     let mut wtypes = vec![0; info.types.v.len()];
     for (i, t) in info.types.v.iter().enumerate() {
@@ -160,7 +180,6 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
             *slots.last_mut().unwrap() = 0;
         }
     }
-    let real = ast.nodes.iter().any(|n| n.ty == Ty::REAL);
     let mut layout = Layout {
         addr: vec![None; ast.strs.len()],
         lits: Vec::new(),
@@ -169,13 +188,15 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
         order: Vec::new(),
         wtypes,
         slots,
-        shift: real as u32,
+        fmt: (have & FMT) as u32,
+        div: (have & DIV != 0) as u32,
+        used: 0,
     };
     let write = m.ty(&[I32, I32, I32], &[]);
     let rterror = m.ty(&[I32], &[]);
     m.import_func("host", "write", write);
     m.import_func("host", "rterror", rterror);
-    if real {
+    if have & FMT != 0 {
         let fmt = m.ty(&[F64, I32, I32, I32], &[I32]);
         m.import_func("host", "fmt_real", fmt);
     }
@@ -183,10 +204,10 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
     m.global_i32(true, TOP as i32);
     m.func(write, &[], write_string());
     let two = m.ty(&[I32, I32], &[]);
-    m.func(two, &[I32, I32, I32], write_integer(layout.shift));
+    m.func(two, &[I32, I32, I32], write_integer(layout.fmt));
     let three = m.ty(&[I32, I32, I32], &[I32]);
     m.func(three, &[], quotient());
-    if real {
+    if have & DIV != 0 {
         let div = m.ty(&[F64, F64], &[F64]);
         m.func(div, &[], real_quotient());
     }
@@ -233,7 +254,7 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
     // The heap starts, 8-aligned, after the literals: `HeapOrg` and `HeapPtr` both hold it.
     let start = ((info.data_end + layout.lits.len() as u32 + 7) & !7).to_le_bytes();
     m.data(info.heap, &[start, start].concat());
-    m.finish()
+    (m.finish(), layout.used)
 }
 
 /// A routine body wrapped in `block $exit`, between the frame prologue and epilogue, followed
@@ -558,6 +579,27 @@ impl Gen<'_> {
             }
             Kind::Invoke(r, args) => {
                 let t = self.invoke(r, args).expect("string function");
+                self.temp_addr(t);
+            }
+            Kind::Fmt(v, w, d) => {
+                // The digits go to the temporary after its length byte, which is clamped to 255.
+                let (t, n) = (self.new_temp(REAL_BUF), self.new_local());
+                self.temp_addr(t);
+                self.code.i32_const(255);
+                self.real(v);
+                self.expr(w);
+                match d {
+                    Some(d) => self.expr(d),
+                    None => {
+                        self.code.i32_const(-1);
+                    }
+                }
+                self.temp_addr(t);
+                self.layout.used |= FMT;
+                self.code.i32_const(1).op(I32_ADD).idx(CALL, HOST_FMT);
+                self.code.idx(LOCAL_TEE, n).idx(LOCAL_GET, n);
+                self.code.i32_const(255).op(I32_GT_S).op(SELECT);
+                self.code.mem(I32_STORE8, 0, 0);
                 self.temp_addr(t);
             }
             _ => self.address_of(e),
@@ -1024,6 +1066,7 @@ impl Gen<'_> {
                     }
                 }
                 self.temp_addr(t);
+                self.layout.used |= FMT;
                 self.code.idx(CALL, HOST_FMT).idx(CALL, HOST_WRITE);
             }
             (None, Kind::StrLit(s)) => {
@@ -1033,7 +1076,7 @@ impl Gen<'_> {
                     .i32_const(addr as i32 + 1)
                     .i32_const(bytes.len() as i32);
                 self.width(w);
-                self.code.idx(CALL, WSTR + self.layout.shift);
+                self.code.idx(CALL, WSTR + self.layout.fmt);
             }
             (None, _) if self.info.types.is_str(n.ty) => {
                 let t = self.new_local();
@@ -1042,19 +1085,19 @@ impl Gen<'_> {
                 self.code.idx(LOCAL_GET, t).i32_const(1).op(I32_ADD);
                 self.code.idx(LOCAL_GET, t).mem(0x2D, 0, 0);
                 self.width(w);
-                self.code.idx(CALL, WSTR + self.layout.shift);
+                self.code.idx(CALL, WSTR + self.layout.fmt);
             }
             (Some(Tag::Int), _) => {
                 self.expr(e);
                 self.width(w);
-                self.code.idx(CALL, WINT + self.layout.shift);
+                self.code.idx(CALL, WINT + self.layout.fmt);
             }
             (Some(Tag::Char), _) => {
                 self.code.i32_const(BUF);
                 self.expr(e);
                 self.code.mem(I32_STORE8, 0, 0).i32_const(BUF).i32_const(1);
                 self.width(w);
-                self.code.idx(CALL, WSTR + self.layout.shift);
+                self.code.idx(CALL, WSTR + self.layout.fmt);
             }
             _ => {
                 let t = self.new_local();
@@ -1071,7 +1114,7 @@ impl Gen<'_> {
                     .idx(LOCAL_GET, t)
                     .op(SELECT);
                 self.width(w);
-                self.code.idx(CALL, WSTR + self.layout.shift);
+                self.code.idx(CALL, WSTR + self.layout.fmt);
             }
         }
     }
@@ -1131,7 +1174,8 @@ impl Gen<'_> {
             Kind::Binary(Op::Slash, a, b) => {
                 self.real(a);
                 self.real(b);
-                self.code.idx(CALL, RDIV + self.layout.shift);
+                self.layout.used |= DIV;
+                self.code.idx(CALL, RDIV + self.layout.fmt);
             }
             Kind::Binary(op, a, b) => {
                 self.real(a);
@@ -1240,9 +1284,7 @@ impl Gen<'_> {
                 self.expr(b);
                 if matches!(op, Op::Div | Op::Mod) {
                     let flags = (op == Op::Mod) as i32 + 2 * (n.ty == Ty::INTEGER) as i32;
-                    self.code
-                        .i32_const(flags)
-                        .idx(CALL, QUOT + self.layout.shift);
+                    self.code.i32_const(flags).idx(CALL, QUOT + self.layout.fmt);
                     return;
                 }
                 self.code.op(binary_op(op));

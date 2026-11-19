@@ -547,6 +547,20 @@ impl Types {
         }
     }
 
+    /// Type of the value that `Inc`/`Dec` (26, 27), `Str` (28) or `Val` (29) assigns to its
+    /// variable argument of type `target` (`value` is the argument of `Str`), or the error.
+    pub fn convert(&self, which: i64, target: Ty, value: Ty) -> Result<Ty, u16> {
+        match (which, self.tag(target)) {
+            (26 | 27, Some(_)) => Ok(Ty::LONGINT),
+            (26 | 27, None) => Err(104),
+            (28, _) if !self.is_str(target) => Err(66),
+            (28, _) => self.unary(Op::Abs, value).map(|_| Ty::STRING),
+            (_, Some(Tag::Int)) => Ok(Ty::LONGINT),
+            _ if target == Ty::REAL => Ok(Ty::REAL),
+            _ => Err(103),
+        }
+    }
+
     fn promote(&self, a: Ty) -> Ty {
         match self.ord(a) {
             (_, _, 1, _) | (_, _, 2, true) => Ty::INTEGER,

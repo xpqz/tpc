@@ -38,7 +38,7 @@ fn own_lang_programs_print_what_tp5_prints() {
 
 #[test]
 fn own_invalid_programs_report_tp5_number_and_line() {
-    assert_eq!(stems(&fx("neg"), ".pas").len(), 43);
+    assert_eq!(stems(&fx("neg"), ".pas").len(), 34);
     assert_eq!(stems(&fx("neg"), ".pas"), stems(&fx("neg"), ".err"));
     for s in stems(&fx("neg"), ".err") {
         let err = std::fs::read_to_string(fx("neg").join(format!("{s}.err"))).unwrap();

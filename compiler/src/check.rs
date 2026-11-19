@@ -4,7 +4,7 @@ use crate::driver::Diag;
 use crate::types::{Routine, Sym, SymKind, Symbol, Tag, Ty, Type, Types};
 
 /// System routines bound by handle right after System is loaded (decision 11).
-const HELPERS: [&[u8]; 14] = [
+const HELPERS: [&[u8]; 17] = [
     b"ABSLONG",
     b"STRCAT",
     b"STRCMP",
@@ -19,6 +19,9 @@ const HELPERS: [&[u8]; 14] = [
     b"SETADD",
     b"SETIN",
     b"SETCMP",
+    b"STRINT",
+    b"VALLONG",
+    b"VALREAL",
 ];
 pub const H_ABS: usize = 0;
 pub const H_CAT: usize = 1;
@@ -34,6 +37,9 @@ pub const H_SETOP: usize = 10;
 pub const H_SETADD: usize = 11;
 pub const H_SETIN: usize = 12;
 pub const H_SETCMP: usize = 13;
+const H_STRINT: usize = 14;
+const H_VALLONG: usize = 15;
+const H_VALREAL: usize = 16;
 
 /// The most bytes of one structure, of all globals, or of one routine's locals.
 const MAX_DATA: u32 = 65535;
@@ -106,6 +112,10 @@ const PREDEFINED: &[(&[u8], SymKind, Ty, i64)] = &[
     (b"SQRT", SymKind::Intrinsic, Ty::NONE, 23),
     (b"INT", SymKind::Intrinsic, Ty::NONE, 24),
     (b"FRAC", SymKind::Intrinsic, Ty::NONE, 25),
+    (b"INC", SymKind::Intrinsic, Ty::NONE, 26),
+    (b"DEC", SymKind::Intrinsic, Ty::NONE, 27),
+    (b"STR", SymKind::Intrinsic, Ty::NONE, 28),
+    (b"VAL", SymKind::Intrinsic, Ty::NONE, 29),
 ];
 
 /// The operators behind the intrinsic functions, by symbol value.
@@ -952,6 +962,7 @@ impl Cx<'_> {
                     SymKind::Intrinsic if (14..=20).contains(&s.val) => {
                         self.heap_call(id, s.val, args)?
                     }
+                    SymKind::Intrinsic if s.val >= 26 => self.convert(id, s.val, args)?,
                     SymKind::Intrinsic if s.val == 9 => {
                         if !self.ast.items(args).is_empty() {
                             return Err(self.err(id, 85));
@@ -1472,15 +1483,8 @@ impl Cx<'_> {
             return Err(self.err(at, if items.len() < 3 { 87 } else { 89 }));
         }
         let target = items[insert as usize];
-        self.expr(target)?;
-        let t = self.ast.nodes[target as usize];
-        if !matches!(
-            t.kind,
-            Kind::Var(_) | Kind::Index(..) | Kind::Field(..) | Kind::Deref(_)
-        ) {
-            return Err(self.err(target, 20));
-        }
-        if !self.types.is_str(t.ty) {
+        let ty = self.variable(target)?;
+        if !self.types.is_str(ty) {
             return Err(self.err(target, 66));
         }
         let rest = if insert {
@@ -1506,6 +1510,82 @@ impl Cx<'_> {
         Ok(Kind::Assign(target, call))
     }
 
+    /// A variable argument (TP's error otherwise) and its type.
+    fn variable(&mut self, e: Id) -> R<Ty> {
+        match self.bad_var_arg(e) {
+            0 => self.expr(e)?,
+            code => return Err(self.err(e, code)),
+        }
+        Ok(self.ast.nodes[e as usize].ty)
+    }
+
+    /// `Inc`, `Dec`, `Str`, `Val` (26..=29): the call becomes an assignment to its variable
+    /// argument: `x := Ord(x) +/- n`, `s := StrInt(v, w, max)` or a formatted Real,
+    /// `v := ValLong(s, code)` or `ValReal(s, code)`.
+    fn convert(&mut self, at: Id, which: i64, args: List) -> R<Kind> {
+        let items = self.ast.items(args).to_vec();
+        let (n, t) = [(1, 0), (1, 0), (2, 1), (3, 1)][which as usize - 26];
+        if items.len() < n || items.len() > n + (which < 28) as usize {
+            return Err(self.err(at, if items.len() < n { 87 } else { 89 }));
+        }
+        let target = items[t];
+        let ty = self.variable(target)?;
+        let fmt = match self.ast.nodes[items[0] as usize].kind {
+            Kind::Fmt(v, w, d) => Some((v, w, d)),
+            _ => None,
+        };
+        if which == 28 {
+            self.write_arg(items[0])?;
+        }
+        let vt = self.ast.nodes[fmt.map_or(items[0], |f| f.0) as usize].ty;
+        let result = self.types.convert(which, ty, vt);
+        let result = result.map_err(|c| self.err(target, c))?;
+        let value = match which {
+            26 | 27 => {
+                let step = match items.get(1) {
+                    Some(&n) => {
+                        self.expr(n)?;
+                        self.argument_assignable(at, Ty::LONGINT, n, true)?;
+                        n
+                    }
+                    None => self.ast.typed(Kind::IntLit(1), Ty::INTEGER, at),
+                };
+                let cur = self.ast.typed(Kind::Unary(Op::Ord, target), result, at);
+                let op = if which == 26 { Op::Add } else { Op::Sub };
+                self.ast.typed(Kind::Binary(op, cur, step), result, at)
+            }
+            28 => {
+                let none = self.ast.typed(Kind::IntLit(-1), Ty::INTEGER, at);
+                let (v, w, d) = fmt.unwrap_or((items[0], none, None));
+                if vt == Ty::REAL {
+                    self.ast.typed(Kind::Fmt(v, w, d), result, at)
+                } else {
+                    let max = self.types.size(ty) as i64 - 1;
+                    let max = self.ast.typed(Kind::IntLit(max), Ty::INTEGER, at);
+                    let call = Kind::Invoke(self.helpers[H_STRINT], self.ast.list(&[v, w, max]));
+                    self.ast.typed(call, result, at)
+                }
+            }
+            _ => {
+                self.expr(items[0])?;
+                self.argument_assignable(at, Ty::STRING, items[0], true)?;
+                let code = |d: Diag| Diag {
+                    code: if d.code == 26 { 98 } else { d.code },
+                    ..d
+                };
+                self.var_arg(at, items[2], Ty::INTEGER).map_err(code)?;
+                let helper = self.helpers[if result == Ty::REAL {
+                    H_VALREAL
+                } else {
+                    H_VALLONG
+                }];
+                let call = Kind::Invoke(helper, self.ast.list(&[items[0], items[2]]));
+                self.ast.typed(call, result, at)
+            }
+        };
+        Ok(Kind::Assign(target, value))
+    }
+
     /// `New`, `Dispose`, `GetMem`, `FreeMem`, `Mark`, `Release` and `RunError` (`which` is the
     /// intrinsic number): calls of the System heap helpers, with `SizeOf(p^)` as the size of
     /// `New` and `Dispose`. `New`, `GetMem` and `Mark` assign the helper's result to the variable.
@@ -1521,11 +1601,8 @@ impl Cx<'_> {
             self.argument_assignable(at, Ty::INTEGER, p, true)?;
             return Ok(Kind::RunErr(p));
         }
-        match self.bad_var_arg(p) {
-            0 => self.expr(p)?,
-            code => return Err(self.err(p, code)),
-        }
-        let to = self.types.target(self.ast.nodes[p as usize].ty);
+        let ty = self.variable(p)?;
+        let to = self.types.target(ty);
         let to = to.ok_or(self.err(p, 65))?;
         let pos = self.ast.nodes[at as usize];
         let size = items.get(1).copied().unwrap_or_else(|| {

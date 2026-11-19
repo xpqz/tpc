@@ -1,5 +1,5 @@
 program ParamUse;
-var i: Integer; l: LongInt; s: String; n: Word;
+var i, e: Integer; l: LongInt; s: String; n: Word;
 function Count: Integer;
 begin
   Count := ParamCount
@@ -20,8 +20,8 @@ begin
   i := 0;
   while i < ParamCount do Inc(i);
   WriteLn(i);
-  Val(ParamStr(1), i, n);
-  WriteLn(i, ' ', n);
+  Val(ParamStr(1), i, e);
+  WriteLn(i, ' ', e);
   Inc(i, ParamCount);
   WriteLn(i);
   if ParamStr(1) = '' then WriteLn('empty')
