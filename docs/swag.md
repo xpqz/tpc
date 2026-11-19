@@ -197,7 +197,9 @@ where the first token is not Pascal). Diagnostics numbers in `tests/neg` are exa
     so the five SWAG "differ" programs are known and tests do not depend on it.
 11. **Typed and untyped files are the largest omission (53 programs, 74 %).** Not a bug; the
     cost/benefit of `file of T`, `BlockRead`, `BlockWrite` belongs to the plan owner.
-13. **Unbounded heap growth aborts the host.** `entry/0030.pas`, `pointers/0013.pas`: a
+13. **Endless output exhausted the test runner (resolved, #92).** Not a heap problem: both
+    programs loop at end of input writing a prompt, as TP does; the runner now stops at an
+    output limit. Original note: `entry/0030.pas`, `pointers/0013.pas`: a
     program that allocates in a loop exhausts the node heap instead of ending with runtime
     error 203 (needs a reduced reproducer; not confirmed against TP, which also timed out
     in 20 s).
