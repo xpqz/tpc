@@ -55,6 +55,9 @@ pub struct Info {
 
 type R<T> = Result<T, Diag>;
 
+/// The bits of `Pi`, the value of a Real constant symbol.
+const PI: i64 = std::f64::consts::PI.to_bits() as i64;
+
 const PREDEFINED: &[(&[u8], SymKind, Ty, i64)] = &[
     (b"BYTE", SymKind::Type, Ty::BYTE, 0),
     (b"SHORTINT", SymKind::Type, Ty::SHORTINT, 0),
@@ -63,7 +66,8 @@ const PREDEFINED: &[(&[u8], SymKind, Ty, i64)] = &[
     (b"LONGINT", SymKind::Type, Ty::LONGINT, 0),
     (b"BOOLEAN", SymKind::Type, Ty::BOOLEAN, 0),
     (b"CHAR", SymKind::Type, Ty::CHAR, 0),
-    (b"REAL", SymKind::Omitted, Ty::NONE, 0),
+    (b"REAL", SymKind::Type, Ty::REAL, 0),
+    (b"PI", SymKind::Const, Ty::REAL, PI),
     (b"SINGLE", SymKind::Omitted, Ty::NONE, 0),
     (b"DOUBLE", SymKind::Omitted, Ty::NONE, 0),
     (b"EXTENDED", SymKind::Omitted, Ty::NONE, 0),
@@ -97,18 +101,32 @@ const PREDEFINED: &[(&[u8], SymKind, Ty, i64)] = &[
     (b"MARK", SymKind::Intrinsic, Ty::NONE, 18),
     (b"RELEASE", SymKind::Intrinsic, Ty::NONE, 19),
     (b"RUNERROR", SymKind::Intrinsic, Ty::NONE, 20),
+    (b"ROUND", SymKind::Intrinsic, Ty::NONE, 21),
+    (b"TRUNC", SymKind::Intrinsic, Ty::NONE, 22),
+    (b"SQRT", SymKind::Intrinsic, Ty::NONE, 23),
+    (b"INT", SymKind::Intrinsic, Ty::NONE, 24),
+    (b"FRAC", SymKind::Intrinsic, Ty::NONE, 25),
 ];
 
 /// The operators behind the intrinsic functions, by symbol value.
-const INTRINSIC_OPS: [Op; 7] = [
-    Op::Ord,
-    Op::Chr,
-    Op::Succ,
-    Op::Pred,
-    Op::Odd,
-    Op::Abs,
-    Op::Sqr,
+const INTRINSIC_OPS: [(i64, Op); 12] = [
+    (2, Op::Ord),
+    (3, Op::Chr),
+    (4, Op::Succ),
+    (5, Op::Pred),
+    (6, Op::Odd),
+    (7, Op::Abs),
+    (8, Op::Sqr),
+    (21, Op::Round),
+    (22, Op::Trunc),
+    (23, Op::Sqrt),
+    (24, Op::Int),
+    (25, Op::Frac),
 ];
+
+fn intrinsic_op(val: i64) -> Option<Op> {
+    INTRINSIC_OPS.iter().find(|o| o.0 == val).map(|o| o.1)
+}
 
 struct Cx<'a> {
     ast: &'a mut Ast,
@@ -238,6 +256,7 @@ fn fold(op: Op, a: i64, b: i64) -> i64 {
         Op::Odd => x & 1,
         Op::Abs => x.wrapping_abs(),
         Op::Sqr => x.wrapping_mul(x),
+        Op::Slash | Op::Round | Op::Trunc | Op::Sqrt | Op::Int | Op::Frac => 0,
     };
     v as i64
 }
@@ -296,6 +315,7 @@ impl Cx<'_> {
                 let n = self.ast.nodes[e as usize];
                 let (val, ty) = match n.kind {
                     Kind::IntLit(v) => (v, n.ty),
+                    Kind::RealLit(v) => (v.to_bits() as i64, Ty::REAL),
                     Kind::StrLit(i) => (i as i64, Ty::STRING),
                     Kind::SetLit(l) if self.ast.items(l).iter().all(|&i| self.fixed(i)) => {
                         (e as i64, n.ty)
@@ -432,7 +452,7 @@ impl Cx<'_> {
                 } else {
                     self.type_of(spec, result)?
                 };
-                if self.types.is_str(result) {
+                if self.types.is_str(result) || result == Ty::REAL {
                     return Err(self.err(spec, 200));
                 }
                 Ok(self.types.proc(sig, result))
@@ -530,7 +550,7 @@ impl Cx<'_> {
                     framed: false,
                     frame: 0,
                     result_sym: Sym(0),
-                    result_ptr: self.types.is_str(result),
+                    result_ptr: self.types.in_memory(result),
                     builtin: self.user == 0,
                     addressed: false,
                     copies: Vec::new(),
@@ -686,7 +706,7 @@ impl Cx<'_> {
                         88
                     }
                 }
-                Some(s) if s.kind == SymKind::Intrinsic && (2..=8).contains(&s.val) => 122,
+                Some(s) if s.kind == SymKind::Intrinsic && intrinsic_op(s.val).is_some() => 122,
                 _ => 20,
             };
         match self.ast.nodes[e as usize].kind {
@@ -694,7 +714,12 @@ impl Cx<'_> {
                 0 => 89,
                 c => c,
             },
-            Kind::Call(callee, _) => match self.ast.nodes[callee as usize].kind {
+            Kind::Call(callee, args) => match self.ast.nodes[callee as usize].kind {
+                // A type cast of a variable is a variable.
+                Kind::Name(n) if self.type_of(callee, n).is_ok() => {
+                    let first = self.ast.items(args).first();
+                    first.map_or(20, |&a| self.bad_var_arg(a))
+                }
                 Kind::Name(name) => function(name, true),
                 _ => 20,
             },
@@ -924,7 +949,9 @@ impl Cx<'_> {
                     SymKind::Intrinsic if s.val == 12 || s.val == 13 => {
                         self.edit_string(id, s.val == 13, args)?
                     }
-                    SymKind::Intrinsic if s.val >= 14 => self.heap_call(id, s.val, args)?,
+                    SymKind::Intrinsic if (14..=20).contains(&s.val) => {
+                        self.heap_call(id, s.val, args)?
+                    }
                     SymKind::Intrinsic if s.val == 9 => {
                         if !self.ast.items(args).is_empty() {
                             return Err(self.err(id, 85));
@@ -1075,6 +1102,22 @@ impl Cx<'_> {
         Ok(())
     }
 
+    /// An Integer-family operand `e` used as a Real: a literal becomes a real literal, else an
+    /// `IntToReal` node over a copy of `e`.
+    fn coerce_real(&mut self, e: Id) {
+        let n = self.ast.nodes[e as usize];
+        if self.types.tag(n.ty) != Some(Tag::Int) {
+            return;
+        }
+        self.ast.nodes[e as usize].ty = Ty::REAL;
+        self.ast.nodes[e as usize].kind = if let Kind::IntLit(v) = n.kind {
+            Kind::RealLit(v as f64)
+        } else {
+            self.ast.nodes.push(n);
+            Kind::IntToReal(self.ast.nodes.len() as Id - 1)
+        };
+    }
+
     /// A Char operand `e` used as a String: a one-character literal, else a `CharToStr` node.
     fn coerce_str(&mut self, e: Id) {
         let n = self.ast.nodes[e as usize];
@@ -1110,6 +1153,11 @@ impl Cx<'_> {
             self.coerce_str(value);
             return Ok(());
         }
+        if dest == Ty::REAL {
+            self.coerce_real(value);
+            let real = self.ast.nodes[value as usize].ty == Ty::REAL;
+            return if real { Ok(()) } else { Err(self.err(at, 26)) };
+        }
         if self.types.is_agg(dest) {
             // Name equivalence: only the very same type; sets need compatible bases.
             let set = self.types.is_set(dest) && self.types.compat(dest, v.ty);
@@ -1136,18 +1184,25 @@ impl Cx<'_> {
 
     fn write_arg(&mut self, a: Id) -> R<()> {
         let mut value = a;
-        if let Kind::Fmt(v, w) = self.ast.nodes[a as usize].kind {
+        let mut decimals = None;
+        if let Kind::Fmt(v, w, d) = self.ast.nodes[a as usize].kind {
             value = v;
-            self.expr(w)?;
-            if self.types.tag(self.ast.nodes[w as usize].ty) != Some(Tag::Int) {
-                return Err(self.err(a, 38));
+            decimals = d;
+            for f in [Some(w), d].into_iter().flatten() {
+                self.expr(f)?;
+                if self.types.tag(self.ast.nodes[f as usize].ty) != Some(Tag::Int) {
+                    return Err(self.err(a, 38));
+                }
             }
         }
         self.expr(value)?;
         let n = self.ast.nodes[value as usize];
-        let text = self.types.is_str(n.ty);
-        if self.types.tag(n.ty) == Some(Tag::Enum) || !text && self.types.tag(n.ty).is_none() {
+        let plain = self.types.is_str(n.ty) || n.ty == Ty::REAL;
+        if self.types.tag(n.ty) == Some(Tag::Enum) || !plain && self.types.tag(n.ty).is_none() {
             return Err(self.err(value, 64));
+        }
+        if decimals.is_some() && n.ty != Ty::REAL {
+            return Err(self.err(a, 89));
         }
         Ok(())
     }
@@ -1156,6 +1211,7 @@ impl Cx<'_> {
         let n = self.ast.nodes[e as usize];
         let (kind, ty) = match n.kind {
             Kind::IntLit(v) => (n.kind, self.types.const_ty(v)),
+            Kind::RealLit(_) => (n.kind, Ty::REAL),
             Kind::StrLit(i) => match self.ast.strs[i as usize][..] {
                 [c] => (Kind::IntLit(c as i64), Ty::CHAR),
                 _ => (n.kind, Ty::STRING),
@@ -1196,6 +1252,9 @@ impl Cx<'_> {
                 let (sym, s) = self.resolve(e, name)?;
                 match s.kind {
                     SymKind::Const if s.ty == Ty::STRING => (Kind::StrLit(s.val as u32), s.ty),
+                    SymKind::Const if s.ty == Ty::REAL => {
+                        (Kind::RealLit(f64::from_bits(s.val as u64)), s.ty)
+                    }
                     SymKind::Const if self.types.is_set(s.ty) => {
                         (self.ast.nodes[s.val as usize].kind, s.ty)
                     }
@@ -1231,7 +1290,7 @@ impl Cx<'_> {
                         )?;
                         (Kind::Invoke(s.val as u32, none), result)
                     }
-                    SymKind::Intrinsic if (2..=8).contains(&s.val) => {
+                    SymKind::Intrinsic if intrinsic_op(s.val).is_some() => {
                         return Err(self.err(e, 88));
                     }
                     _ => return Err(self.err(e, 42)),
@@ -1267,12 +1326,12 @@ impl Cx<'_> {
                         }
                         None => return Err(self.err(e, 89)),
                     },
-                    SymKind::Intrinsic if (2..=8).contains(&s.val) => {
+                    SymKind::Intrinsic if intrinsic_op(s.val).is_some() => {
                         let items = self.ast.items(args).to_vec();
                         if items.len() > 1 {
                             return Err(self.err(e, 89));
                         }
-                        self.unary(e, INTRINSIC_OPS[s.val as usize - 2], items[0])?
+                        self.unary(e, intrinsic_op(s.val).unwrap_or(Op::Ord), items[0])?
                     }
                     SymKind::Intrinsic if s.val == 10 => self.size_of(e, args)?,
                     SymKind::Intrinsic if s.val == 11 => self.concat(e, args)?,
@@ -1337,12 +1396,27 @@ impl Cx<'_> {
                     self.coerce_str(a);
                     self.coerce_str(b);
                 }
+                if op == Op::Slash || na.ty == Ty::REAL || nb.ty == Ty::REAL {
+                    self.coerce_real(a);
+                    self.coerce_real(b);
+                }
                 match (
                     self.ast.nodes[a as usize].kind,
                     self.ast.nodes[b as usize].kind,
                 ) {
                     (Kind::IntLit(_), Kind::IntLit(0)) if matches!(op, Op::Div | Op::Mod) => {
                         return Err(self.err(e, 62));
+                    }
+                    (Kind::RealLit(x), Kind::RealLit(y))
+                        if ty == Ty::REAL && (op != Op::Slash || y != 0.0) =>
+                    {
+                        let v = match op {
+                            Op::Add => x + y,
+                            Op::Sub => x - y,
+                            Op::Mul => x * y,
+                            _ => x / y,
+                        };
+                        (Kind::RealLit(v), ty)
                     }
                     (Kind::IntLit(x), Kind::IntLit(y)) if ty != Ty::STRING => {
                         self.constant(fold(op, x, y), ty)
@@ -1532,14 +1606,19 @@ impl Cx<'_> {
     /// not constant in TP).
     fn unary(&mut self, e: Id, op: Op, a: Id) -> R<(Kind, Ty)> {
         self.expr(a)?;
+        let arg = self.ast.nodes[a as usize].ty;
+        let mut ty = self.types.unary(op, arg).map_err(|c| self.err(e, c))?;
+        if matches!(op, Op::Round | Op::Trunc | Op::Sqrt | Op::Int | Op::Frac) {
+            self.coerce_real(a);
+        }
         let na = self.ast.nodes[a as usize];
-        let mut ty = self.types.unary(op, na.ty).map_err(|c| self.err(e, c))?;
         if op == Op::Ord && self.types.tag(na.ty) == Some(Tag::Enum) {
             // TP types Ord(enum) by the enumeration's range (`Ord(c) + w` is a Word sum).
             let (lo, hi, ..) = self.types.ord(na.ty);
             ty = self.types.subrange(lo, hi, Ty::INTEGER);
         }
         Ok(match na.kind {
+            Kind::RealLit(v) if op == Op::Neg => (Kind::RealLit(-v), ty),
             Kind::IntLit(v) if op == Op::Not && ty == Ty::BOOLEAN => self.constant(v ^ 1, ty),
             Kind::IntLit(v) if op != Op::Sqr => self.constant(fold(op, v, 0), ty),
             _ => (Kind::Unary(op, a), ty),

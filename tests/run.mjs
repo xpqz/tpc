@@ -2,6 +2,7 @@
 // Exit: program code on match or print mode, 1 on output mismatch, 2 on runner error.
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
+import { fmtReal } from "../host/fmt_real.js";
 
 class Halt {
   constructor(code) {
@@ -17,7 +18,7 @@ export class RunnerError extends Error {
 }
 
 const STUBS = ["readkey", "keypressed", "readline", "screen", "fs_open", "fs_read", "fs_write",
-  "fs_close", "fmt_real", "time", "compile"];
+  "fs_close", "time", "compile"];
 
 export async function run(bytes) {
   let module;
@@ -43,6 +44,9 @@ export async function run(bytes) {
     },
     halt(code) {
       throw new Halt(code);
+    },
+    fmt_real(x, width, decimals, ptr) {
+      return fmtReal(memory, x, width, decimals, ptr);
     },
     rterror(code) {
       out.push(Buffer.from(`Runtime error ${code}\n`));

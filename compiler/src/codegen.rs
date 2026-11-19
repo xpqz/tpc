@@ -4,7 +4,7 @@
 use crate::ast::{Ast, Id, Kind, List, Op};
 use crate::check::{Info, H_ABS, H_ASSIGN, H_CAT, H_CMP, H_SETADD, H_SETCMP, H_SETIN, H_SETOP};
 use crate::types::{Routine, SymKind, Symbol, Tag, Ty, Type};
-use crate::wasm::{Code, Label, Module, FUNC, GLOBAL, I32, MEM, VOID};
+use crate::wasm::{Code, Label, Module, F64, FUNC, GLOBAL, I32, MEM, VOID};
 
 const PAGES: u32 = 16;
 const HEADER: u32 = 256;
@@ -57,6 +57,14 @@ const I32_AND: u8 = 0x71;
 const I32_XOR: u8 = 0x73;
 const I32_SHL: u8 = 0x74;
 const I32_SHR_S: u8 = 0x75;
+const F64_EQ: u8 = 0x61;
+const F64_LOAD: u8 = 0x2B;
+const F64_STORE: u8 = 0x39;
+const F64_TRUNC: u8 = 0x9D;
+const F64_SUB: u8 = 0xA1;
+const F64_MUL: u8 = 0xA2;
+/// Bytes of the buffer `fmt_real` fills: the widest field (255) or the longest fixed number.
+const REAL_BUF: u32 = 512;
 
 /// Function indices: imports first, then the helpers in definition order.
 const HOST_WRITE: u32 = 0;
@@ -64,6 +72,10 @@ const HOST_RTERROR: u32 = 1;
 const WSTR: u32 = 2;
 const WINT: u32 = 3;
 const QUOT: u32 = 4;
+const RDIV: u32 = 5;
+/// With Real arithmetic the module imports `fmt_real` (index 2) and defines `RDIV`; every
+/// later index shifts by `Layout::shift` (imports) and once more for the routines.
+const HOST_FMT: u32 = 2;
 /// Index of the first user routine; the main program follows the last.
 const ROUTINES: u32 = 5;
 
@@ -82,12 +94,15 @@ struct Layout {
     wtypes: Vec<u32>,
     /// Table index of each routine whose address is taken.
     slots: Vec<u32>,
+    /// 1 when the module uses Real, else 0.
+    shift: u32,
 }
 
 impl Layout {
     fn func(&mut self, r: u32) -> u32 {
         if self.index[r as usize].is_none() {
-            self.index[r as usize] = Some(ROUTINES + self.order.len() as u32);
+            let first = ROUTINES + 2 * self.shift;
+            self.index[r as usize] = Some(first + self.order.len() as u32);
             self.order.push(r);
         }
         self.index[r as usize].unwrap_or_default()
@@ -145,6 +160,7 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
             *slots.last_mut().unwrap() = 0;
         }
     }
+    let real = ast.nodes.iter().any(|n| n.ty == Ty::REAL);
     let mut layout = Layout {
         addr: vec![None; ast.strs.len()],
         lits: Vec::new(),
@@ -153,18 +169,27 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
         order: Vec::new(),
         wtypes,
         slots,
+        shift: real as u32,
     };
     let write = m.ty(&[I32, I32, I32], &[]);
     let rterror = m.ty(&[I32], &[]);
     m.import_func("host", "write", write);
     m.import_func("host", "rterror", rterror);
+    if real {
+        let fmt = m.ty(&[F64, I32, I32, I32], &[I32]);
+        m.import_func("host", "fmt_real", fmt);
+    }
     m.memory(PAGES);
     m.global_i32(true, TOP as i32);
     m.func(write, &[], write_string());
     let two = m.ty(&[I32, I32], &[]);
-    m.func(two, &[I32, I32, I32], write_integer());
+    m.func(two, &[I32, I32, I32], write_integer(layout.shift));
     let three = m.ty(&[I32, I32, I32], &[I32]);
     m.func(three, &[], quotient());
+    if real {
+        let div = m.ty(&[F64, F64], &[F64]);
+        m.func(div, &[], real_quotient());
+    }
     // Roots: the main program and every address-taken routine; the rest by reference.
     let Kind::Program(_, _, main) = ast.nodes[root as usize].kind else {
         unreachable!("the root is a program")
@@ -275,7 +300,7 @@ fn body(
                 g.code
                     .i32_const(info.types.capacity(ty) as i32)
                     .idx(CALL, assign);
-            } else if info.types.is_agg(ty) {
+            } else if info.types.in_memory(ty) {
                 let size = info.types.size(ty) as i32;
                 g.code
                     .i32_const(offset as i32)
@@ -325,7 +350,7 @@ fn write_string() -> Code {
 }
 
 /// `wint(value, width)`: decimal digits built backwards in `BUF`; locals p, negative, u.
-fn write_integer() -> Code {
+fn write_integer(shift: u32) -> Code {
     let (p, neg, u) = (2, 3, 4);
     let mut c = Code::new();
     c.idx(LOCAL_GET, 0)
@@ -368,7 +393,7 @@ fn write_integer() -> Code {
         .i32_const(BUF + BUF_LEN)
         .idx(LOCAL_GET, p)
         .op(I32_SUB);
-    c.idx(LOCAL_GET, 1).idx(CALL, WSTR);
+    c.idx(LOCAL_GET, 1).idx(CALL, WSTR + shift);
     c
 }
 
@@ -400,6 +425,30 @@ fn quotient() -> Code {
     c.idx(LOCAL_GET, a).idx(LOCAL_GET, b).op(I32_DIV_S);
     c.idx(LOCAL_GET, flags).i32_const(1).op(I32_AND).op(SELECT);
     c
+}
+
+/// `rdiv(a, b)`: `a / b`, but a zero divisor is runtime error 200.
+fn real_quotient() -> Code {
+    let mut c = Code::new();
+    c.idx(LOCAL_GET, 1).f64_const(0.0).op(F64_EQ).if_(VOID);
+    c.i32_const(200).idx(CALL, HOST_RTERROR).end();
+    c.idx(LOCAL_GET, 0).idx(LOCAL_GET, 1).op(0xA3);
+    c
+}
+
+fn real_op(op: Op) -> u8 {
+    match op {
+        Op::Add => 0xA0,
+        Op::Sub => F64_SUB,
+        Op::Mul => F64_MUL,
+        Op::Eq => F64_EQ,
+        Op::Ne => 0x62,
+        Op::Lt => 0x63,
+        Op::Gt => 0x64,
+        Op::Le => 0x65,
+        Op::Ge => 0x66,
+        _ => unreachable!("Real operators"),
+    }
 }
 
 fn binary_op(op: Op) -> u8 {
@@ -721,7 +770,9 @@ impl Gen<'_> {
         if routine.depth > 1 {
             self.frame_ptr(self.depth + 1 - routine.depth);
         }
-        let result = routine.result_ptr.then(|| self.new_temp(STRING_TEMP));
+        let result = routine
+            .result_ptr
+            .then(|| self.new_temp(info.types.size(routine.result)));
         if let Some(t) = result {
             self.temp_addr(t);
         }
@@ -736,6 +787,8 @@ impl Gen<'_> {
         for ((&a, &ty), &byref) in self.ast.items(args).iter().zip(params).zip(refs) {
             if byref || self.info.types.is_agg(ty) {
                 self.address_of(a);
+            } else if ty == Ty::REAL {
+                self.real_addr(a);
             } else if self.info.types.is_str(ty) {
                 self.str(a);
             } else {
@@ -822,6 +875,11 @@ impl Gen<'_> {
                 self.address_of(target);
                 self.address_of(value);
                 self.code.i32_const(size as i32).memory_copy();
+            }
+            Kind::Assign(target, value) if self.ast.nodes[target as usize].ty == Ty::REAL => {
+                let offset = self.addr(target);
+                self.real(value);
+                self.code.mem(F64_STORE, 0, offset);
             }
             Kind::Assign(target, value) => self.put(target, |g| g.expr(value)),
             Kind::With(records, body) => {
@@ -945,12 +1003,29 @@ impl Gen<'_> {
     }
 
     fn write_arg(&mut self, a: Id) {
-        let (e, w) = match self.ast.nodes[a as usize].kind {
-            Kind::Fmt(e, w) => (e, Some(w)),
-            _ => (a, None),
+        let (e, w, d) = match self.ast.nodes[a as usize].kind {
+            Kind::Fmt(e, w, d) => (e, Some(w), d),
+            _ => (a, None, None),
         };
         let n = self.ast.nodes[e as usize];
         match (self.info.types.tag(n.ty), n.kind) {
+            (None, _) if n.ty == Ty::REAL => {
+                // `fmt_real` (-1 for an absent width or decimals) fills the buffer, then write.
+                let t = self.new_temp(REAL_BUF);
+                self.code.i32_const(STDOUT);
+                self.temp_addr(t);
+                self.real(e);
+                for f in [w, d] {
+                    match f {
+                        Some(f) => self.expr(f),
+                        None => {
+                            self.code.i32_const(-1);
+                        }
+                    }
+                }
+                self.temp_addr(t);
+                self.code.idx(CALL, HOST_FMT).idx(CALL, HOST_WRITE);
+            }
             (None, Kind::StrLit(s)) => {
                 let bytes = &self.ast.strs[s as usize];
                 let addr = self.layout.lit(s, bytes);
@@ -958,7 +1033,7 @@ impl Gen<'_> {
                     .i32_const(addr as i32 + 1)
                     .i32_const(bytes.len() as i32);
                 self.width(w);
-                self.code.idx(CALL, WSTR);
+                self.code.idx(CALL, WSTR + self.layout.shift);
             }
             (None, _) if self.info.types.is_str(n.ty) => {
                 let t = self.new_local();
@@ -967,19 +1042,19 @@ impl Gen<'_> {
                 self.code.idx(LOCAL_GET, t).i32_const(1).op(I32_ADD);
                 self.code.idx(LOCAL_GET, t).mem(0x2D, 0, 0);
                 self.width(w);
-                self.code.idx(CALL, WSTR);
+                self.code.idx(CALL, WSTR + self.layout.shift);
             }
             (Some(Tag::Int), _) => {
                 self.expr(e);
                 self.width(w);
-                self.code.idx(CALL, WINT);
+                self.code.idx(CALL, WINT + self.layout.shift);
             }
             (Some(Tag::Char), _) => {
                 self.code.i32_const(BUF);
                 self.expr(e);
                 self.code.mem(I32_STORE8, 0, 0).i32_const(BUF).i32_const(1);
                 self.width(w);
-                self.code.idx(CALL, WSTR);
+                self.code.idx(CALL, WSTR + self.layout.shift);
             }
             _ => {
                 let t = self.new_local();
@@ -996,8 +1071,93 @@ impl Gen<'_> {
                     .idx(LOCAL_GET, t)
                     .op(SELECT);
                 self.width(w);
-                self.code.idx(CALL, WSTR);
+                self.code.idx(CALL, WSTR + self.layout.shift);
             }
+        }
+    }
+
+    /// Evaluates the Real `e` into a new temporary and returns its frame offset.
+    fn spill(&mut self, e: Id) -> u32 {
+        let t = self.new_temp(8);
+        self.temp_addr(t);
+        self.real(e);
+        self.code.mem(F64_STORE, 0, 0);
+        t
+    }
+
+    fn reload(&mut self, t: u32) {
+        self.temp_addr(t);
+        self.code.mem(F64_LOAD, 0, 0);
+    }
+
+    /// Pushes `x - trunc(x)` for the value in temporary `t`.
+    fn frac(&mut self, t: u32) {
+        self.reload(t);
+        self.reload(t);
+        self.code.op(F64_TRUNC).op(F64_SUB);
+    }
+
+    /// Pushes the address of a Real argument: a designator in place (the callee copies it),
+    /// any other value in a temporary.
+    fn real_addr(&mut self, e: Id) {
+        match self.ast.nodes[e as usize].kind {
+            Kind::Var(_) | Kind::Index(..) | Kind::Field(..) | Kind::Deref(_) => self.address_of(e),
+            _ => {
+                let t = self.spill(e);
+                self.temp_addr(t);
+            }
+        }
+    }
+
+    /// Pushes the f64 value of the Real expression `e`.
+    fn real(&mut self, e: Id) {
+        let n = self.ast.nodes[e as usize];
+        match n.kind {
+            Kind::RealLit(v) => {
+                self.code.f64_const(v);
+            }
+            Kind::IntToReal(a) => {
+                self.expr(a);
+                self.code.op(0xB7);
+            }
+            Kind::Var(_) | Kind::Index(..) | Kind::Field(..) | Kind::Deref(_) => {
+                let offset = self.addr(e);
+                self.code.mem(F64_LOAD, 0, offset);
+            }
+            Kind::Invoke(r, args) => {
+                let t = self.invoke(r, args).expect("Real function");
+                self.reload(t);
+            }
+            Kind::Binary(Op::Slash, a, b) => {
+                self.real(a);
+                self.real(b);
+                self.code.idx(CALL, RDIV + self.layout.shift);
+            }
+            Kind::Binary(op, a, b) => {
+                self.real(a);
+                self.real(b);
+                self.code.op(real_op(op));
+            }
+            Kind::Unary(Op::Sqr, a) => {
+                let t = self.spill(a);
+                self.reload(t);
+                self.reload(t);
+                self.code.op(F64_MUL);
+            }
+            Kind::Unary(Op::Frac, a) => {
+                let t = self.spill(a);
+                self.frac(t);
+            }
+            Kind::Unary(op, a) => {
+                self.real(a);
+                self.code.op(match op {
+                    Op::Neg => 0x9A,
+                    Op::Abs => 0x99,
+                    Op::Sqrt => 0x9F,
+                    _ => F64_TRUNC,
+                });
+            }
+            _ => unreachable!("checked Real expressions"),
         }
     }
 
@@ -1029,7 +1189,26 @@ impl Gen<'_> {
                 }
                 self.code.end();
             }
+            Kind::Unary(op @ (Op::Round | Op::Trunc), a) => {
+                if op == Op::Trunc {
+                    self.real(a);
+                } else {
+                    // Half away from zero: trunc(x) + trunc(2 * frac(x)).
+                    let t = self.spill(a);
+                    self.reload(t);
+                    self.code.op(F64_TRUNC);
+                    self.frac(t);
+                    self.code.f64_const(2.0).op(F64_MUL).op(F64_TRUNC).op(0xA0);
+                }
+                // `i32.trunc_sat_f64_s`
+                self.code.op(0xFC).op(2);
+            }
             Kind::Unary(op, a) => self.unary(op, a, n.ty),
+            Kind::Binary(op, a, b) if self.ast.nodes[a as usize].ty == Ty::REAL => {
+                self.real(a);
+                self.real(b);
+                self.code.op(real_op(op));
+            }
             Kind::Binary(Op::In, a, set) => {
                 self.address_of(set);
                 self.expr(a);
@@ -1061,7 +1240,9 @@ impl Gen<'_> {
                 self.expr(b);
                 if matches!(op, Op::Div | Op::Mod) {
                     let flags = (op == Op::Mod) as i32 + 2 * (n.ty == Ty::INTEGER) as i32;
-                    self.code.i32_const(flags).idx(CALL, QUOT);
+                    self.code
+                        .i32_const(flags)
+                        .idx(CALL, QUOT + self.layout.shift);
                     return;
                 }
                 self.code.op(binary_op(op));

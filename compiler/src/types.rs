@@ -16,6 +16,8 @@ impl Ty {
     pub const CHAR: Ty = Ty(8);
     /// The untyped `Pointer`, also the type of `nil` and `@x`.
     pub const POINTER: Ty = Ty(9);
+    /// IEEE f64, kept in memory like a string; arithmetic is on the WASM stack.
+    pub const REAL: Ty = Ty(10);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -29,6 +31,7 @@ pub enum Tag {
 
 pub enum Type {
     None,
+    Real,
     /// `String[n]`.
     Str(u8),
     /// A procedural type: parameters (type, by reference) and the result (`Ty::NONE` for a
@@ -176,6 +179,7 @@ impl Types {
                 ord(0, 1, 1, false, Tag::Bool, 7),
                 ord(0, 255, 1, false, Tag::Char, 8),
                 Type::Ptr(Ty::NONE),
+                Type::Real,
             ],
         }
     }
@@ -194,6 +198,7 @@ impl Types {
             Type::Str(n) => *n as u32 + 1,
             Type::Proc { .. } | Type::Ptr(_) => 4,
             Type::Set(_) => 32,
+            Type::Real => 8,
             Type::Ord { size, .. } => *size as u32,
             Type::None => 0,
         }
@@ -270,7 +275,7 @@ impl Types {
 
     /// Types that live in memory and are passed by address.
     pub fn in_memory(&self, t: Ty) -> bool {
-        self.is_agg(t) || self.is_str(t)
+        self.is_agg(t) || self.is_str(t) || t == Ty::REAL
     }
 
     /// A new `String[n]`; each form is a type of its own.
@@ -474,11 +479,20 @@ impl Types {
         }
         let text = |t: Ty| self.is_str(t) || self.tag(t) == Some(Tag::Char);
         let compare = matches!(op, Op::Eq | Op::Ne | Op::Lt | Op::Gt | Op::Le | Op::Ge);
+        let num = |t: Ty| t == Ty::REAL || self.tag(t) == Some(Tag::Int);
         if self.is_str(a) || self.is_str(b) || op == Op::Add && text(a) && text(b) {
             return match (text(a) && text(b), op) {
                 (false, _) => Err(26),
                 (_, Op::Add) => Ok(Ty::STRING),
                 (_, _) if compare => Ok(Ty::BOOLEAN),
+                _ => Err(41),
+            };
+        }
+        if a == Ty::REAL || b == Ty::REAL {
+            return match op {
+                _ if !num(a) || !num(b) => Err(26),
+                Op::Add | Op::Sub | Op::Mul | Op::Slash => Ok(Ty::REAL),
+                _ if compare => Ok(Ty::BOOLEAN),
                 _ => Err(41),
             };
         }
@@ -491,6 +505,7 @@ impl Types {
         match (ta, op) {
             (_, _) if compare => Ok(Ty::BOOLEAN),
             (Tag::Int, Op::Shl | Op::Shr) => Ok(self.promote(a)),
+            (Tag::Int, Op::Slash) => Ok(Ty::REAL),
             (Tag::Int, _) => Ok(self.common(a, b)),
             (Tag::Bool, Op::And | Op::Or | Op::Xor) => Ok(Ty::BOOLEAN),
             _ => Err(41),
@@ -500,6 +515,17 @@ impl Types {
     /// Result type of a unary operator or intrinsic, or the TP error number.
     pub fn unary(&self, op: Op, a: Ty) -> Result<Ty, u16> {
         let tag = self.tag(a);
+        let real = a == Ty::REAL;
+        if matches!(op, Op::Round | Op::Trunc | Op::Sqrt | Op::Int | Op::Frac) {
+            return match (real || tag == Some(Tag::Int), op) {
+                (false, _) => Err(79),
+                (_, Op::Round | Op::Trunc) => Ok(Ty::LONGINT),
+                _ => Ok(Ty::REAL),
+            };
+        }
+        if real && matches!(op, Op::Neg | Op::Abs | Op::Sqr) {
+            return Ok(Ty::REAL);
+        }
         let wide = tag == Some(Tag::Int) && {
             let (lo, hi, ..) = self.ord(a);
             lo < -32768 || hi > 32767

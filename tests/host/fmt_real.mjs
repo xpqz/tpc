@@ -20,8 +20,8 @@ for (const [w, d] of [[-1, -1], [0, 1], [8, 2], [12, -1]]) {
 // fmtReal stores the bytes at ptr and returns the length, touching nothing else.
 const memory = new WebAssembly.Memory({ initial: 1 });
 const bytes = new Uint8Array(memory.buffer);
-bytes.fill(0x7a);
 for (const [x, w, d] of [[3.75, 0, 2], [-1234.5, 12, -1], [0.5, -1, -1], [100, 10, 3]]) {
+  bytes.fill(0x7a);
   const want = formatReal(x, w, d);
   const len = fmtReal(memory, x, w, d, 100);
   const got = Buffer.from(bytes.slice(100, 100 + len)).toString("latin1");

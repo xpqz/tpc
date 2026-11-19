@@ -52,3 +52,10 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 |---|---|---|---|---|
 | D12 | Names of implicit System helpers are visible | `AbsLong`, `StrCat`, `StrCmp`, `StrAssign`, `StrDelete` and `StrInsert` are not declared identifiers (error 3) | They are System routines a program can call or redeclare; redeclaring one never affects the compiler's own calls | Only a program using an undeclared identifier of that name changes (accepted instead of 3); redeclaring it never affects `Abs` (decision 11) |
 | D13 | Disposing an already-disposed pointer | Runtime error 204 | Not detected (decision 25) | |
+
+## Real (Phase 4)
+
+| # | Deviation | TP5 | This compiler | Notes |
+|---|---|---|---|---|
+| D14 | Exact decimal ties in `Write` formatting | Ties round away from zero below magnitude 8 (`2.5:0:0` is 3, `4.25:0:1` is 4.3) but not above: `8.5:0:0` is 8, `9.5` is 9, `10.5` is 10, `12.5` is 13, `1234.5` is 1234, `12.375:0:2` is 12.37, `24.75:0:1` is 24.7, `123456.25:0:1` is 123456.2, `10.5:6` is `1.0E+01` | Ties round away from zero on the exact binary value at every magnitude (`8.5:0:0` is 9) | TP5 digit generation works on a 48-bit real; no test prints a tie of magnitude 8 or above. `Round` is half away from zero in both |
+| D15 | Large magnitudes with decimals | Fixed formats show 11 significant digits, then zeros (`1.0E30:0:0`) | All digits of the f64 value | Applies to magnitudes of 1E11 and above. `-0` does not exist in TP5; it prints as `0` |

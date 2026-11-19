@@ -80,6 +80,7 @@ const ADD: &[(&[u8], Op)] = &[
 ];
 const MUL: &[(&[u8], Op)] = &[
     (b"*", Op::Mul),
+    (b"/", Op::Slash),
     (b"DIV", Op::Div),
     (b"MOD", Op::Mod),
     (b"AND", Op::And),
@@ -737,7 +738,8 @@ impl Parser {
             return Ok(e);
         }
         let w = self.expr()?;
-        Ok(self.after(Kind::Fmt(e, w)))
+        let d = self.sym(b":").then(|| self.expr()).transpose()?;
+        Ok(self.after(Kind::Fmt(e, w, d)))
     }
 
     /// Consumes the lookahead if it is a keyword or symbol listed in `ops`.
@@ -876,7 +878,11 @@ impl Parser {
                 let e = self.factor()?;
                 return Ok(self.after(Kind::Unary(Op::Not, e)));
             }
-            Tk::RealLit => return Err(self.err(200)),
+            Tk::RealLit => {
+                let v = t.real;
+                self.at += 1;
+                Kind::RealLit(v)
+            }
             _ => return Err(self.err(42)),
         };
         Ok(self.ast.add(kind, line, col))

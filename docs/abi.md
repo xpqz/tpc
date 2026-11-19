@@ -146,7 +146,7 @@ epilogue:  sp = fp + framesize
 | `screen` | `(op, a, b, c)` | gotoxy, clrscr, textattr, cursor |
 | `fs_open` | `(namePtr, nameLen, mode) -> h` | VFS, text only |
 | `fs_read` / `fs_write` / `fs_close` | `(h, ptr, len) -> n` | VFS |
-| `fmt_real` | `(f64, width, decimals, bufPtr) -> len` | TP-style real formatting |
+| `fmt_real` | `(f64, width, decimals, bufPtr) -> len` | TP-style real formatting; `width` and `decimals` are -1 when absent; the buffer holds 512 bytes; imported only by modules that use Real (`host/fmt_real.js`) |
 | `halt` | `(code)` | terminate with exit code |
 | `rterror` | `(code)` | runtime error report |
 | `time` | `() -> i32` | ticks for `Delay`, `GetTime` |

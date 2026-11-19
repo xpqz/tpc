@@ -37,6 +37,14 @@ pub enum Op {
     Odd,
     Abs,
     Sqr,
+    /// `/`: always Real.
+    Slash,
+    /// Intrinsics on a Real (an Integer argument is converted): Round and Trunc give LongInt.
+    Round,
+    Trunc,
+    Sqrt,
+    Int,
+    Frac,
 }
 
 /// Nodes made by operators, assignments and `:` carry the position of the token after
@@ -86,11 +94,14 @@ pub enum Kind {
     StrLit(u32),
     /// Integer, Boolean and Char constants.
     IntLit(i64),
+    RealLit(f64),
+    /// An Integer-family operand used as a Real.
+    IntToReal(Id),
     Var(Sym),
     Unary(Op, Id),
     Binary(Op, Id, Id),
-    /// `value : width` in a write argument.
-    Fmt(Id, Id),
+    /// `value : width [: decimals]` in a write argument.
+    Fmt(Id, Id, Option<Id>),
     /// `Write` / `WriteLn` (true) with its arguments.
     Write(List, bool),
     /// Header name (`NO_NAME` when absent), declarations, body.
