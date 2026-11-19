@@ -7,7 +7,7 @@
 
   The menus are one table of titles and one table of items; a menu owns the items from
   FirstItem to LastItem. A pull-down covers part of the edit area, so closing it, and
-  switching to another menu, repaint the whole screen through View (decision 45) instead of
+  switching to another menu, repaint the whole screen through View (decision 47) instead of
   saving what was underneath. There is no Edit menu: the plan lists no Edit command, so Alt-E
   opens nothing. Options has one placeholder item that only shows a message. }
 unit Menu;
