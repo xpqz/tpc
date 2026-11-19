@@ -347,6 +347,14 @@ impl Ast {
         self.nodes[id as usize].kind
     }
 
+    /// The interned name of a `Name` node.
+    pub fn name_of(&self, id: Id) -> u32 {
+        match self.kind(id) {
+            Kind::Name(name) => name,
+            _ => unreachable!("the parser names it"),
+        }
+    }
+
     pub fn ty(&self, id: Id) -> Ty {
         self.nodes[id as usize].ty
     }

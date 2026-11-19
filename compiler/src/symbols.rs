@@ -41,9 +41,8 @@
 //! hides an earlier one: the unit named last in `uses` wins. The program is one more region.
 //! A qualified name `U.X` (the parser interns it as one name, see `Ast::qualified`) is looked up
 //! in U's exports only. System's exports are everything visible after it is declared.
-use crate::ast::{Ast, Id, Kind, Qualified};
-use crate::types::{ConstValue, Intrinsic};
-use crate::types::{FrameCopy, Routine, Sym, SymKind, Symbol, Ty, Types};
+use crate::ast::{Ast, Qualified};
+use crate::types::{ConstValue, FrameCopy, Intrinsic, Routine, Sym, SymKind, Symbol, Ty, Types};
 
 /// The System routines that the compiler calls on its own behalf, bound by name right after
 /// System is loaded (docs/decisions.md).
@@ -83,80 +82,41 @@ pub enum Helper {
     ReadLnEnd,
 }
 
-impl Helper {
-    pub const ALL: [Helper; 32] = [
-        Helper::AbsLong,
-        Helper::StrCat,
-        Helper::StrCmp,
-        Helper::StrAssign,
-        Helper::StrDelete,
-        Helper::StrInsert,
-        Helper::HeapGet,
-        Helper::HeapPut,
-        Helper::HeapMark,
-        Helper::HeapRelease,
-        Helper::SetOp,
-        Helper::SetAdd,
-        Helper::SetIn,
-        Helper::SetCmp,
-        Helper::StrInt,
-        Helper::ValLong,
-        Helper::ValReal,
-        Helper::RangeChk,
-        Helper::HostWrite,
-        Helper::HostRtError,
-        Helper::FmtReal,
-        Helper::TextOut,
-        Helper::TextNewLine,
-        Helper::CheckIo,
-        Helper::Assign,
-        Helper::Eof,
-        Helper::Eoln,
-        Helper::ReadChar,
-        Helper::ReadLong,
-        Helper::ReadReal,
-        Helper::ReadStr,
-        Helper::ReadLnEnd,
-    ];
-
-    /// The routine's name in `runtime/system.pas`, upper-cased.
-    fn name(self) -> &'static [u8] {
-        match self {
-            Helper::AbsLong => b"ABSLONG",
-            Helper::StrCat => b"STRCAT",
-            Helper::StrCmp => b"STRCMP",
-            Helper::StrAssign => b"STRASSIGN",
-            Helper::StrDelete => b"STRDELETE",
-            Helper::StrInsert => b"STRINSERT",
-            Helper::HeapGet => b"HEAPGET",
-            Helper::HeapPut => b"HEAPPUT",
-            Helper::HeapMark => b"HEAPMARK",
-            Helper::HeapRelease => b"HEAPRELEASE",
-            Helper::SetOp => b"SETOP",
-            Helper::SetAdd => b"SETADD",
-            Helper::SetIn => b"SETIN",
-            Helper::SetCmp => b"SETCMP",
-            Helper::StrInt => b"STRINT",
-            Helper::ValLong => b"VALLONG",
-            Helper::ValReal => b"VALREAL",
-            Helper::RangeChk => b"RANGECHK",
-            Helper::HostWrite => b"HOSTWRITE",
-            Helper::HostRtError => b"RTERROR",
-            Helper::FmtReal => b"FMT_REAL",
-            Helper::TextOut => b"TEXTOUT",
-            Helper::TextNewLine => b"TEXTNEWLINE",
-            Helper::CheckIo => b"CHECKIO",
-            Helper::Assign => b"ASSIGN",
-            Helper::Eof => b"EOF",
-            Helper::Eoln => b"EOLN",
-            Helper::ReadChar => b"READCHAR",
-            Helper::ReadLong => b"READLONG",
-            Helper::ReadReal => b"READREAL",
-            Helper::ReadStr => b"READSTR",
-            Helper::ReadLnEnd => b"READLNEND",
-        }
-    }
-}
+/// Each `Helper` with the name of its routine in `runtime/system.pas`, upper-cased.
+pub const HELPERS: &[(Helper, &[u8])] = &[
+    (Helper::AbsLong, b"ABSLONG"),
+    (Helper::StrCat, b"STRCAT"),
+    (Helper::StrCmp, b"STRCMP"),
+    (Helper::StrAssign, b"STRASSIGN"),
+    (Helper::StrDelete, b"STRDELETE"),
+    (Helper::StrInsert, b"STRINSERT"),
+    (Helper::HeapGet, b"HEAPGET"),
+    (Helper::HeapPut, b"HEAPPUT"),
+    (Helper::HeapMark, b"HEAPMARK"),
+    (Helper::HeapRelease, b"HEAPRELEASE"),
+    (Helper::SetOp, b"SETOP"),
+    (Helper::SetAdd, b"SETADD"),
+    (Helper::SetIn, b"SETIN"),
+    (Helper::SetCmp, b"SETCMP"),
+    (Helper::StrInt, b"STRINT"),
+    (Helper::ValLong, b"VALLONG"),
+    (Helper::ValReal, b"VALREAL"),
+    (Helper::RangeChk, b"RANGECHK"),
+    (Helper::HostWrite, b"HOSTWRITE"),
+    (Helper::HostRtError, b"RTERROR"),
+    (Helper::FmtReal, b"FMT_REAL"),
+    (Helper::TextOut, b"TEXTOUT"),
+    (Helper::TextNewLine, b"TEXTNEWLINE"),
+    (Helper::CheckIo, b"CHECKIO"),
+    (Helper::Assign, b"ASSIGN"),
+    (Helper::Eof, b"EOF"),
+    (Helper::Eoln, b"EOLN"),
+    (Helper::ReadChar, b"READCHAR"),
+    (Helper::ReadLong, b"READLONG"),
+    (Helper::ReadReal, b"READREAL"),
+    (Helper::ReadStr, b"READSTR"),
+    (Helper::ReadLnEnd, b"READLNEND"),
+];
 
 /// The most bytes of one structure, of all globals, or of one routine's locals.
 pub const MAX_DATA: u32 = 65535;
@@ -249,7 +209,7 @@ pub struct MissingSystemName;
 /// What `Symbols::bind_system_names` found in System.
 pub struct SystemNames {
     /// The routine index of each `Helper`.
-    pub helpers: [u32; Helper::ALL.len()],
+    pub helpers: [u32; HELPERS.len()],
     /// Address of `HeapOrg`; the next 4 bytes are `HeapPtr`.
     pub heap: u32,
     /// System's `Text` type and its console input file `Input`.
@@ -273,11 +233,27 @@ struct Entry {
     imported: bool,
 }
 
+impl Entry {
+    fn export(&self) -> Export {
+        Export {
+            name: self.name,
+            sym: self.sym,
+        }
+    }
+}
+
+/// A name a unit makes visible to the units that use it.
+#[derive(Clone, Copy)]
+struct Export {
+    name: u32,
+    sym: Sym,
+}
+
 /// What the symbol table keeps of a unit between its two checking phases.
 struct UnitScope {
     name: u32,
-    /// The unit's interface declarations, as `(name, symbol)`.
-    exports: Vec<(u32, Sym)>,
+    /// The unit's interface declarations.
+    exports: Vec<Export>,
     /// The unit's region after its interface part, restored for the implementation part.
     saved: Vec<Entry>,
 }
@@ -324,49 +300,18 @@ impl Symbols {
         symbols
     }
 
-    /// Finds the System routines the compiler calls on its own (`Helper`) and `HeapOrg`, before
-    /// any program declaration can shadow them.
+    /// Finds the System routines the compiler calls on its own (`Helper`), `HeapOrg`, `Text` and
+    /// `Input`, before any program declaration can shadow them.
     pub fn bind_system_names(&self, ast: &mut Ast) -> Result<SystemNames, MissingSystemName> {
-        let mut helpers = [0; Helper::ALL.len()];
-        for helper in Helper::ALL {
-            let name = ast.intern(helper.name());
-            let Some((
-                _,
-                Symbol {
-                    kind: SymKind::Routine(r),
-                    ..
-                },
-            )) = self.lookup_symbol(name)
-            else {
-                return Err(MissingSystemName);
-            };
-            helpers[helper as usize] = r;
+        let mut helpers = [0; HELPERS.len()];
+        for &(helper, routine) in HELPERS {
+            let name = ast.intern(routine);
+            helpers[helper as usize] = self.routine_named(name).ok_or(MissingSystemName)?;
         }
-        let heap_org = ast.intern(b"HEAPORG");
-        let Some((
-            _,
-            Symbol {
-                kind: SymKind::Var(heap),
-                ..
-            },
-        )) = self.lookup_symbol(heap_org)
-        else {
-            return Err(MissingSystemName);
-        };
-        let text = ast.intern(b"TEXT");
-        let input = ast.intern(b"INPUT");
-        let (
-            Some((
-                _,
-                Symbol {
-                    kind: SymKind::Type,
-                    ty: text,
-                    ..
-                },
-            )),
-            Some((input, _)),
-        ) = (self.lookup_symbol(text), self.lookup_symbol(input))
-        else {
+        let heap = self.var_named(ast.intern(b"HEAPORG"));
+        let text = self.type_named(ast.intern(b"TEXT"));
+        let input = self.lookup(ast.intern(b"INPUT"));
+        let (Some(heap), Some(text), Some(input)) = (heap, text, input) else {
             return Err(MissingSystemName);
         };
         Ok(SystemNames {
@@ -377,12 +322,34 @@ impl Symbols {
         })
     }
 
+    /// The routine index of the routine `name` stands for.
+    fn routine_named(&self, name: u32) -> Option<u32> {
+        match self.lookup_symbol(name)?.1.kind {
+            SymKind::Routine(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    /// The static address of the global variable `name` stands for.
+    fn var_named(&self, name: u32) -> Option<u32> {
+        match self.lookup_symbol(name)?.1.kind {
+            SymKind::Var(address) => Some(address),
+            _ => None,
+        }
+    }
+
+    /// The type `name` stands for.
+    fn type_named(&self, name: u32) -> Option<Ty> {
+        let symbol = self.lookup_symbol(name)?.1;
+        (symbol.kind == SymKind::Type).then_some(symbol.ty)
+    }
+
     /// System is declared: its names, with the predefined ones, are the unit `name`'s exports,
     /// and may now be redeclared.
     pub fn end_system(&mut self, name: u32) {
         self.base = self.scope.len();
         self.region_start = self.base;
-        let exports = self.scope.iter().map(|e| (e.name, e.sym)).collect();
+        let exports = self.scope.iter().map(Entry::export).collect();
         self.units.push(UnitScope {
             name,
             exports,
@@ -392,8 +359,7 @@ impl Symbols {
 
     /// Starts the region of the unit `name`, with only System's names visible.
     pub fn begin_unit(&mut self, name: u32) {
-        self.scope.truncate(self.base);
-        self.region_start = self.base;
+        self.reset_region();
         self.units.push(UnitScope {
             name,
             exports: Vec::new(),
@@ -403,19 +369,16 @@ impl Symbols {
 
     /// The interface part of the unit begun last is done: its own declarations are its exports.
     pub fn end_interface(&mut self) {
-        let own = self.scope[self.region_start..]
-            .iter()
-            .filter(|e| !e.imported);
-        let exports = own.map(|e| (e.name, e.sym)).collect();
+        let exports = self.own_entries().map(Entry::export).collect();
+        let saved = self.scope[self.base..].to_vec();
         let unit = self.units.last_mut().expect("a unit was begun");
         unit.exports = exports;
-        unit.saved = self.scope[self.base..].to_vec();
+        unit.saved = saved;
     }
 
     /// Returns to the region of the unit `name` as its interface part left it.
     pub fn resume_unit(&mut self, name: u32) {
-        let unit = self.units.iter().find(|u| u.name == name);
-        let saved = &unit.expect("its interface was checked").saved;
+        let saved = &unit_scope(&self.units, name).saved;
         self.scope.truncate(self.base);
         self.scope.extend_from_slice(saved);
         self.region_start = self.base;
@@ -423,17 +386,28 @@ impl Symbols {
 
     /// Starts the program's region with only System's names visible.
     pub fn begin_program(&mut self) {
+        self.reset_region();
+    }
+
+    /// Drops every name above System's and starts a new region there.
+    fn reset_region(&mut self) {
         self.scope.truncate(self.base);
         self.region_start = self.base;
     }
 
+    /// The entries declared in the current region, not imported.
+    fn own_entries(&self) -> impl Iterator<Item = &Entry> {
+        self.scope[self.region_start..]
+            .iter()
+            .filter(|e| !e.imported)
+    }
+
     /// Makes the exports of the unit `name` visible, hiding earlier names of the same spelling.
     pub fn import(&mut self, name: u32) {
-        let unit = self.units.iter().find(|u| u.name == name);
-        let exports = &unit.expect("the loader found every used unit").exports;
-        let entries = exports.iter().map(|&(name, sym)| Entry {
-            name,
-            sym,
+        let exports = &unit_scope(&self.units, name).exports;
+        let entries = exports.iter().map(|e| Entry {
+            name: e.name,
+            sym: e.sym,
             imported: true,
         });
         self.scope.extend(entries);
@@ -441,10 +415,7 @@ impl Symbols {
 
     /// The symbols declared in the current region, not imported.
     pub fn own_symbols(&self) -> impl Iterator<Item = Symbol> + '_ {
-        let own = self.scope[self.region_start..]
-            .iter()
-            .filter(|e| !e.imported);
-        own.map(|e| self.symbol(e.sym))
+        self.own_entries().map(|e| self.symbol(e.sym))
     }
 
     /// True while System's own declarations (and the predefined names) are being declared.
@@ -498,8 +469,8 @@ impl Symbols {
         unit.exports
             .iter()
             .rev()
-            .find(|e| e.0 == member)
-            .map(|e| e.1)
+            .find(|e| e.name == member)
+            .map(|e| e.sym)
     }
 
     pub fn symbol(&self, sym: Sym) -> Symbol {
@@ -513,8 +484,7 @@ impl Symbols {
 
     /// The symbol `name` has in the current region, ignoring outer regions.
     pub fn lookup_in_region(&self, name: u32) -> Option<Symbol> {
-        let own = self.scope[self.region_start..].iter();
-        let entry = own.filter(|e| !e.imported).find(|e| e.name == name);
+        let entry = self.own_entries().find(|e| e.name == name);
         entry.map(|e| self.symbol(e.sym))
     }
 
@@ -711,10 +681,9 @@ impl Symbols {
     }
 }
 
-/// The name of a `Name` node.
-pub fn name_of(ast: &Ast, id: Id) -> u32 {
-    match ast.kind(id) {
-        Kind::Name(name) => name,
-        _ => unreachable!("the parser names it"),
-    }
+/// The saved state of the unit `name`, which the loader found and the checker began. A free
+/// function so that the caller can borrow `units` while it changes `scope`.
+fn unit_scope(units: &[UnitScope], name: u32) -> &UnitScope {
+    let unit = units.iter().find(|u| u.name == name);
+    unit.expect("every used unit was loaded and begun")
 }

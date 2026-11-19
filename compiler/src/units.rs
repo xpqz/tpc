@@ -24,7 +24,6 @@ use crate::diag::{code, Diag};
 use crate::directives::{expand, locate_in_file};
 use crate::lex::Tok;
 use crate::parse::{parse_program, parse_runtime_unit, parse_system, parse_unit};
-use crate::symbols::name_of;
 
 /// A registered source file.
 pub struct SourceFile {
@@ -148,7 +147,7 @@ impl Loader<'_> {
 
     /// The unit named by the `uses` entry `entry` of file `file`: loaded and walked if new.
     fn visit(&mut self, file: u32, entry: Id) -> Result<(), Diag> {
-        let name = name_of(&self.ast, entry);
+        let name = self.ast.name_of(entry);
         if let Some(unit) = self.units.iter().find(|u| u.name == name) {
             return match unit.state {
                 State::InterfaceOpen => {

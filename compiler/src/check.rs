@@ -27,7 +27,7 @@
 //! a chain of `+`. Codegen then needs no knowledge of them.
 use crate::ast::{Ast, Id, Kind, List, Op, Plan, NO_NAME};
 use crate::diag::{code, Diag};
-use crate::symbols::{name_of, Helper, SymbolError, Symbols, MAX_DATA};
+use crate::symbols::{Helper, SymbolError, Symbols, HELPERS, MAX_DATA};
 use crate::types::{
     ConstValue, Field, Intrinsic, ParamType, Routine, Signature, Sym, SymKind, Symbol, Tag, Ty,
     TypedConst, Types,
@@ -42,7 +42,7 @@ pub struct Info {
     /// The typed constants in address order.
     pub typed_consts: Vec<TypedConst>,
     /// The routine index of each `Helper`.
-    helpers: [u32; Helper::ALL.len()],
+    helpers: [u32; HELPERS.len()],
     /// Address of System's `HeapOrg`; the next 4 bytes are `HeapPtr`.
     pub heap: u32,
 }
@@ -79,7 +79,7 @@ struct Cx<'a> {
     routines: Vec<Routine>,
     /// The record designators of the enclosing `with` statements, innermost last.
     withs: Vec<(Id, Ty)>,
-    helpers: [u32; Helper::ALL.len()],
+    helpers: [u32; HELPERS.len()],
     /// System's console input file, the file of `Read` and `Eof` without one.
     input: Sym,
     /// Pointer types whose target is declared later in the same type section.
@@ -103,7 +103,7 @@ pub fn check(ast: &mut Ast, plan: &Plan) -> R<Info> {
         typed_consts: Vec::new(),
         routines: Vec::new(),
         withs: Vec::new(),
-        helpers: [0; Helper::ALL.len()],
+        helpers: [0; HELPERS.len()],
         input: Sym(0),
         forward: Vec::new(),
         init_parts: Vec::new(),
@@ -218,7 +218,7 @@ impl Cx<'_> {
     /// Makes the exports of each unit in a `uses` list visible.
     fn import_uses(&mut self, uses: List) {
         for &entry in self.ast.items(uses) {
-            self.symbols.import(name_of(self.ast, entry));
+            self.symbols.import(self.ast.name_of(entry));
         }
     }
 
@@ -576,7 +576,7 @@ impl Cx<'_> {
         let members = self.ast.items_vec(names);
         let ty = self.types.enumeration(members.len() as i64);
         for (ordinal, id) in members.into_iter().enumerate() {
-            let name = name_of(self.ast, id);
+            let name = self.ast.name_of(id);
             let value = SymKind::Const(ConstValue::Int(ordinal as i64));
             self.declare(id, name, Symbol::new(value, ty))?;
         }
@@ -1172,7 +1172,7 @@ impl Cx<'_> {
 
     /// The control variable must be a local of this routine or a global of ordinal type.
     fn for_statement(&mut self, id: Id, variable: Id, first: Id, last: Id, body: Id) -> R<()> {
-        let (sym, symbol) = self.resolve(variable, name_of(self.ast, variable))?;
+        let (sym, symbol) = self.resolve(variable, self.ast.name_of(variable))?;
         let is_outer = symbol.depth < self.symbols.depth();
         let is_reference = matches!(symbol.kind, SymKind::Ref(_));
         let is_outer_local = matches!(symbol.kind, SymKind::Local(_)) && is_outer;
@@ -1259,7 +1259,7 @@ impl Cx<'_> {
     /// rewritten to what codegen expects: `Invoke`, `Indirect`, `Write`, `Exit`, or the
     /// assignment of a helper's result (see the module comment).
     fn call_statement(&mut self, id: Id, callee: Id, args: List) -> R<()> {
-        let (_, symbol) = self.resolve(callee, name_of(self.ast, callee))?;
+        let (_, symbol) = self.resolve(callee, self.ast.name_of(callee))?;
         let kind = match symbol.kind {
             SymKind::Intrinsic(i @ (Intrinsic::Write | Intrinsic::WriteLn)) => {
                 let items = self.ast.items_vec(args);
@@ -1386,7 +1386,7 @@ impl Cx<'_> {
         args: List,
         in_expr: bool,
     ) -> R<Kind> {
-        let (sym, symbol) = self.resolve(callee, name_of(self.ast, callee))?;
+        let (sym, symbol) = self.resolve(callee, self.ast.name_of(callee))?;
         self.arguments(at, params, args, in_expr, false)?;
         self.symbols.capture(sym, false);
         self.ast.resolve(callee, Kind::Var(sym), symbol.ty);
@@ -1661,7 +1661,7 @@ impl Cx<'_> {
         if !matches!(self.ast.kind(callee), Kind::Name(_)) {
             return self.designator_call(e, callee, args);
         }
-        let (_, symbol) = self.resolve(callee, name_of(self.ast, callee))?;
+        let (_, symbol) = self.resolve(callee, self.ast.name_of(callee))?;
         Ok(match symbol.kind {
             SymKind::Routine(r) => {
                 let call = self.function_call(e, callee, r, args)?;
@@ -1705,7 +1705,7 @@ impl Cx<'_> {
     /// System's `Length` of a string constant is a constant.
     fn folded_length(&self, callee: Id, r: u32, args: List) -> Option<(Kind, Ty)> {
         let is_length = self.routines[r as usize].builtin
-            && self.ast.names[name_of(self.ast, callee) as usize] == b"LENGTH";
+            && self.ast.names[self.ast.name_of(callee) as usize] == b"LENGTH";
         let Kind::StrLit(s) = self.ast.kind(*self.ast.items(args).first()?) else {
             return None;
         };
