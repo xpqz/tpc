@@ -55,6 +55,7 @@ const HOST: &[(&str, &[u8], &[u8])] = &[
     ("halt", &[I32], &[]),
     ("rterror", &[I32], &[]),
     ("time", &[], &[I32]),
+    ("sleep", &[I32], &[]),
     ("compile", &[], &[]),
 ];
 
@@ -403,13 +404,13 @@ fn missing_files_and_bad_usage_exit_2() {
 #[test]
 fn stubbed_import_instantiates_and_reports_message_when_called() {
     let w = build(
-        &["write", "readkey"],
-        vec![Step::Write(1, b"hi"), Step::Call("readkey")],
+        &["write", "compile"],
+        vec![Step::Write(1, b"hi"), Step::Call("compile")],
     );
-    let o = run_with("readkey", &w, None);
+    let o = run_with("compile_stub", &w, None);
     assert_eq!(o.status.code(), Some(2));
     assert!(
-        stderr(&o).contains("host import readkey not available in test runner"),
+        stderr(&o).contains("host import compile not available in test runner"),
         "{}",
         stderr(&o)
     );
@@ -420,7 +421,9 @@ fn stubbed_import_instantiates_and_reports_message_when_called() {
 fn module_importing_every_host_function_instantiates() {
     let names: Vec<&str> = HOST.iter().map(|h| h.0).collect();
     let w = build(&names, vec![Step::Write(1, b"OK\n")]);
-    let o = run_with("all_imports", &w, Some(b"OK\n"));
+    // A program that imports `screen` ends with the dump of its (blank) screen.
+    let want = format!("OK\n{}cursor 1 1\nexit 0\n", "\n".repeat(25));
+    let o = run_with("all_imports", &w, Some(want.as_bytes()));
     assert_eq!(o.status.code(), Some(0), "stderr: {}", stderr(&o));
 }
 

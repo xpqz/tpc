@@ -4,12 +4,16 @@
 //   write(fd, bytes)  receives console output (fd 1) and diagnostics (fd 2)
 //   input             has readLine(max), the console line source (null at the end)
 //   files             maps file names to bytes, the starting file system (see vfs.js)
-//   nowMs()           the local time in milliseconds since 1970-01-01 00:00:00
+//   clock             { nowMs(), advance(ms) }: the local time in milliseconds since
+//                     1970-01-01 00:00:00, and a way to move it forward (`sleep`)
+//   keys              { available(), next() }: the keyboard as INT 16h words (see `readkey`)
+// The screen grid is `host.screen`; a runner prints its dump after the program ends.
+import { HostError } from "./error.js";
 import { fmtReal } from "./fmt_real.js";
+import { Screen } from "./screen.js";
 import { Vfs } from "./vfs.js";
 
-// Thrown when a program or the host breaks the import contract; a runner reports it.
-export class HostError extends Error {}
+export { HostError };
 
 // Thrown by `halt` and `rterror` to unwind the program.
 class Halt {
@@ -22,15 +26,20 @@ const MS_PER_DAY = 86400000;
 const LATIN1 = (bytes) => String.fromCharCode(...bytes);
 const TEXT = (string) => Uint8Array.from(string, (c) => c.charCodeAt(0));
 
+// Exit code of a program that reads a key after the scripted keys ran out.
+export const KEYS_EXHAUSTED = 255;
+
 // Imports no environment provides yet.
-const UNAVAILABLE = ["readkey", "keypressed", "screen", "compile"];
+const UNAVAILABLE = ["compile"];
 
 export class Host {
-  constructor({ write, input, files = null, nowMs }) {
+  constructor({ write, input, files = null, clock, keys }) {
     this.sink = write;
     this.input = input;
     this.vfs = new Vfs(files);
-    this.nowMs = nowMs;
+    this.clock = clock;
+    this.keys = keys;
+    this.screen = new Screen();
     this.memory = null;
     this.reading = 0; // the clock reading `time(0)` took
     this.imports = this.makeImports();
@@ -74,7 +83,7 @@ export class Host {
   // `time(0)` takes a reading of the clock and returns its days; 1 and 2 return the seconds
   // since midnight and the hundredths of a second of that same reading (docs/abi.md).
   time(what) {
-    if (what === 0) this.reading = this.nowMs();
+    if (what === 0) this.reading = this.clock.nowMs();
     const msOfDay = this.reading % MS_PER_DAY;
     if (what === 1) return Math.floor(msOfDay / 1000);
     if (what === 2) return Math.floor((msOfDay % 1000) / 10);
@@ -85,6 +94,14 @@ export class Host {
   makeImports() {
     const imports = {
       time: (what) => this.time(what),
+      sleep: (ms) => this.clock.advance(ms),
+      screen: (op, a, b, c) => this.screen.apply(op, a, b, c),
+      keypressed: () => (this.keys.available() ? 1 : 0),
+      // The next key as the INT 16h word: scan code in the high byte, ASCII in the low.
+      readkey: () => {
+        if (!this.keys.available()) throw new Halt(KEYS_EXHAUSTED);
+        return this.keys.next();
+      },
       write: (fd, ptr, len) => {
         if (fd !== 1 && fd !== 2) throw new HostError(`host.write: bad fd ${fd}`);
         if (len === 0) return;

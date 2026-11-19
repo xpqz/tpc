@@ -26,6 +26,26 @@ check "error in an include names the include" error_in_include 1 \
 check "error in the main program names P.PAS" error_in_main 1 "P.PAS(3): Error 3: Unknown identifier."
 check "circular interface uses" circular_interface 1 "CB.PAS(3): Error 68: Circular unit reference (CA)."
 
+# Crt programs: stdout and the screen dump, compared with the golden file FIXTURE.out (made
+# by this script on the real TP 5.0 and read through by hand). The address of a run-time
+# error is dropped.
+check_dump() {
+    got=$("$TP5" "$FX/$2.pas" 2>&1 |
+        sed -E 's/(Runtime error [0-9]+) at [0-9A-F]{4}:[0-9A-F]{4}\.$/\1/')
+    if [ "$got" = "$(cat "$FX/$2.out")" ]; then echo "ok   $1"
+    else FAILS=$((FAILS + 1)); echo "FAIL $1: got '$got'"; fi
+}
+
+check_dump "Crt: the screen is cleared before the program starts" crt_noclear
+check_dump "Crt: keys from NAME.keys, named and extended keys, ReadLn, KeyPressed, attributes" crt_keys
+check_dump "Crt: a blocking read with no keys left halts with exit 255" crt_exhausted
+check_dump "Crt: a run-time error prints its line and the dump" crt_rterror
+got=$("$TP5" "$FX/crt_badkey.pas" 2>&1; echo "rc=$?")
+case "$got" in
+    *"unknown key Bogus"*"rc=2") echo "ok   Crt: an unknown key name is an error" ;;
+    *) FAILS=$((FAILS + 1)); echo "FAIL unknown key name: '$got'" ;;
+esac
+
 # The run-time error address varies; the code is printed with three digits.
 got=$("$TP5" "$FX/runtime_error_two.pas" 2>&1)
 case "$got" in

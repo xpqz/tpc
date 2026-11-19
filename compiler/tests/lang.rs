@@ -34,10 +34,7 @@ fn runtime_error_program_that_exits_normally_is_reported() {
 #[test]
 fn runtime_error_out_without_error_line_is_reported() {
     let f = check_rt(&fixture("rt/no_error_line"), &fake_compile);
-    assert_eq!(
-        f,
-        ["no_error_line: last line of .out is not `Runtime error N`"]
-    );
+    assert_eq!(f, ["no_error_line: no `Runtime error N` line in .out"]);
 }
 
 #[test]
@@ -138,4 +135,26 @@ fn runtime_error_programs_get_their_aux_directory_and_input() {
             "{dir}"
         );
     }
+}
+
+#[test]
+fn key_script_and_screen_dump_reach_the_program_and_the_comparison() {
+    assert_eq!(lang("crt_keys"), Vec::<String>::new());
+    assert_eq!(
+        check_rt(&fixture("rt/crt_rterror"), &fake_compile),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_wrong_screen_dump_is_a_mismatch() {
+    let f = lang("crt_wrong_dump");
+    assert_eq!(f.len(), 1, "{f:?}");
+    assert!(
+        has(
+            &f,
+            &["p: run exited 1", "FAIL", "-cursor 2 1", "+cursor 1 1"]
+        ),
+        "{f:?}"
+    );
 }
