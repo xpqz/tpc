@@ -82,6 +82,11 @@ pub enum Helper {
     ReadReal,
     ReadStr,
     ReadLnEnd,
+    Exp,
+    Ln,
+    Sin,
+    Cos,
+    ArcTan,
 }
 
 /// Each `Helper` with the name of its routine in `runtime/system.pas`, upper-cased.
@@ -120,6 +125,11 @@ pub const HELPERS: &[(Helper, &[u8])] = &[
     (Helper::ReadReal, b"READREAL"),
     (Helper::ReadStr, b"READSTR"),
     (Helper::ReadLnEnd, b"READLNEND"),
+    (Helper::Exp, b"EXPREAL"),
+    (Helper::Ln, b"LNREAL"),
+    (Helper::Sin, b"SINREAL"),
+    (Helper::Cos, b"COSREAL"),
+    (Helper::ArcTan, b"ARCTANREAL"),
 ];
 
 /// The most bytes of one structure, of all globals, or of one routine's locals.
@@ -143,11 +153,6 @@ const PREDEFINED: &[(&[u8], SymKind, Ty)] = &[
     (b"BOOLEAN", SymKind::Type, Ty::BOOLEAN),
     (b"CHAR", SymKind::Type, Ty::CHAR),
     (b"REAL", SymKind::Type, Ty::REAL),
-    (
-        b"PI",
-        SymKind::Const(ConstValue::Real(std::f64::consts::PI)),
-        Ty::REAL,
-    ),
     (b"SINGLE", SymKind::Omitted, Ty::NONE),
     (b"DOUBLE", SymKind::Omitted, Ty::NONE),
     (b"EXTENDED", SymKind::Omitted, Ty::NONE),
@@ -197,6 +202,27 @@ const PREDEFINED: &[(&[u8], SymKind, Ty)] = &[
     (b"DEC", SymKind::Intrinsic(Intrinsic::Dec), Ty::NONE),
     (b"STR", SymKind::Intrinsic(Intrinsic::Str), Ty::NONE),
     (b"VAL", SymKind::Intrinsic(Intrinsic::Val), Ty::NONE),
+    (
+        b"FILLCHAR",
+        SymKind::Intrinsic(Intrinsic::FillChar),
+        Ty::NONE,
+    ),
+    (b"MOVE", SymKind::Intrinsic(Intrinsic::Move), Ty::NONE),
+    (b"EXP", SymKind::Intrinsic(Intrinsic::Exp), Ty::NONE),
+    (b"LN", SymKind::Intrinsic(Intrinsic::Ln), Ty::NONE),
+    (b"SIN", SymKind::Intrinsic(Intrinsic::Sin), Ty::NONE),
+    (b"COS", SymKind::Intrinsic(Intrinsic::Cos), Ty::NONE),
+    (b"ARCTAN", SymKind::Intrinsic(Intrinsic::ArcTan), Ty::NONE),
+    (
+        b"MAXINT",
+        SymKind::Const(ConstValue::Int(32767)),
+        Ty::INTEGER,
+    ),
+    (
+        b"MAXLONGINT",
+        SymKind::Const(ConstValue::Int(2147483647)),
+        Ty::LONGINT,
+    ),
 ];
 
 /// Why a symbol operation failed; the checker maps each to its TP error.
