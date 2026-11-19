@@ -1,0 +1,9 @@
+crt_assign_to_function
+crt_clrscr_with_argument
+crt_delay_real_argument
+crt_function_result_assigned_to_char
+crt_gotoxy_string_argument
+crt_qualified_name_without_uses
+crt_qualified_unknown_name
+crt_readkey_called_with_argument
+crt_window_missing_argument

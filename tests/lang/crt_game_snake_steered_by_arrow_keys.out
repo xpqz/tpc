@@ -1,0 +1,36 @@
+###############################
+#                             #
+#                             #
+#OOOO                         #
+#                             #
+#                             #
+#            *                #
+#                             #
+#                             #
+#                             #
+#                             #
+#                             #
+###############################
+
+Game over: score 1 length 4 frames 45
+
+
+
+
+
+
+
+
+
+
+cursor 1 16
+exit 0
+attr 4 2 24 0A
+attr 5 7 1 0C
+attr 5 8 7 0A
+attr 5 25 1 0A
+attr 6 14 1 0A
+attr 6 25 1 0A
+attr 7 14 1 0C
+attr 7 15 11 0A
+attr 15 1 37 0E

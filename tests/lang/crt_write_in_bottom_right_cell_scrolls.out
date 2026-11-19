@@ -1,0 +1,30 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+above
+bottom                                                                         X
+1,25                                                                           Y
+1,25
+
+cursor 1 25
+exit 0
+attr 23 80 1 4F
+attr 24 1 80 4F
+attr 25 1 80 4F
