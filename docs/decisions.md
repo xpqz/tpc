@@ -374,7 +374,7 @@ the aux directory, stdin and `TP5_NOW_MS`, collects stdout and maps `HostError` 
 became 238 lines in `host/` (runtime 131, vfs 107); the Node adapters are 56 lines in
 `tests/vfs.mjs`. Host glue budget: 24 -> 207 of 500, leaving 293 for Phases 6 and 7.
 
-## 37. Crt oracle probes (proposed, #59)
+## 37. Crt oracle (accepted, #59)
 
 Measured under headless DOSBox-X with TP 5.0 (`tools/crt/`):
 - A unit can read the text screen at `Mem[$B800:0]` (char at offset `row*160+col*2`,
@@ -399,7 +399,7 @@ printed after exit procedures, so it is not on the dump; the `exit`/`error` line
 (ErrorAddr is a TP-internal address and must not be compared). Exhausted keys should halt
 with a marker instead of repeating Enter.
 
-## 38. Virtual clock for Delay (proposed, #59)
+## 38. Virtual clock for Delay (accepted, #59)
 
 **Proposal.** `Host` takes a clock object `{ nowMs(), advance(ms) }` instead of `nowMs`. The
 runner's clock is virtual: it starts at `TP5_NOW_MS` (or a fixed epoch) and moves only
@@ -408,3 +408,18 @@ virtual clock and returns at once; the browser waits (`Atomics.wait`) and also a
 programs that measure `Delay` with `GetTime` see the elapsed time, tests never wait and never
 observe real time. `KeyPressed`/`ReadKey` take their keys from the scripted source, not the
 clock.
+
+## 39. Screen state lives in the Crt unit; the host only draws cells
+
+**Decision.** Cursor position, the current window and the text attribute live in the Crt
+unit (Pascal, runtime budget), as they do in TP's own Crt. The host `screen` import is a
+small set of cell operations (put a character with an attribute at a position, scroll a
+rectangle, set the cursor) that a JS grid model applies and a canvas renderer draws; the
+runner prints the same grid as the decision-37 dump. System's console output goes through a
+procedural hook that Crt replaces in its initialisation, so plain `Write` honours
+`Window`, `TextColor` and `GotoXY` once Crt is used, and programs without Crt are
+unchanged.
+**Reason.** After #59 the host has 293 of 500 lines for Phases 6 and 7, below the plan's
+~450 estimate; TP itself keeps this state in Crt; the Pascal runtime has ~800 lines free.
+**Rejected.** A terminal model with window and attribute state in JS (does not fit; would
+duplicate state Crt needs anyway for `WhereX`/`WhereY`).
