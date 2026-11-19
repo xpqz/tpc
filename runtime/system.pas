@@ -5,8 +5,9 @@
   Copy, Pos, UpCase, ...). The others are helpers that the compiler calls on its own, found by
   name after this part is checked (compiler/src/check.rs, `Helper`): AbsLong, RangeChk, StrCat,
   StrCmp, StrAssign, StrInt, ValLong, ValReal, StrDelete, StrInsert, SetOp, SetAdd, SetIn,
-  SetCmp, HeapGet, HeapPut, HeapMark, HeapRelease, HostWrite, RtError, Fmt_Real. HeapOrg is
-  also found by name.
+  SetCmp, HeapGet, HeapPut, HeapMark, HeapRelease, HostWrite, RtError, Fmt_Real, TextOut,
+  TextNewLine, CheckIo, Assign, Eof, Eoln, ReadChar, ReadLong, ReadReal, ReadStr, ReadLnEnd.
+  HeapOrg, Text and Input are also found by name.
 
   A routine declared `external` has no body: it is a WASM import from module `host`, named
   like the routine in lower case or by the string after `external`, and present in a program
@@ -18,10 +19,19 @@
   of any declared size and the helpers read and write the length in byte 0. A function that
   returns a String receives the address of its result as a hidden first parameter. }
 
+{$I-}
+{ System is compiled with I/O checking off: its own calls never raise a pending error; the
+  compiler adds the check after the calls of a program (CheckIo). }
+
 { Host imports. HostWrite cannot be called Write, a predeclared name, so it names its import. }
 procedure HostWrite(fd, address, count: LongInt); external 'write';
 procedure RtError(code: LongInt); external;
 function Fmt_Real(x: Real; width, decimals, buffer: LongInt): LongInt; external;
+function Fs_Open(name, count, mode: LongInt): LongInt; external;
+function Fs_Read(handle, address, count: LongInt): LongInt; external;
+function Fs_Write(handle, address, count: LongInt): LongInt; external;
+function Fs_Close(handle: LongInt): LongInt; external;
+function ReadLine(address, max: LongInt): LongInt; external;
 
 var
   ExitCode: Integer;
@@ -462,4 +472,316 @@ begin
     cur := NextFree(cur)
   end;
   MaxAvail := n
+end;
+
+{ Text files. A Text is a record: the host handle, what the file is open for, a buffer of the
+  bytes read and not yet used (Pos to Len) and the name given by Assign. Writing is not
+  buffered: every piece of output goes to the host at once. Input and Output are typed
+  constants naming only the first fields; their buffer is zero. The compiler writes to the
+  console by passing the file address 0 to TextOut.
+
+  An error is a code in InOutRes. While one is pending, Read, Write, Eof and Eoln do nothing
+  (the items of a Read become 0, '' or ^Z, the Eofs False) and Reset, Rewrite, Append and
+  Close still run and replace the code when they fail. IOResult reads and clears it. With
+  checking on, the compiler calls CheckIo after each call of a program that has a Text as first
+  parameter, except Assign, and after each Write. }
+const
+  ModeUnassigned = 0;
+  ModeClosed = 1;
+  ModeInput = 2;
+  ModeOutput = 3;
+  ModeConsoleInput = 4;
+  ModeConsoleOutput = 5;
+  CarriageReturn = 13;
+  LineFeed = 10;
+  EndOfFile = 26;
+  BufferSize = 256;
+  ConsoleLineMax = 254; { room in the buffer for the CR LF that end a console line }
+
+type
+  Text = record
+    Handle: LongInt;
+    Mode, Pos, Len: Integer;
+    Ended: Boolean;
+    Name: String[79];
+    Buffer: array[0..BufferSize - 1] of Char;
+  end;
+  PText = ^Text;
+
+const
+  Input: Text = (Handle: 0; Mode: ModeConsoleInput);
+  Output: Text = (Handle: 0; Mode: ModeConsoleOutput);
+
+var InOutRes: Integer;
+
+function IOResult: Integer;
+begin
+  IOResult := InOutRes;
+  InOutRes := 0
+end;
+
+{ The runtime error for the pending code. }
+procedure CheckIo;
+var code: Integer;
+begin
+  if InOutRes <> 0 then
+  begin
+    code := InOutRes;
+    InOutRes := 0;
+    RunError(code)
+  end
+end;
+
+{ Writes count bytes at address to the Text at address target, or to the console when target
+  is 0. }
+procedure TextOut(target, address, count: LongInt);
+var f: PText; written: LongInt;
+begin
+  if InOutRes <> 0 then Exit;
+  if target = 0 then HostWrite(1, address, count)
+  else
+  begin
+    f := PText(target);
+    if f^.Mode = ModeConsoleOutput then HostWrite(1, address, count)
+    else if f^.Mode <> ModeOutput then InOutRes := 105
+    else
+    begin
+      written := Fs_Write(f^.Handle, address, count);
+      if written < 0 then InOutRes := Integer(-written)
+    end
+  end
+end;
+
+{ The end of a line: LF on the console, CR LF in a file, as TP writes them. }
+const LineEnd: array[0..1] of Char = (#13, #10);
+
+procedure TextNewLine(target: LongInt);
+begin
+  if (target = 0) or (PText(target)^.Mode = ModeConsoleOutput) then
+    TextOut(target, LongInt(@LineEnd[1]), 1)
+  else
+    TextOut(target, LongInt(@LineEnd[0]), 2)
+end;
+
+procedure Assign(var f: Text; name: String);
+begin
+  f.Handle := 0;
+  f.Mode := ModeClosed;
+  f.Pos := 0;
+  f.Len := 0;
+  f.Ended := False;
+  f.Name := name
+end;
+
+{ Reset, Rewrite and Append: open the assigned name with the host mode, for reading or writing.
+  A file that is open is closed first; a failure leaves it closed. }
+procedure OpenFile(var f: Text; hostMode, textMode: Integer);
+var handle: LongInt;
+begin
+  if f.Mode = ModeUnassigned then
+  begin
+    InOutRes := 102;
+    Exit
+  end;
+  if f.Mode >= ModeConsoleInput then Exit;
+  if (f.Mode = ModeInput) or (f.Mode = ModeOutput) then handle := Fs_Close(f.Handle);
+  f.Mode := ModeClosed;
+  handle := Fs_Open(LongInt(@f.Name[1]), Ord(f.Name[0]), hostMode);
+  if handle < 0 then InOutRes := Integer(-handle)
+  else
+  begin
+    f.Handle := handle;
+    f.Mode := textMode;
+    f.Pos := 0;
+    f.Len := 0;
+    f.Ended := False
+  end
+end;
+
+procedure Reset(var f: Text);
+begin
+  OpenFile(f, 0, ModeInput)
+end;
+
+procedure Rewrite(var f: Text);
+begin
+  OpenFile(f, 1, ModeOutput)
+end;
+
+procedure Append(var f: Text);
+begin
+  OpenFile(f, 2, ModeOutput)
+end;
+
+procedure Close(var f: Text);
+var status: LongInt;
+begin
+  if (f.Mode = ModeInput) or (f.Mode = ModeOutput) then
+  begin
+    status := Fs_Close(f.Handle);
+    f.Mode := ModeClosed;
+    if status < 0 then InOutRes := Integer(-status)
+  end
+  else if f.Mode < ModeConsoleInput then InOutRes := 103
+end;
+
+{ The buffer of a console file holds one line and the CR LF the host does not deliver. }
+procedure FillFromConsole(var f: Text);
+var count: LongInt;
+begin
+  count := ReadLine(LongInt(@f.Buffer[0]), ConsoleLineMax);
+  if count < 0 then f.Ended := True
+  else
+  begin
+    f.Buffer[count] := Chr(CarriageReturn);
+    f.Buffer[count + 1] := Chr(LineFeed);
+    f.Len := Integer(count) + 2
+  end
+end;
+
+{ A ^Z byte ends the data of a text file; the bytes after it are never seen. }
+procedure FillFromFile(var f: Text);
+var count: LongInt; i: Integer;
+begin
+  count := Fs_Read(f.Handle, LongInt(@f.Buffer[0]), BufferSize);
+  if count <= 0 then
+  begin
+    f.Ended := True;
+    if count < 0 then InOutRes := Integer(-count)
+  end
+  else
+  begin
+    f.Len := Integer(count);
+    i := 0;
+    while (i < f.Len) and (f.Buffer[i] <> Chr(EndOfFile)) do i := i + 1;
+    if i < f.Len then
+    begin
+      f.Len := i;
+      f.Ended := True
+    end
+  end
+end;
+
+{ True when an unread byte is in the buffer; an empty buffer is refilled first. }
+function Fill(var f: Text): Boolean;
+begin
+  if f.Pos >= f.Len then
+  begin
+    f.Pos := 0;
+    f.Len := 0;
+    if not f.Ended then
+      if f.Mode = ModeConsoleInput then FillFromConsole(f) else FillFromFile(f)
+  end;
+  Fill := f.Pos < f.Len
+end;
+
+{ True when f can be read now: no error is pending and f is open for input. Otherwise the
+  wrong mode is error 104. }
+function CanRead(var f: Text): Boolean;
+begin
+  CanRead := False;
+  if InOutRes <> 0 then Exit;
+  if (f.Mode = ModeInput) or (f.Mode = ModeConsoleInput) then CanRead := True
+  else InOutRes := 104
+end;
+
+function Eof(var f: Text): Boolean;
+begin
+  Eof := False;
+  if CanRead(f) then Eof := not Fill(f)
+end;
+
+{ The end of a line is the CR; the end of the data counts as one. }
+function Eoln(var f: Text): Boolean;
+begin
+  Eoln := False;
+  if CanRead(f) then
+    if Fill(f) then Eoln := f.Buffer[f.Pos] = Chr(CarriageReturn)
+    else Eoln := True
+end;
+
+function ReadChar(var f: Text): Char;
+begin
+  ReadChar := Chr(EndOfFile);
+  if CanRead(f) and Fill(f) then
+  begin
+    ReadChar := f.Buffer[f.Pos];
+    f.Pos := f.Pos + 1
+  end
+end;
+
+{ Read of a String: the rest of the line, at most max characters. }
+function ReadStr(var f: Text; max: Integer): String;
+var s: String; n: Integer;
+begin
+  n := 0;
+  if CanRead(f) then
+    while (n < max) and Fill(f) and (f.Buffer[f.Pos] <> Chr(CarriageReturn)) do
+    begin
+      n := n + 1;
+      s[n] := f.Buffer[f.Pos];
+      f.Pos := f.Pos + 1
+    end;
+  s[0] := Chr(n);
+  ReadStr := s
+end;
+
+{ The next number as text: blanks and line ends are skipped, then every byte up to the next
+  one. Empty at the end of the data. }
+function ReadToken(var f: Text): String;
+var s: String; n: Integer;
+begin
+  n := 0;
+  if CanRead(f) then
+  begin
+    while Fill(f) and (f.Buffer[f.Pos] in [' ', #9, #10, #13]) do f.Pos := f.Pos + 1;
+    while Fill(f) and not (f.Buffer[f.Pos] in [' ', #9, #10, #13]) do
+    begin
+      if n < 255 then
+      begin
+        n := n + 1;
+        s[n] := f.Buffer[f.Pos]
+      end;
+      f.Pos := f.Pos + 1
+    end
+  end;
+  s[0] := Chr(n);
+  ReadToken := s
+end;
+
+{ Read of an integer: 0 at the end of the data, error 106 for a token that is not a number. }
+function ReadLong(var f: Text): LongInt;
+var token: String; value: LongInt; code: Integer;
+begin
+  ReadLong := 0;
+  token := ReadToken(f);
+  if Length(token) > 0 then
+  begin
+    value := ValLong(token, code);
+    if code <> 0 then InOutRes := 106 else ReadLong := value
+  end
+end;
+
+function ReadReal(var f: Text): Real;
+var token: String; value: Real; code: Integer;
+begin
+  ReadReal := 0;
+  token := ReadToken(f);
+  if Length(token) > 0 then
+  begin
+    value := ValReal(token, code);
+    if code <> 0 then InOutRes := 106 else ReadReal := value
+  end
+end;
+
+{ The end of ReadLn: everything up to and including the next CR and a LF that follows it. }
+procedure ReadLnEnd(var f: Text);
+begin
+  if not CanRead(f) then Exit;
+  while Fill(f) and (f.Buffer[f.Pos] <> Chr(CarriageReturn)) do f.Pos := f.Pos + 1;
+  if Fill(f) then
+  begin
+    f.Pos := f.Pos + 1;
+    if Fill(f) and (f.Buffer[f.Pos] = Chr(LineFeed)) then f.Pos := f.Pos + 1
+  end
 end;

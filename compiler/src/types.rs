@@ -154,6 +154,8 @@ impl SymKind {
 pub enum Intrinsic {
     Write,
     WriteLn,
+    Read,
+    ReadLn,
     Ord,
     Chr,
     Succ,
@@ -324,6 +326,8 @@ pub struct Signature {
 
 pub struct Types {
     table: Vec<Type>,
+    /// System's `Text` record type, once System is declared (`Ty::NONE` before).
+    pub text: Ty,
 }
 
 impl Types {
@@ -351,7 +355,13 @@ impl Types {
                 Type::Ptr(Ty::NONE),
                 Type::Real,
             ],
+            text: Ty::NONE,
         }
+    }
+
+    /// A text file variable: a record in System, but a file to every other source.
+    pub fn is_file(&self, t: Ty) -> bool {
+        t == self.text && t != Ty::NONE
     }
 
     pub fn get(&self, t: Ty) -> &Type {

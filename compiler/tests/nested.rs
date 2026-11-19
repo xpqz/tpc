@@ -168,7 +168,7 @@ end.";
 const SP_SCRIPT: &str = "import fs from 'node:fs';
 const m = await WebAssembly.compile(fs.readFileSync(process.argv[1]));
 let inst; const seen = [];
-const host = { write() { const v = inst.exports.sp.value; if (seen.at(-1) !== v) seen.push(v); }, rterror() {} };
+const host = { write() { const v = inst.exports.sp.value; if (seen.at(-1) !== v) seen.push(v); }, rterror() {}, fs_write() {} };
 inst = await WebAssembly.instantiate(m, { host });
 const sp = inst.exports.sp;
 const sp0 = sp.value;

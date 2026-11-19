@@ -45,6 +45,13 @@ impl Info {
     pub fn helper(&self, helper: Helper) -> u32 {
         self.helpers[helper as usize]
     }
+
+    /// Whether a call of routine `r` is followed by a check of `InOutRes` under `{$I+}`: the
+    /// routines whose first parameter is a text file, except `Assign`, which never checks.
+    pub fn checks_io(&self, r: u32) -> bool {
+        let first = self.routines[r as usize].params.first();
+        first.is_some_and(|p| self.types.is_file(p.ty)) && r != self.helper(Helper::Assign)
+    }
 }
 
 type R<T> = Result<T, Diag>;
@@ -66,6 +73,8 @@ struct Cx<'a> {
     /// The record designators of the enclosing `with` statements, innermost last.
     withs: Vec<(Id, Ty)>,
     helpers: [u32; Helper::ALL.len()],
+    /// System's console input file, the file of `Read` and `Eof` without one.
+    input: Sym,
     /// Pointer types whose target is declared later in the same type section.
     forward: Vec<(Ty, u32)>,
     /// The `InitPart` of each unit checked so far, in initialisation order.
@@ -78,6 +87,7 @@ struct Cx<'a> {
 pub fn check(ast: &mut Ast, plan: &Plan) -> R<Info> {
     // Nodes the checker makes are not range checked unless they copy a checked node.
     ast.range_checks = false;
+    ast.io_checks = false;
     let symbols = Symbols::new(ast);
     let mut cx = Cx {
         ast,
@@ -87,6 +97,7 @@ pub fn check(ast: &mut Ast, plan: &Plan) -> R<Info> {
         routines: Vec::new(),
         withs: Vec::new(),
         helpers: [0; Helper::ALL.len()],
+        input: Sym(0),
         forward: Vec::new(),
         init_parts: Vec::new(),
     };
@@ -167,6 +178,8 @@ impl Cx<'_> {
             });
         }
         self.helpers = names.helpers;
+        self.types.text = names.text;
+        self.input = names.input;
         Ok(names.heap)
     }
 
@@ -762,6 +775,9 @@ impl Cx<'_> {
         let mut names = Vec::new();
         for param in self.param_decls(params) {
             let ty = self.type_of(param.node, param.type_name)?;
+            if self.types.is_file(ty) && !param.by_ref {
+                return Err(self.err(param.node, code::FILE_MUST_BE_VAR));
+            }
             types.push(ParamType {
                 ty,
                 by_ref: param.by_ref,
@@ -919,7 +935,7 @@ impl Cx<'_> {
                 Kind::Name(name) => Some(self.function_reference_error(name, true)),
                 _ => Some(code::VARIABLE_EXPECTED),
             },
-            Kind::Deref(_) => None,
+            Kind::Deref(_) | Kind::Var(_) => None,
             Kind::Index { base, .. } | Kind::Field(base, _) => self.var_arg_error(base),
             Kind::Name(name) if self.with_field(name).is_some() => None,
             Kind::Name(name) => match self.symbols.lookup_symbol(name) {
@@ -961,15 +977,18 @@ impl Cx<'_> {
             _ => None,
         };
         let Some(name) = named else {
-            self.expr(arg)?;
+            // An argument the checker made itself (`Input`) is already resolved.
+            if !matches!(self.ast.kind(arg), Kind::Var(_)) {
+                self.expr(arg)?;
+            }
             if self.ast.ty(arg) != ty {
-                return Err(self.err(at, code::TYPE_MISMATCH));
+                return Err(self.var_mismatch(at, ty));
             }
             return Ok(());
         };
         let (sym, symbol) = self.resolve(arg, name)?;
         if symbol.ty != ty {
-            return Err(self.err(at, code::TYPE_MISMATCH));
+            return Err(self.var_mismatch(at, ty));
         }
         self.symbols.capture(sym, true);
         self.ast.resolve(arg, Kind::Var(sym), ty);
@@ -1231,10 +1250,17 @@ impl Cx<'_> {
         let (_, symbol) = self.resolve(callee, name_of(self.ast, callee))?;
         let kind = match symbol.kind {
             SymKind::Intrinsic(i @ (Intrinsic::Write | Intrinsic::WriteLn)) => {
-                for arg in self.ast.items_vec(args) {
-                    self.write_arg(arg)?;
+                let items = self.ast.items_vec(args);
+                let (file, start, checked) = self.console_or_file(id, &items, false)?;
+                for (n, &arg) in items.iter().enumerate().skip(start) {
+                    self.write_arg(arg, checked && n == 0)?;
                 }
-                Kind::Write(args, i == Intrinsic::WriteLn)
+                let mut parts = vec![file];
+                parts.extend(&items[start..]);
+                Kind::Write(self.ast.list(&parts), i == Intrinsic::WriteLn)
+            }
+            SymKind::Intrinsic(i @ (Intrinsic::Read | Intrinsic::ReadLn)) => {
+                self.read_call(id, args, i == Intrinsic::ReadLn)?
             }
             SymKind::Intrinsic(i @ (Intrinsic::Delete | Intrinsic::Insert)) => {
                 self.edit_string(id, i, args)?
@@ -1375,6 +1401,9 @@ impl Cx<'_> {
         if self.types.is_agg(dest) {
             // Name equivalence: only the very same type; sets need compatible bases.
             let compatible_sets = self.types.is_set(dest) && self.types.compat(dest, node.ty);
+            if self.types.is_file(dest) {
+                return Err(self.err(at, code::ILLEGAL_ASSIGNMENT));
+            }
             if node.ty == dest || compatible_sets {
                 return Ok(());
             }
@@ -1426,8 +1455,9 @@ impl Cx<'_> {
         self.ast.resolve(e, kind, Ty::STRING);
     }
 
-    /// One argument of `Write`/`WriteLn`: `value`, or `value : width [: decimals]`.
-    fn write_arg(&mut self, arg: Id) -> R<()> {
+    /// One argument of `Write`/`WriteLn`: `value`, or `value : width [: decimals]`. `checked`
+    /// says that `console_or_file` already checked the expression.
+    fn write_arg(&mut self, arg: Id, checked: bool) -> R<()> {
         let mut value = arg;
         let mut decimals = None;
         if let Kind::Fmt {
@@ -1445,7 +1475,9 @@ impl Cx<'_> {
                 }
             }
         }
-        self.expr(value)?;
+        if !checked {
+            self.expr(value)?;
+        }
         let ty = self.ast.ty(value);
         let is_text_or_real =
             self.types.is_str(ty) || self.types.is_char_array(ty) || ty == Ty::REAL;
@@ -1550,7 +1582,7 @@ impl Cx<'_> {
     fn field_expr(&mut self, e: Id, base: Id, name: u32) -> R<(Kind, Ty)> {
         self.expr(base)?;
         let base_ty = self.ast.ty(base);
-        if !self.types.is_record(base_ty) {
+        if !self.types.is_record(base_ty) || self.types.is_file(base_ty) {
             return Err(self.err(e, code::INVALID_QUALIFIER));
         }
         let Some((ty, offset)) = self.types.field(base_ty, name) else {
@@ -1606,6 +1638,7 @@ impl Cx<'_> {
             return Err(self.err(not_function_at, code::INVALID_PROCEDURE_REFERENCE));
         }
         let params = routine.params.clone();
+        let args = self.default_input(e, r, args);
         self.arguments(e, params, args, true, builtin)?;
         Ok((Kind::Invoke(r, args), result))
     }
@@ -1854,6 +1887,96 @@ impl Cx<'_> {
         Ok(self.ast.ty(e))
     }
 
+    /// The file of `Read` and `Write`: a leading variable of type Text, else the console. A
+    /// write to the console passes the file address 0, a read the console file `Input`.
+    /// Returns the file node, the index of the first item and whether that item has been
+    /// checked (it was a variable of another type).
+    fn console_or_file(&mut self, at: Id, items: &[Id], reading: bool) -> R<(Id, usize, bool)> {
+        let first = items.first().copied();
+        let variable = first.filter(|&e| self.var_arg_error(e).is_none());
+        if let Some(first) = variable {
+            self.expr(first)?;
+            if self.types.is_file(self.ast.ty(first)) {
+                return Ok((first, 1, false));
+            }
+        }
+        let console = if reading {
+            self.input_file(at)
+        } else {
+            self.ast.typed(Kind::IntLit(0), Ty::LONGINT, at)
+        };
+        Ok((console, 0, variable.is_some()))
+    }
+
+    /// A reference to System's `Input`.
+    fn input_file(&mut self, at: Id) -> Id {
+        self.ast.typed(Kind::Var(self.input), self.types.text, at)
+    }
+
+    /// `Read(f, a, b)` is `a := ReadChar(f)` (or `ReadLong`, `ReadReal`, `ReadStr`, by the
+    /// type of `a`) for each variable, so narrowing and truncation are the assignment's;
+    /// `ReadLn` ends with `ReadLnEnd(f)`.
+    fn read_call(&mut self, at: Id, args: List, line_end: bool) -> R<Kind> {
+        let items = self.ast.items_vec(args);
+        let (file, start, checked) = self.console_or_file(at, &items, true)?;
+        let mut steps = Vec::new();
+        for (n, &target) in items.iter().enumerate().skip(start) {
+            steps.push(self.read_item(at, file, target, checked && n == 0)?);
+        }
+        if line_end {
+            steps.push(self.helper_call(at, Helper::ReadLnEnd, &[file], Ty::NONE));
+        }
+        Ok(Kind::Compound(self.ast.list(&steps)))
+    }
+
+    /// `target := ReadX(file)` for one variable of `Read`.
+    fn read_item(&mut self, at: Id, file: Id, target: Id, checked: bool) -> R<Id> {
+        if matches!(self.ast.kind(target), Kind::Fmt { .. }) {
+            return Err(self.err(at, code::RIGHT_PAREN_EXPECTED));
+        }
+        let ty = if checked {
+            self.ast.ty(target)
+        } else {
+            self.variable(target)?
+        };
+        let mut args = vec![file];
+        let (helper, result) = if self.types.tag(ty) == Some(Tag::Char) {
+            (Helper::ReadChar, Ty::CHAR)
+        } else if let Ok(result) = self.types.val_type(ty) {
+            let long_or_real = [Helper::ReadLong, Helper::ReadReal];
+            (long_or_real[(result == Ty::REAL) as usize], result)
+        } else if self.types.is_str(ty) {
+            let capacity = Kind::IntLit(self.types.capacity(ty) as i64);
+            args.push(self.ast.typed(capacity, Ty::INTEGER, at));
+            (Helper::ReadStr, Ty::STRING)
+        } else {
+            return Err(self.err(target, code::CANNOT_READ_OR_WRITE));
+        };
+        let call = self.helper_call(at, helper, &args, result);
+        Ok(self.ast.typed(Kind::Assign(target, call), Ty::NONE, at))
+    }
+
+    /// `Eof` and `Eoln` without a file read the console: their argument is `Input`.
+    fn default_input(&mut self, at: Id, r: u32, args: List) -> List {
+        let console_routines = [Helper::Eof, Helper::Eoln].map(|h| self.helpers[h as usize]);
+        if !console_routines.contains(&r) || !self.ast.items(args).is_empty() {
+            return args;
+        }
+        let input = self.input_file(at);
+        self.ast.list(&[input])
+    }
+
+    /// The error for a `var` argument of type other than `ty`: a file is asked for by name.
+    fn var_mismatch(&self, at: Id, ty: Ty) -> Diag {
+        let wrong_file = self.types.is_file(ty);
+        let error = if wrong_file {
+            code::FILE_VARIABLE_EXPECTED
+        } else {
+            code::TYPE_MISMATCH
+        };
+        self.err(at, error)
+    }
+
     /// A call of System helper `helper` with `args`, as a node of type `ty` at `at`.
     fn helper_call(&mut self, at: Id, helper: Helper, args: &[Id], ty: Ty) -> Id {
         let list = self.ast.list(args);
@@ -1935,7 +2058,7 @@ impl Cx<'_> {
         self.expect_arg_count(at, items.len(), 2, 2)?;
         let target = items[1];
         let ty = self.variable(target)?;
-        self.write_arg(items[0])?;
+        self.write_arg(items[0], false)?;
         let (value, width, decimals) = match self.ast.kind(items[0]) {
             Kind::Fmt {
                 value,

@@ -106,13 +106,14 @@ test("Append writes after the existing contents", () => {
   assert.equal(text(slurp(vfs, "DATA.TXT")), "alpha\r\nbeta\r\ngamma\r\n");
 });
 
-test("Append to a missing file creates it", () => {
+test("Append to a missing file returns -2 and creates nothing", () => {
   const vfs = new Vfs(aux);
+  assert.equal(vfs.open("LOG.TXT", APPEND), NOT_FOUND);
+  assert.equal(vfs.open("LOG.TXT", RESET), NOT_FOUND);
+  vfs.close(vfs.open("LOG.TXT", REWRITE));
   const h = vfs.open("LOG.TXT", APPEND);
   assert.ok(h > 0);
-  vfs.write(h, Buffer.from("a"));
-  vfs.close(h);
-  assert.equal(text(slurp(vfs, "LOG.TXT")), "a");
+  assert.equal(vfs.close(h), 0);
 });
 
 test("a program's files never reach the aux directory or the next run", () => {

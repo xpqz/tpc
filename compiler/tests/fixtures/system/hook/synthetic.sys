@@ -79,3 +79,48 @@ end;
 procedure HostWrite(fd, address, count: LongInt); external 'write';
 procedure RtError(code: LongInt); external;
 function Fmt_Real(x: Real; width, decimals, buffer: LongInt): LongInt; external;
+type Text = record handle: LongInt; end;
+const Input: Text = (handle: 0);
+procedure TextOut(target, address, count: LongInt);
+begin
+  HostWrite(1, address, count)
+end;
+procedure TextNewLine(target: LongInt);
+var c: Char;
+begin
+  c := Chr(10);
+  HostWrite(1, LongInt(@c), 1)
+end;
+procedure CheckIo;
+begin
+end;
+procedure Assign(var f: Text; name: String);
+begin
+end;
+function Eof(var f: Text): Boolean;
+begin
+  Eof := True
+end;
+function Eoln(var f: Text): Boolean;
+begin
+  Eoln := True
+end;
+function ReadChar(var f: Text): Char;
+begin
+  ReadChar := 'x'
+end;
+function ReadLong(var f: Text): LongInt;
+begin
+  ReadLong := 0
+end;
+function ReadReal(var f: Text): Real;
+begin
+  ReadReal := 0
+end;
+function ReadStr(var f: Text; max: Integer): String;
+begin
+  ReadStr := ''
+end;
+procedure ReadLnEnd(var f: Text);
+begin
+end;

@@ -36,6 +36,7 @@ pub mod code {
     pub const LOWER_BOUND_GREATER: u16 = 28;
     pub const ORDINAL_TYPE_EXPECTED: u16 = 29;
     pub const INVALID_RESULT_TYPE: u16 = 34;
+    pub const ILLEGAL_ASSIGNMENT: u16 = 43;
     pub const BEGIN_EXPECTED: u16 = 36;
     pub const END_EXPECTED: u16 = 37;
     pub const INTEGER_EXPRESSION_EXPECTED: u16 = 38;
@@ -60,6 +61,7 @@ pub mod code {
     pub const CASE_TYPES_MISMATCH: u16 = 74;
     pub const RECORD_VARIABLE_EXPECTED: u16 = 75;
     pub const CONSTANT_OUT_OF_RANGE: u16 = 76;
+    pub const FILE_VARIABLE_EXPECTED: u16 = 77;
     pub const INTEGER_OR_REAL_EXPRESSION_EXPECTED: u16 = 79;
     pub const UNIT_EXPECTED: u16 = 84;
     pub const SEMICOLON_EXPECTED: u16 = 85;
@@ -81,6 +83,7 @@ pub mod code {
     pub const ERROR_IN_STATEMENT: u16 = 113;
     pub const INCLUDE_NOT_ALLOWED: u16 = 118;
     pub const INVALID_QUALIFIER: u16 = 121;
+    pub const FILE_MUST_BE_VAR: u16 = 126;
     pub const MISPLACED_CONDITIONAL: u16 = 128;
     pub const ENDIF_MISSING: u16 = 129;
     pub const INVALID_VARIABLE_REFERENCE: u16 = 122;
@@ -144,6 +147,7 @@ pub const TABLE: &[(u16, &str)] = &[
     (74, "Constant and case types do not match"),
     (75, "Record variable expected"),
     (76, "Constant out of range"),
+    (77, "File variable expected"),
     (84, "UNIT expected"),
     (85, "\";\" expected"),
     (86, "\":\" expected"),
@@ -165,6 +169,7 @@ pub const TABLE: &[(u16, &str)] = &[
     (113, "Error in statement"),
     (118, "Include files are not allowed here"),
     (121, "Invalid qualifier"),
+    (126, "Files must be var parameters"),
     (128, "Misplaced conditional directive"),
     (129, "ENDIF directive missing"),
     (133, "Cannot evaluate this expression"),
