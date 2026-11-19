@@ -60,3 +60,15 @@ function SetCmp(var a, b: SetBuf): Integer;
 begin
   SetCmp := 0
 end;
+function StrInt(v: LongInt; w, max: Integer): String;
+begin
+  StrInt := ''
+end;
+function ValLong(s: String; var code: Integer): LongInt;
+begin
+  ValLong := 0
+end;
+function ValReal(s: String; var code: Integer): Real;
+begin
+  ValReal := 0
+end;

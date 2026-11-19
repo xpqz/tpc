@@ -10,14 +10,30 @@ begin
     AbsLong := x
 end;
 
-function Lo(x: Word): Byte;
+{ Hi, Lo and Swap use the low word of any integer. }
+function Lo(x: LongInt): Byte;
 begin
-  Lo := x and 255
+  Lo := Byte(x and 255)
 end;
 
-function Hi(x: Word): Byte;
+function Hi(x: LongInt): Byte;
 begin
-  Hi := x shr 8
+  Hi := Byte((x shr 8) and 255)
+end;
+
+function Swap(x: LongInt): Word;
+begin
+  Swap := Word(((x and 255) shl 8) or ((x shr 8) and 255))
+end;
+
+function ParamCount: Integer;
+begin
+  ParamCount := 0
+end;
+
+function ParamStr(n: LongInt): String;
+begin
+  ParamStr := ''
 end;
 
 function UpCase(c: Char): Char;
@@ -66,6 +82,143 @@ begin
   if n > max then n := max;
   for i := 1 to n do d[i] := s[i];
   d[0] := Chr(n)
+end;
+
+{ Str(v:w, s) of an integer is s := StrInt(v, w, max), max the capacity of s: a wider field is
+  cut to it. }
+function StrInt(v: LongInt; w, max: Integer): String;
+var r, t: String; i, n, pad, d: Integer; neg: Boolean;
+begin
+  neg := v < 0;
+  n := 0;
+  repeat
+    d := Integer(v mod 10);
+    if d < 0 then d := -d;
+    n := n + 1;
+    r[n] := Chr(48 + d);
+    v := v div 10
+  until v = 0;
+  if neg then
+  begin
+    n := n + 1;
+    r[n] := '-'
+  end;
+  if w > max then w := max;
+  pad := w - n;
+  if pad < 0 then pad := 0;
+  for i := 1 to pad do t[i] := ' ';
+  for i := 1 to n do t[pad + i] := r[n + 1 - i];
+  t[0] := Chr(pad + n);
+  StrInt := t
+end;
+
+{ Val(s, v, code) of an integer is v := ValLong(s, code): optional spaces, a sign, then decimal
+  digits or $ and hex digits. code is the position of the first bad character or of the digit that
+  overflows LongInt (the sign counts, and the magnitude is limited, so -2147483648 fails), else 0;
+  the value is 0 on error. }
+function ValLong(s: String; var code: Integer): LongInt;
+var i, n, d: Integer; v: LongInt; neg, hex: Boolean; c: Char;
+begin
+  n := Ord(s[0]);
+  i := 1;
+  v := 0;
+  neg := False;
+  hex := False;
+  code := 0;
+  while (i <= n) and (s[i] = ' ') do i := i + 1;
+  if (i <= n) and ((s[i] = '-') or (s[i] = '+')) then
+  begin
+    neg := s[i] = '-';
+    i := i + 1
+  end;
+  if (i <= n) and (s[i] = '$') then
+  begin
+    hex := True;
+    i := i + 1
+  end;
+  if i > n then code := i;
+  while (i <= n) and (code = 0) do
+  begin
+    c := s[i];
+    d := -1;
+    if (c >= '0') and (c <= '9') then d := Ord(c) - 48
+    else if hex and (c >= 'A') and (c <= 'F') then d := Ord(c) - 55
+    else if hex and (c >= 'a') and (c <= 'f') then d := Ord(c) - 87;
+    if d < 0 then code := i
+    else if hex then
+    begin
+      if ((v shr 28) and 15) <> 0 then code := i else v := (v shl 4) + d
+    end
+    else if v > (2147483647 - d) div 10 then code := i
+    else v := v * 10 + d;
+    i := i + 1
+  end;
+  if code <> 0 then ValLong := 0
+  else if neg then ValLong := -v
+  else ValLong := v
+end;
+
+{ Val(s, r, code) of a Real is r := ValReal(s, code): sign, digits, optional .digits and
+  E[+-]digits. The value is mantissa * 10^exponent by one multiplication or division. }
+function ValReal(s: String; var code: Integer): Real;
+var i, n, ex, e10, k: Integer; m, p: Real; neg, eneg: Boolean; c: Char;
+begin
+  n := Ord(s[0]);
+  i := 1;
+  m := 0;
+  ex := 0;
+  e10 := 0;
+  neg := False;
+  eneg := False;
+  code := 0;
+  while (i <= n) and (s[i] = ' ') do i := i + 1;
+  if (i <= n) and ((s[i] = '-') or (s[i] = '+')) then
+  begin
+    neg := s[i] = '-';
+    i := i + 1
+  end;
+  if (i > n) or not (s[i] in ['0'..'9', '.']) then code := i;
+  while (code = 0) and (i <= n) and (s[i] in ['0'..'9']) do
+  begin
+    m := m * 10 + (Ord(s[i]) - 48);
+    i := i + 1
+  end;
+  if (code = 0) and (i <= n) and (s[i] = '.') then
+  begin
+    i := i + 1;
+    while (i <= n) and (s[i] in ['0'..'9']) do
+    begin
+      m := m * 10 + (Ord(s[i]) - 48);
+      e10 := e10 - 1;
+      i := i + 1
+    end
+  end;
+  if (code = 0) and (i <= n) and ((s[i] = 'E') or (s[i] = 'e')) then
+  begin
+    i := i + 1;
+    if (i <= n) and ((s[i] = '-') or (s[i] = '+')) then
+    begin
+      eneg := s[i] = '-';
+      i := i + 1
+    end;
+    if (i > n) or not (s[i] in ['0'..'9']) then code := i;
+    while (code = 0) and (i <= n) and (s[i] in ['0'..'9']) do
+    begin
+      if ex < 1000 then ex := ex * 10 + Ord(s[i]) - 48;
+      i := i + 1
+    end;
+    if eneg then ex := -ex;
+    e10 := e10 + ex
+  end;
+  if (code = 0) and (i <= n) then code := i;
+  if code <> 0 then ValReal := 0
+  else
+  begin
+    p := 1;
+    for k := 1 to Abs(e10) do p := p * 10;
+    if neg then m := -m;
+    if e10 < 0 then ValReal := m / p else ValReal := m * p
+  end
 end;
 
 function Length(s: String): Integer;

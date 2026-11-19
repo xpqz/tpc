@@ -192,20 +192,6 @@ fn corpus_lists_are_sorted_name_existing_programs_and_leave_pending() {
     assert_eq!((LANG.len(), ABI.len(), RT.len(), NEG.len()), (24, 5, 1, 26));
 }
 
-/// The remaining Real-related corpus programs wait for other intrinsics (`Inc`, `Str`, `Val`).
-#[test]
-fn other_intrinsic_programs_stay_pending() {
-    let pending = std::fs::read_to_string(root().join("tests/neg/PENDING")).unwrap();
-    for n in [
-        "inc_real",
-        "inc_literal",
-        "val_missing_arguments",
-        "str_target_not_string",
-    ] {
-        assert!(pending.lines().any(|l| l.trim() == n), "{n}");
-    }
-}
-
 /// `host/fmt_real.js` reproduces TP 5.0 formatting for 400+ (value, width, decimals) cases, maps
 /// -0 to 0, and `fmtReal` writes the digits into memory and returns the length.
 #[test]

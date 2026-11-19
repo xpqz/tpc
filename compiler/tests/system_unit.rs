@@ -29,7 +29,10 @@ type SetBuf = array[0..31] of Byte;\n\
 procedure SetOp(var d, a, b: SetBuf; op: Integer);\nbegin\nend;\n\
 procedure SetAdd(var d: SetBuf; lo, hi: Integer);\nbegin\nend;\n\
 function SetIn(var s: SetBuf; i: Integer): Boolean;\nbegin\n  SetIn := False\nend;\n\
-function SetCmp(var a, b: SetBuf): Integer;\nbegin\n  SetCmp := 0\nend;\n";
+function SetCmp(var a, b: SetBuf): Integer;\nbegin\n  SetCmp := 0\nend;\n\
+function StrInt(v: LongInt; w, max: Integer): String;\nbegin\n  StrInt := ''\nend;\n\
+function ValLong(s: String; var code: Integer): LongInt;\nbegin\n  ValLong := 0\nend;\n\
+function ValReal(s: String; var code: Integer): Real;\nbegin\n  ValReal := 0\nend;\n";
 
 fn fixtures(sub: &str) -> std::path::PathBuf {
     driver::root()
