@@ -78,6 +78,7 @@ begin
 end;
 procedure HostWrite(fd, address, count: LongInt); external 'write';
 procedure RtError(code: LongInt); external;
+procedure HostHalt(code: LongInt); external 'halt';
 function Fmt_Real(x: Real; width, decimals, buffer: LongInt): LongInt; external;
 type Text = record handle: LongInt; end;
 const Input: Text = (handle: 0);

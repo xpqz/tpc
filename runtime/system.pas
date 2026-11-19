@@ -5,7 +5,7 @@
   Copy, Pos, UpCase, ...). The others are helpers that the compiler calls on its own, found by
   name after this part is checked (compiler/src/symbols.rs, `Helper`): AbsLong, RangeChk, StrCat,
   StrCmp, StrAssign, StrInt, ValLong, ValReal, StrDelete, StrInsert, SetOp, SetAdd, SetIn,
-  SetCmp, HeapGet, HeapPut, HeapMark, HeapRelease, HostWrite, RtError, Fmt_Real, TextOut,
+  SetCmp, HeapGet, HeapPut, HeapMark, HeapRelease, HostWrite, RtError, HostHalt, Fmt_Real, TextOut,
   TextNewLine, TextFlush, CheckIo, Assign, Eof, Eoln, ReadChar, ReadLong, ReadReal, ReadStr,
   ReadLnEnd.
   HeapOrg, Text and Input are also found by name.
@@ -32,6 +32,7 @@
   number. }
 procedure HostWrite(fd, address, count: LongInt); external 'write';
 procedure RtError(code: LongInt); external;
+procedure HostHalt(code: LongInt); external 'halt';
 function Fmt_Real(x: Real; width, decimals, buffer: LongInt): LongInt; external;
 function Fs_Open(name, count, mode: LongInt): LongInt; external;
 function Fs_Read(handle, address, count: LongInt): LongInt; external;

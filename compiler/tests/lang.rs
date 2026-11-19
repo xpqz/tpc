@@ -26,6 +26,13 @@ fn runtime_error_corpus_has_no_unexpected_results() {
 }
 
 #[test]
+fn halt_corpus_exits_with_the_halt_code_and_keeps_earlier_output() {
+    let dir = root().join("tests/halt");
+    let fails = check_halt(&dir, &real_compile);
+    assert!(fails.is_empty(), "{}", fails.join("\n"));
+}
+
+#[test]
 fn runtime_error_program_that_exits_normally_is_reported() {
     let f = check_rt(&fixture("rt/exit_mismatch"), &fake_compile);
     assert_eq!(f, ["exit_mismatch: run exited 0, want 200: "]);

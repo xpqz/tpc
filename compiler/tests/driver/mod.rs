@@ -307,6 +307,39 @@ pub fn check_rt(dir: &Path, compile: Compile) -> Vec<String> {
     })
 }
 
+/// Every `STEM.pas` compiles and runs under tests/run.mjs, prints exactly `STEM.out` and exits
+/// with the code `Halt` was given: the code in `STEM.exit` when that file exists (a program
+/// without Crt, whose exit code TP's output does not show), else the last `exit N` line of
+/// the Crt screen dump in `STEM.out`, else 0.
+pub fn check_halt(dir: &Path, compile: Compile) -> Vec<String> {
+    sweep(dir, &|stem| {
+        let out = dir.join(format!("{stem}.out"));
+        let text =
+            std::fs::read_to_string(&out).map_err(|e| format!("cannot read {stem}.out: {e}"))?;
+        let from_dump = text
+            .lines()
+            .rev()
+            .find_map(|l| l.strip_prefix("exit "))
+            .map(str::to_string);
+        let from_file = std::fs::read_to_string(dir.join(format!("{stem}.exit"))).ok();
+        let want: i32 = from_file
+            .or(from_dump)
+            .map_or(Ok(0), |n| n.trim().parse())
+            .map_err(|e| format!("bad exit code: {e}"))?;
+        let wasm = scratch(&format!("{stem}.wasm"));
+        let src = dir.join(format!("{stem}.pas"));
+        expect_ok(&compile(&src, &wasm), "compile")?;
+        match run_wasm(&src, &wasm, &out) {
+            r if r.code == want => Ok(()),
+            r => Err(format!(
+                "run exited {}, want {want}: {}",
+                r.code,
+                r.stderr.trim()
+            )),
+        }
+    })
+}
+
 /// Every `STEM.pas` fails with exit 1 and `FILE(LINE,COL): Error N: MSG` where `N LINE` (or
 /// `N LINE FILE` for an error in a unit or include file) is the content of `STEM.err`.
 pub fn check_neg(dir: &Path, compile: Compile) -> Vec<String> {
