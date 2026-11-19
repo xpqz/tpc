@@ -1,0 +1,6 @@
+sum of all bytes by LongInt index: 8189151
+Buf^[40000] by LongInt: 91
+Buf^[40000] by Word: 91
+Buf^[65534] by LongInt: 23
+Buf^[L - 1] 22, Buf^[L + 0] 23
+Buf^[L - W] (LongInt - Word): 131

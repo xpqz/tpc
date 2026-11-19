@@ -26,6 +26,11 @@ check "error in an include names the include" error_in_include 1 \
 check "error in the main program names P.PAS" error_in_main 1 "P.PAS(3): Error 3: Unknown identifier."
 check "circular interface uses" circular_interface 1 "CB.PAS(3): Error 68: Circular unit reference (CA)."
 
+# NAME.dirs: shared directories are copied first; the fixture's own file replaces a shared one.
+check "shared directory units are found, the fixture's own unit wins" dirs_use 0 \
+    "base unit from a shared directory${NL}the fixture's own stub"
+check "NAME.dirs without a NAME directory" dirs_only 0 "base unit from a shared directory"
+
 # Crt programs: stdout and the screen dump, compared with the golden file FIXTURE.out (made
 # by this script on the real TP 5.0 and read through by hand). The address of a run-time
 # error is dropped.

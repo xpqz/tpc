@@ -1,0 +1,21 @@
+Integer 32767 + 1 by Inc: -32768
+Integer 32767 + 1: -32768
+Integer 20000 + 20000 into LongInt: -25536
+LongInt(20000) + 20000: 40000
+Word 65535 + 1 by Inc: 0
+Word 65535 + 1: 0
+Word 65535 + 1 into LongInt: 0
+Word 40000 + 40000 into LongInt: 14464
+Word 3 - 5: 65534
+Word 3 - 5 stored: 65534
+Integer := LongInt 40000: -25536
+Integer := Word 40000: -25536
+Word 40000 < Integer -1: FALSE
+Word 40000 > Integer -1: TRUE
+Buf^[Word 60000]: 7
+Buf^[Word 65534]: 9 and [W - 1 + 1]: 9
+for W := 65530 to 65535 runs 6 times
+for I := 32760 to 32767 runs 8 times
+Word := LongInt 65536: 0
+Word := LongInt 70000: 4464
+Ord of Word 65535: 65535
