@@ -64,10 +64,8 @@ fn a_registered_file_called_idehost_does_not_replace_the_unit() {
     assert_eq!(count_of(&names, "host.ide_compile"), 1, "{names:?}");
 }
 
-/// The IDE host against the real compiler.wasm: imports called directly, and a toy IDE program
-/// driven by keys (tests/ide/host_test.mjs).
-#[test]
-fn ide_host_with_the_real_compiler_wasm() {
+/// The release build of compiler.wasm (`make wasm`).
+fn compiler_wasm() -> PathBuf {
     let target = Command::new("sh")
         .arg(root().join("scripts/cargo-target.sh"))
         .output()
@@ -91,10 +89,14 @@ fn ide_host_with_the_real_compiler_wasm() {
         "{}",
         String::from_utf8_lossy(&build.stderr)
     );
-    let wasm = PathBuf::from(target).join("wasm32-unknown-unknown/release/tp5c.wasm");
+    PathBuf::from(target).join("wasm32-unknown-unknown/release/tp5c.wasm")
+}
+
+/// Runs a Node test script of tests/ide/ against the real compiler.wasm.
+fn node_test(script: &str) {
     let o = Command::new("node")
-        .arg(root().join("tests/ide/host_test.mjs"))
-        .arg(wasm)
+        .arg(root().join("tests/ide").join(script))
+        .arg(compiler_wasm())
         .current_dir(root())
         .output()
         .expect("node must be installed");
@@ -104,6 +106,21 @@ fn ide_host_with_the_real_compiler_wasm() {
         String::from_utf8_lossy(&o.stdout),
         String::from_utf8_lossy(&o.stderr)
     );
+}
+
+/// The IDE host against the real compiler.wasm: imports called directly, and a toy IDE program
+/// driven by keys (tests/ide/host_test.mjs).
+#[test]
+fn ide_host_with_the_real_compiler_wasm() {
+    node_test("host_test.mjs");
+}
+
+/// The whole IDE (ide/ide.pas) against the real compiler.wasm: errors in the edited file and in
+/// a unit, the user screen, and the plan's exit test with HELLO.PAS and Snake
+/// (tests/ide/main_test.mjs).
+#[test]
+fn ide_main_with_the_real_compiler_wasm() {
+    node_test("main_test.mjs");
 }
 
 #[test]

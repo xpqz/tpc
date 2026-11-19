@@ -1,0 +1,4 @@
+ide
+tests/ide/standin
+tests/ide/files_harness
+tests/ide/files_fixtures
