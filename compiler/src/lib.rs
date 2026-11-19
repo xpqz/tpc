@@ -4,7 +4,8 @@
 //! - `lex`: bytes to tokens.
 //! - `parse`: tokens to the syntax tree (`ast`), an arena of nodes.
 //! - `check`: names, types and constants resolved, the tree rewritten in place; `types` holds
-//!   the type table and the operator typing rules, `diag` the errors.
+//!   the type table and the operator typing rules, `symbols` the scopes, storage and frame
+//!   layout, `diag` the errors.
 //! - `codegen`: the checked tree to WASM instructions; `wasm` writes the binary module.
 //! - `driver` runs the stages, and `ffi` exports them to the host on wasm32.
 
@@ -17,6 +18,7 @@ pub mod driver;
 pub mod ffi;
 pub mod lex;
 pub mod parse;
+pub mod symbols;
 pub mod types;
 pub mod wasm;
 

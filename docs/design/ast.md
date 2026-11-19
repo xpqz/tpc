@@ -1,6 +1,6 @@
 # AST, types and symbols: the front-end contract
 
-Describes `compiler/src/{ast,types,check,codegen,parse,driver}.rs`. Changing the contract is a
+Describes `compiler/src/{ast,types,symbols,check,codegen,parse,driver}.rs`. Changing the contract is a
 decision in `docs/decisions.md`; the code and this file change together.
 
 ## Pipeline
@@ -15,7 +15,7 @@ codegen walks the checked AST.
   program's own declarations start a new redeclaration region (`user`): predefined and System
   names may be redeclared, a duplicate within the program is error 4. A forward routine left
   undefined in System is error 59 at line 0.
-- **Helpers by handle.** Right after System is checked, the checker looks up the names in `HELPERS`
+- **Helpers by handle.** Right after System is checked, `Symbols::bind_system_names` looks up the names of `Helper::ALL`
   (`ABSLONG STRCAT STRCMP STRASSIGN STRDELETE STRINSERT HEAPGET HEAPPUT HEAPMARK HEAPRELEASE ... RANGECHK`) and stores their routine indexes in
   `Info::helpers`, addressed by `H_*`. A missing helper is error 3 at line 0. Later code never
   looks helpers up by name, so a user routine with a helper's name cannot capture them.
@@ -144,7 +144,17 @@ pub enum Type {
 ## Symbols and storage
 
 `Sym(u32)` indexes `Info::syms: Vec<Symbol>`. `Symbol { kind: SymKind, ty, val: i64, taken, depth }`.
-Scopes are `Cx::scope: Vec<(name, Sym)>` searched innermost-first; a routine truncates it on exit.
+`symbols.rs` owns the symbol vector, the scope stack and the storage and frame bookkeeping behind
+`Symbols`; the checker holds one and calls it. `symbols.rs` never imports `check`, never builds a
+`Diag` (it returns a `SymbolError` that the checker turns into error 4 or 96) and never rewrites a
+node; a test scans its source for this. Scopes are `Symbols::scope: Vec<(name, Sym)>` searched
+innermost-first; a routine truncates it on exit. `region_start` is the floor of the duplicate
+check: names below it may be hidden but not redeclared.
+
+**Units (design, implemented with units).** A unit is one more region on the same stack. It
+records `interface_end`; a `uses` clause re-pushes the interface entries of the named unit into
+the user's region, so unqualified lookup stays one backward scan; `U.X` scans only the interface
+part of `U`'s region; System is the first region and everything in it is visible.
 
 | `SymKind` | `val` |
 |---|---|
@@ -160,15 +170,15 @@ Scopes are `Cx::scope: Vec<(name, Sym)>` searched innermost-first; a routine tru
 
 `depth` is the lexical depth of the owning routine (0 for the program and its globals).
 
-**When storage is decided.** A local starts as `Local` or `Ref`. `taken` (one flag for both
+**When storage is decided.** A local starts as `Local` or `Ref`. `needs_frame_slot` (one flag for both
 address-taken and captured) is set (a) at declaration for strings and aggregates, which always
 live in the frame, and for String/aggregate value parameters; (b) by `capture` when a name is
 resolved inside a deeper routine than its owner (`Local` or `Ref`); (c) by `capture` when a
 `Local` is passed as a `var` argument. When a routine's body has been checked, `place_frame` walks
-the symbols created for it and rewrites each `taken` `Local` to `Frame` and each `taken` `Ref` to
+the symbols created for it and rewrites each `needs_frame_slot` `Local` to `Frame` and each `needs_frame_slot` `Ref` to
 `FrameRef`, assigning offsets in declaration order with no padding. `Kind::Var(sym)` holds the
 handle, so every use sees the final kind at codegen. Static link, if any, is at offset 0; a
-captured `var` parameter stores its 4-byte address. A `taken` parameter that arrived in a WASM
+captured `var` parameter stores its 4-byte address. A `needs_frame_slot` parameter that arrived in a WASM
 local is recorded in `Routine::copies` (local, offset, type) and copied into the frame by the
 prologue (strings through `StrAssign`, aggregates by `memory.copy`, scalars by store).
 `Routine::framed` is set when the frame holds anything or the routine has nested routines.

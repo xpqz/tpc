@@ -51,6 +51,28 @@ budgets are in `plan.md` §1. The 500-line margin is not spent before Phase 7.
 - Before adding code, look for existing code to reuse. Every issue ends with a pass asking
   whether the change can be simpler and clearer; shorter only where that also reads better.
 
+## What belongs in which file
+
+One line per file of `compiler/src/`. Code goes where its line says; a function that needs
+two files' worth of knowledge is split, not placed in the nearer one.
+
+- `lex.rs`: bytes to tokens. No knowledge of grammar.
+- `ast.rs`: the node arena, handles and name interning. No semantics.
+- `parse.rs`: tokens to nodes with TP's error positions. No name resolution or types.
+- `types.rs`: the type table, compatibility, operator typing, and the plain records the
+  checker produces (`Symbol`, `Routine`). Pure data and rules; no scopes, no diagnostics
+  about constructs.
+- `symbols.rs`: scope stack, declaration, lookup, predefined and System names, storage choice
+  and frame layout. Never imports `check`, never builds a `Diag`, never rewrites nodes.
+- `check.rs`: walks the tree: construct rules, typing, constant folding, desugaring, and every
+  construct-specific error. Asks `symbols.rs` where things live.
+- `codegen.rs`: checked tree to WASM instructions and the memory map. Never re-decides types or
+  storage.
+- `wasm.rs`: the binary format only: sections, LEB128, validated structured control.
+- `diag.rs`: error codes, messages and rendering.
+- `driver.rs`: runs the stages and the native command line. `ffi.rs`: the wasm32 exports.
+  `lib.rs`: the module list and pipeline map. `main.rs`: the process entry point.
+
 ## Engineering rules (from `plan.md` §8)
 
 - `[dependencies]` in the compiler stays empty. Dev-dependencies too, unless the lead records a decision.

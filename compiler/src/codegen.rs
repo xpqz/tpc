@@ -6,7 +6,7 @@
 //! block around the routine body.
 //!
 //! Memory (linear, 16 pages): a fixed header (the characters `write` needs and a digit
-//! buffer), the globals from `check::GLOBALS`, the string literals the live code uses, the
+//! buffer), the globals from `symbols::GLOBALS`, the string literals the live code uses, the
 //! heap (grows up), and the shadow stack of frames at the top (grows down). A routine that
 //! needs addressable storage allocates a frame there: the declared frame laid out by the
 //! checker, then the temporaries below. A nested routine receives its parent's frame pointer
@@ -26,12 +26,13 @@
 //! functions) and the emit phase runs the generator again to produce the module with the
 //! final numbers. A routine that is never reached is never emitted.
 use crate::ast::{Ast, Id, Kind, List, Op};
-use crate::check::{Helper, Info};
+use crate::check::Info;
+use crate::symbols::Helper;
 use crate::types::{FrameCopy, ParamType, Routine, SymKind, Symbol, Tag, Ty, Type};
 use crate::wasm::{Code, Label, Module, F64, FUNC, GLOBAL, I32, MEM, VOID};
 
 /// Memory map. The first bytes hold what `write` needs; the globals follow at
-/// `check::GLOBALS`, and the literals after the globals.
+/// `symbols::GLOBALS`, and the literals after the globals.
 const HEADER: u32 = 256;
 const LF: i32 = 256;
 const SPACE: i32 = LF + 1;
