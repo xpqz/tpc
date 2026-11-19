@@ -604,3 +604,13 @@ then reads the line from keys (`readkey`) with a small Pascal line editor that e
 through the console writer (Backspace, Enter), the same technique as Crt's `EditLine`.
 The Node runner keeps `readline` from `NAME.in`. Reason: host glue is at 599 / 600; the
 editing logic belongs with the console code in Pascal, which the runtime budget can carry.
+
+## 47. IDE View: whole-window repaint, minimal scrolling, tabs as screen columns
+
+`View.Paint` repaints the whole window (25 writes) every time; nothing tracks what changed.
+It first scrolls as little as needed so the cursor is inside the 23-line, 80-column edit
+area. The Buffer keeps a tab as `#9`; the View shows spaces up to the next multiple of 8.
+The Crt cursor and horizontal scrolling use screen columns, the status line shows the
+Buffer column. Row 25 is written to column 79 only, because a character at column 80 of the
+last row scrolls the screen; `Reset` colours the whole screen so that cell matches the bar.
+Reason: simple and always correct; change tracking is the first step if the IDE feels slow.
