@@ -1,6 +1,6 @@
 //! Recursive-descent parser: `[program header;] begin statements end .`
 use crate::ast::{Ast, Id, Kind, List, Op, NO_NAME};
-use crate::driver::Diag;
+use crate::diag::{code, Diag};
 use crate::lex::{Tk, Tok};
 
 /// Keywords that may follow an empty statement in the enclosing construct.
@@ -29,8 +29,8 @@ impl Parser {
                         self.ast.range.push((t.line, t.col, item[1] == b'+'));
                         continue;
                     }
-                    [c, b'+' | b'-'] if c.is_ascii_alphabetic() => 200,
-                    _ => 17,
+                    [c, b'+' | b'-'] if c.is_ascii_alphabetic() => code::NOT_SUPPORTED,
+                    _ => code::INVALID_DIRECTIVE,
                 };
                 let (line, col) = (t.line, t.col);
                 return Err(Diag { code, line, col });
@@ -55,7 +55,7 @@ pub fn parse(system: Vec<Tok>, toks: Vec<Tok>) -> R<(Ast, Id)> {
     p.toks = p.drop_directives(system)?;
     let mut sys = p.declarations()?;
     if p.tok().kind != Tk::Eof {
-        return Err(p.err(36));
+        return Err(p.err(code::BEGIN_EXPECTED));
     }
     p.ast.system = sys.len();
     (p.toks, p.at) = (p.drop_directives(toks)?, 0);
@@ -69,14 +69,14 @@ pub fn parse(system: Vec<Tok>, toks: Vec<Tok>) -> R<(Ast, Id)> {
                     break;
                 }
             }
-            p.expect_sym(b")", 89)?;
+            p.expect_sym(b")", code::RIGHT_PAREN_EXPECTED)?;
         }
-        p.expect_sym(b";", 85)?;
+        p.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
     }
     sys.extend(p.declarations()?);
     let (line, col) = p.pos();
     let body = p.begin()?;
-    p.expect_sym(b".", 94)?;
+    p.expect_sym(b".", code::PERIOD_EXPECTED)?;
     let decls = p.ast.list(&sys);
     let root = p.ast.add(Kind::Program(name, decls, body), line, col);
     Ok((p.ast, root))
@@ -115,7 +115,11 @@ impl Parser {
     /// An error at the lookahead token; at end of file it is always 10.
     fn err(&self, code: u16) -> Diag {
         let t = self.tok();
-        let code = if t.kind == Tk::Eof { 10 } else { code };
+        let code = if t.kind == Tk::Eof {
+            code::UNEXPECTED_END_OF_FILE
+        } else {
+            code
+        };
         Diag {
             code,
             line: t.line,
@@ -149,7 +153,7 @@ impl Parser {
 
     fn ident(&mut self) -> R<u32> {
         if self.tok().kind != Tk::Ident {
-            return Err(self.err(2));
+            return Err(self.err(code::IDENTIFIER_EXPECTED));
         }
         let name = self.ast.intern(&self.toks[self.at].text);
         self.at += 1;
@@ -168,14 +172,14 @@ impl Parser {
         }
         self.stops = outer;
         if !self.is(Tk::Kw, closer) {
-            return Err(self.err(85));
+            return Err(self.err(code::SEMICOLON_EXPECTED));
         }
         Ok(items)
     }
 
     /// `BEGIN statements END`.
     fn begin(&mut self) -> R<Id> {
-        self.expect_kw(b"BEGIN", 36)?;
+        self.expect_kw(b"BEGIN", code::BEGIN_EXPECTED)?;
         self.compound()
     }
 
@@ -215,7 +219,7 @@ impl Parser {
         let selector = self.expr()?;
         let placeholder = Kind::Compound(self.ast.list(&[]));
         let id = self.after(placeholder);
-        self.expect_kw(b"OF", 54)?;
+        self.expect_kw(b"OF", code::OF_EXPECTED)?;
         let mut arms = Vec::new();
         loop {
             let (line, col) = self.pos();
@@ -229,7 +233,7 @@ impl Parser {
                     break;
                 }
             }
-            self.expect_sym(b":", 86)?;
+            self.expect_sym(b":", code::COLON_EXPECTED)?;
             let body = self.sub(END | ELSE)?;
             let labels = self.ast.list(&labels);
             arms.push(self.ast.add(Kind::Arm(labels, body), line, col));
@@ -242,7 +246,7 @@ impl Parser {
         } else {
             Vec::new()
         };
-        self.expect_kw(b"END", 85)?;
+        self.expect_kw(b"END", code::SEMICOLON_EXPECTED)?;
         let (arms, other) = (self.ast.list(&arms), self.ast.list(&other));
         self.ast.nodes[id as usize].kind = Kind::Case(selector, arms, other);
         Ok(id)
@@ -253,7 +257,7 @@ impl Parser {
         if self.kw(b"IF") {
             let cond = self.expr()?;
             let id = self.after(placeholder);
-            self.expect_kw(b"THEN", 57)?;
+            self.expect_kw(b"THEN", code::THEN_EXPECTED)?;
             let then = self.sub(self.stops | ELSE)?;
             let other = if self.kw(b"ELSE") {
                 Some(self.sub(self.stops)?)
@@ -266,7 +270,7 @@ impl Parser {
         if self.kw(b"WHILE") {
             let cond = self.expr()?;
             let id = self.after(placeholder);
-            self.expect_kw(b"DO", 50)?;
+            self.expect_kw(b"DO", code::DO_EXPECTED)?;
             let body = self.sub(self.stops)?;
             self.ast.nodes[id as usize].kind = Kind::While(cond, body);
             return Ok(Some(id));
@@ -290,7 +294,7 @@ impl Parser {
                 }
             }
             let id = self.after(placeholder);
-            self.expect_kw(b"DO", 50)?;
+            self.expect_kw(b"DO", code::DO_EXPECTED)?;
             let body = self.sub(self.stops)?;
             let list = self.ast.list(&records);
             self.ast.nodes[id as usize].kind = Kind::With(list, body);
@@ -299,20 +303,20 @@ impl Parser {
         if self.kw(b"FOR") {
             let (line, col) = self.pos();
             if self.tok().kind != Tk::Ident {
-                return Err(self.err(20));
+                return Err(self.err(code::VARIABLE_EXPECTED));
             }
             let name = self.ident()?;
             let var = self.ast.add(Kind::Name(name), line, col);
-            self.expect_sym(b":=", 91)?;
+            self.expect_sym(b":=", code::ASSIGN_EXPECTED)?;
             let first = self.expr()?;
             let down = self.is(Tk::Kw, b"DOWNTO");
             if !down && !self.is(Tk::Kw, b"TO") {
-                return Err(self.err(58));
+                return Err(self.err(code::TO_OR_DOWNTO_EXPECTED));
             }
             self.at += 1;
             let last = self.expr()?;
             let id = self.after(placeholder);
-            self.expect_kw(b"DO", 50)?;
+            self.expect_kw(b"DO", code::DO_EXPECTED)?;
             let body = self.sub(self.stops)?;
             self.ast.nodes[id as usize].kind = Kind::For(var, first, last, body, down);
             return Ok(Some(id));
@@ -334,7 +338,7 @@ impl Parser {
     fn unsupported(&self, words: &[&[u8]]) -> R<()> {
         let t = self.tok();
         if t.kind == Tk::Kw && words.contains(&&t.text[..]) {
-            return Err(self.err(200));
+            return Err(self.err(code::NOT_SUPPORTED));
         }
         Ok(())
     }
@@ -346,7 +350,7 @@ impl Parser {
             return Ok(self.ast.intern(b"STRING"));
         }
         if self.is(Tk::Kw, b"ARRAY") || self.is(Tk::Kw, b"RECORD") || self.is(Tk::Kw, b"PACKED") {
-            return Err(self.err(12));
+            return Err(self.err(code::TYPE_IDENTIFIER_EXPECTED));
         }
         self.ident()
     }
@@ -368,9 +372,9 @@ impl Parser {
                 }
             }
             if byref && !self.is(Tk::Sym, b":") {
-                return Err(self.err(200));
+                return Err(self.err(code::NOT_SUPPORTED));
             }
-            self.expect_sym(b":", 86)?;
+            self.expect_sym(b":", code::COLON_EXPECTED)?;
             let ty = self.type_name()?;
             for (name, line, col) in names {
                 list.push(self.ast.add(Kind::Param(name, ty, byref), line, col));
@@ -379,7 +383,7 @@ impl Parser {
                 break;
             }
         }
-        self.expect_sym(b")", 89)?;
+        self.expect_sym(b")", code::RIGHT_PAREN_EXPECTED)?;
         Ok(Some(self.ast.list(&list)))
     }
 
@@ -408,33 +412,33 @@ impl Parser {
                     break;
                 }
             }
-            self.expect_sym(b")", 89)?;
+            self.expect_sym(b")", code::RIGHT_PAREN_EXPECTED)?;
             let list = self.ast.list(&names);
             return Ok(self.ast.add(Kind::Enum(list), line, col));
         }
         if self.kw(b"SET") {
-            self.expect_kw(b"OF", 54)?;
+            self.expect_kw(b"OF", code::OF_EXPECTED)?;
             let base = self.type_spec()?;
             return Ok(self.ast.add(Kind::SetType(base), line, col));
         }
         if self.kw(b"PACKED") && !self.is(Tk::Kw, b"ARRAY") && !self.is(Tk::Kw, b"RECORD") {
-            return Err(self.err(5));
+            return Err(self.err(code::SYNTAX_ERROR));
         }
         if self.kw(b"ARRAY") {
-            self.expect_sym(b"[", 93)?;
+            self.expect_sym(b"[", code::RIGHT_BRACKET_EXPECTED)?;
             let mut index = vec![self.type_spec()?];
             while self.sym(b",") {
                 index.push(self.type_spec()?);
             }
-            self.expect_sym(b"]", 93)?;
-            self.expect_kw(b"OF", 54)?;
+            self.expect_sym(b"]", code::RIGHT_BRACKET_EXPECTED)?;
+            self.expect_kw(b"OF", code::OF_EXPECTED)?;
             let (index, elem) = (self.ast.list(&index), self.type_spec()?);
             return Ok(self.ast.add(Kind::Array(index, elem), line, col));
         }
         if self.kw(b"RECORD") {
             let fields = self.fields()?;
             if !self.kw(b"END") {
-                return Err(self.err(2));
+                return Err(self.err(code::IDENTIFIER_EXPECTED));
             }
             let list = self.ast.list(&fields);
             return Ok(self.ast.add(Kind::Record(list), line, col));
@@ -442,7 +446,7 @@ impl Parser {
         if self.is(Tk::Kw, b"STRING") && self.toks[self.at + 1].text == b"[" {
             self.at += 2;
             let size = self.expr()?;
-            self.expect_sym(b"]", 93)?;
+            self.expect_sym(b"]", code::RIGHT_BRACKET_EXPECTED)?;
             return Ok(self.ast.add(Kind::StrType(size), line, col));
         }
         if !self.kw(b"PROCEDURE") && !self.kw(b"FUNCTION") {
@@ -456,13 +460,13 @@ impl Parser {
                 || self.is(Tk::Sym, b"-")
                 || self.is(Tk::Sym, b"+");
             if !starts {
-                return Err(self.err(2));
+                return Err(self.err(code::IDENTIFIER_EXPECTED));
             }
             let lo = self.expr()?;
             if !self.sym(b"..") {
                 return match self.ast.nodes[lo as usize].kind {
                     Kind::Name(_) => Ok(lo),
-                    _ => Err(self.err(5)),
+                    _ => Err(self.err(code::SYNTAX_ERROR)),
                 };
             }
             let hi = self.expr()?;
@@ -471,7 +475,7 @@ impl Parser {
         let params = self.params()?;
         let mut result = NO_NAME;
         if func {
-            self.expect_sym(b":", 86)?;
+            self.expect_sym(b":", code::COLON_EXPECTED)?;
             result = self.type_name()?;
         }
         Ok(self
@@ -492,7 +496,7 @@ impl Parser {
                     break;
                 }
             }
-            self.expect_sym(b":", 86)?;
+            self.expect_sym(b":", code::COLON_EXPECTED)?;
             let spec = self.type_spec()?;
             for (name, line, col) in names {
                 out.push(self.ast.add(Kind::FieldDecl(name, spec), line, col));
@@ -513,7 +517,7 @@ impl Parser {
         }
         let spec = self.type_spec()?;
         out.push(self.ast.add(Kind::FieldDecl(name, spec), line, col));
-        self.expect_kw(b"OF", 54)?;
+        self.expect_kw(b"OF", code::OF_EXPECTED)?;
         let mut arms = Vec::new();
         loop {
             let (line, col) = self.pos();
@@ -521,10 +525,10 @@ impl Parser {
                 self.expr()?;
                 self.sym(b",")
             } {}
-            self.expect_sym(b":", 86)?;
-            self.expect_sym(b"(", 88)?;
+            self.expect_sym(b":", code::COLON_EXPECTED)?;
+            self.expect_sym(b"(", code::LEFT_PAREN_EXPECTED)?;
             let inner = self.fields()?;
-            self.expect_sym(b")", 89)?;
+            self.expect_sym(b")", code::RIGHT_PAREN_EXPECTED)?;
             let list = self.ast.list(&inner);
             arms.push(self.ast.add(Kind::Record(list), line, col));
             if !self.sym(b";") || self.is(Tk::Kw, b"END") || self.is(Tk::Sym, b")") {
@@ -544,11 +548,11 @@ impl Parser {
         if func && self.sym(b":") {
             result = self.type_name()?;
         } else if func && !self.is(Tk::Sym, b";") {
-            return Err(self.err(86));
+            return Err(self.err(code::COLON_EXPECTED));
         }
         let placeholder = Kind::Compound(self.ast.list(&[]));
         let id = self.after(placeholder);
-        self.expect_sym(b";", 85)?;
+        self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
         self.unsupported(&[b"INLINE", b"INTERRUPT"])?;
         let block = if self.kw(b"FORWARD") {
             None
@@ -559,7 +563,7 @@ impl Parser {
             let decls = self.ast.list(&decls);
             Some(self.ast.add(Kind::Block(decls, body), line, col))
         };
-        self.expect_sym(b";", 85)?;
+        self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
         self.ast.nodes[id as usize].kind = Kind::Routine(name, params, result, func, block);
         Ok(id)
     }
@@ -572,9 +576,9 @@ impl Parser {
                 loop {
                     let (line, col) = self.pos();
                     let name = self.ident()?;
-                    self.expect_sym(b"=", 90)?;
+                    self.expect_sym(b"=", code::EQUALS_EXPECTED)?;
                     let e = self.expr()?;
-                    self.expect_sym(b";", 85)?;
+                    self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
                     out.push(self.ast.add(Kind::ConstDecl(name, e), line, col));
                     if self.tok().kind != Tk::Ident {
                         break;
@@ -584,9 +588,9 @@ impl Parser {
                 loop {
                     let (line, col) = self.pos();
                     let name = self.ident()?;
-                    self.expect_sym(b"=", 90)?;
+                    self.expect_sym(b"=", code::EQUALS_EXPECTED)?;
                     let spec = self.type_spec()?;
-                    self.expect_sym(b";", 85)?;
+                    self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
                     out.push(self.ast.add(Kind::TypeDecl(name, spec), line, col));
                     if self.tok().kind != Tk::Ident {
                         break;
@@ -602,7 +606,7 @@ impl Parser {
                             break;
                         }
                     }
-                    self.expect_sym(b":", 86)?;
+                    self.expect_sym(b":", code::COLON_EXPECTED)?;
                     let named = self.tok().kind == Tk::Ident
                         && self.toks[self.at + 1].kind == Tk::Sym
                         && self.toks[self.at + 1].text == b";";
@@ -619,7 +623,7 @@ impl Parser {
                         self.type_name()?
                     };
                     self.unsupported(&[b"ABSOLUTE"])?;
-                    self.expect_sym(b";", 85)?;
+                    self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
                     for (name, line, col) in names {
                         out.push(self.ast.add(Kind::VarDecl(name, ty), line, col));
                     }
@@ -648,7 +652,7 @@ impl Parser {
             }
         }
         let close = self.pos();
-        self.expect_sym(b")", 89)?;
+        self.expect_sym(b")", code::RIGHT_PAREN_EXPECTED)?;
         Ok((args, close))
     }
 
@@ -669,12 +673,12 @@ impl Parser {
                         break;
                     }
                 }
-                self.expect_sym(b"]", 93)?;
+                self.expect_sym(b"]", code::RIGHT_BRACKET_EXPECTED)?;
             } else if self.sym(b"^") {
                 e = self.ast.add(Kind::Deref(e), line, col);
             } else if self.sym(b".") {
                 if self.tok().kind != Tk::Ident {
-                    return Err(self.err(44));
+                    return Err(self.err(code::FIELD_IDENTIFIER_EXPECTED));
                 }
                 let name = self.ident()?;
                 e = self.ast.add(Kind::Field(e, name), line, col);
@@ -703,21 +707,21 @@ impl Parser {
                 return Ok(Some(self.after(Kind::Assign(target, value))));
             }
             if !matches!(self.ast.nodes[target as usize].kind, Kind::Name(_)) {
-                return Err(self.err(113));
+                return Err(self.err(code::ERROR_IN_STATEMENT));
             }
             let (mut args, mut at) = (Vec::new(), self.pos());
             if self.sym(b"(") {
                 (args, at) = self.arguments()?;
             } else if self.is(Tk::Sym, b"=") {
                 // TP takes the identifier for a variable and wants `:=`.
-                return Err(self.err(91));
+                return Err(self.err(code::ASSIGN_EXPECTED));
             }
             let list = self.ast.list(&args);
             let call = self.ast.add(Kind::Call(target, list), at.0, at.1);
             if self.is(Tk::Sym, b"^") {
                 // A typecast designator: `T(x)^ := v`.
                 let target = self.selectors(call)?;
-                self.expect_sym(b":=", 113)?;
+                self.expect_sym(b":=", code::ERROR_IN_STATEMENT)?;
                 let value = self.expr()?;
                 return Ok(Some(self.after(Kind::Assign(target, value))));
             }
@@ -738,7 +742,7 @@ impl Parser {
             return Ok(None);
         }
         self.unsupported(&[b"GOTO", b"ASM", b"INLINE"])?;
-        Err(self.err(113))
+        Err(self.err(code::ERROR_IN_STATEMENT))
     }
 
     /// `expr [: width]`.
@@ -823,7 +827,9 @@ impl Parser {
                     Ok(call)
                 };
             }
-            Tk::IntLit if t.int > i32::MAX as i64 => return Err(self.err(7)),
+            Tk::IntLit if t.int > i32::MAX as i64 => {
+                return Err(self.err(code::INTEGER_CONSTANT_ERROR))
+            }
             Tk::IntLit => {
                 let v = t.int;
                 self.at += 1;
@@ -855,14 +861,14 @@ impl Parser {
                         break;
                     }
                 }
-                self.expect_sym(b"]", 93)?;
+                self.expect_sym(b"]", code::RIGHT_BRACKET_EXPECTED)?;
                 let list = self.ast.list(&items);
                 return Ok(self.ast.add(Kind::SetLit(list), line, col));
             }
             Tk::Sym if t.text == b"(" => {
                 self.at += 1;
                 let e = self.expr()?;
-                self.expect_sym(b")", 89)?;
+                self.expect_sym(b")", code::RIGHT_PAREN_EXPECTED)?;
                 if matches!(self.ast.nodes[e as usize].kind, Kind::Name(_)) {
                     return Ok(self.ast.add(Kind::Paren(e), line, col));
                 }
@@ -893,7 +899,7 @@ impl Parser {
                 self.at += 1;
                 Kind::RealLit(v)
             }
-            _ => return Err(self.err(42)),
+            _ => return Err(self.err(code::ERROR_IN_EXPRESSION)),
         };
         Ok(self.ast.add(kind, line, col))
     }

@@ -1,5 +1,6 @@
 //! Types, symbols and the operator typing rules (decisions 5 and 10).
 use crate::ast::{Id, Op};
+use crate::diag::code;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Ty(pub u32);
@@ -232,11 +233,11 @@ impl Types {
     /// `set of base` as declared: an ordinal type within 0..255, else the TP error number.
     pub fn set_of(&mut self, base: Ty) -> Result<Ty, u16> {
         if self.tag(base).is_none() {
-            return Err(29);
+            return Err(code::ORDINAL_TYPE_EXPECTED);
         }
         let (lo, hi, ..) = self.ord(base);
         match lo < 0 || hi > 255 {
-            true => Err(23),
+            true => Err(code::SET_BASE_OUT_OF_RANGE),
             false => Ok(self.set(base)),
         }
     }
@@ -245,8 +246,8 @@ impl Types {
     /// of type `ty`, or the TP error number.
     pub fn element(&self, base: Ty, ty: Ty) -> Result<Ty, u16> {
         match self.tag(ty) {
-            None => Err(39),
-            Some(_) if base != Ty::NONE && !self.compat(base, ty) => Err(26),
+            None => Err(code::ORDINAL_EXPRESSION_EXPECTED),
+            Some(_) if base != Ty::NONE && !self.compat(base, ty) => Err(code::TYPE_MISMATCH),
             Some(_) => Ok(ty),
         }
     }
@@ -453,28 +454,28 @@ impl Types {
     pub fn binary(&self, op: Op, a: Ty, b: Ty) -> Result<Ty, u16> {
         if op == Op::In {
             return match self.set_base(b) {
-                None => Err(41),
+                None => Err(code::OPERAND_TYPES_MISMATCH),
                 Some(base) if self.compat(base, a) => Ok(Ty::BOOLEAN),
-                Some(_) => Err(26),
+                Some(_) => Err(code::TYPE_MISMATCH),
             };
         }
         if self.set_base(a).is_some() || self.set_base(b).is_some() {
             return match (self.compat(a, b), op) {
-                (false, _) => Err(26),
+                (false, _) => Err(code::TYPE_MISMATCH),
                 (_, Op::Add | Op::Sub | Op::Mul) if self.set_base(a) == Some(Ty::NONE) => Ok(b),
                 (_, Op::Add | Op::Sub | Op::Mul) => Ok(a),
                 (_, Op::Eq | Op::Ne | Op::Le | Op::Ge) => Ok(Ty::BOOLEAN),
-                _ => Err(41),
+                _ => Err(code::OPERAND_TYPES_MISMATCH),
             };
         }
         if self.is_agg(a) || self.is_agg(b) {
-            return Err(41);
+            return Err(code::OPERAND_TYPES_MISMATCH);
         }
         if self.is_ptr(a) || self.is_ptr(b) {
             return match (self.compat(a, b), op) {
-                (false, _) => Err(26),
+                (false, _) => Err(code::TYPE_MISMATCH),
                 (_, Op::Eq | Op::Ne) => Ok(Ty::BOOLEAN),
-                _ => Err(41),
+                _ => Err(code::OPERAND_TYPES_MISMATCH),
             };
         }
         let text = |t: Ty| self.is_str(t) || self.tag(t) == Some(Tag::Char);
@@ -482,25 +483,25 @@ impl Types {
         let num = |t: Ty| t == Ty::REAL || self.tag(t) == Some(Tag::Int);
         if self.is_str(a) || self.is_str(b) || op == Op::Add && text(a) && text(b) {
             return match (text(a) && text(b), op) {
-                (false, _) => Err(26),
+                (false, _) => Err(code::TYPE_MISMATCH),
                 (_, Op::Add) => Ok(Ty::STRING),
                 (_, _) if compare => Ok(Ty::BOOLEAN),
-                _ => Err(41),
+                _ => Err(code::OPERAND_TYPES_MISMATCH),
             };
         }
         if a == Ty::REAL || b == Ty::REAL {
             return match op {
-                _ if !num(a) || !num(b) => Err(26),
+                _ if !num(a) || !num(b) => Err(code::TYPE_MISMATCH),
                 Op::Add | Op::Sub | Op::Mul | Op::Slash => Ok(Ty::REAL),
                 _ if compare => Ok(Ty::BOOLEAN),
-                _ => Err(41),
+                _ => Err(code::OPERAND_TYPES_MISMATCH),
             };
         }
         let (Some(ta), Some(_)) = (self.tag(a), self.tag(b)) else {
-            return Err(26);
+            return Err(code::TYPE_MISMATCH);
         };
         if !self.compat(a, b) {
-            return Err(26);
+            return Err(code::TYPE_MISMATCH);
         }
         match (ta, op) {
             (_, _) if compare => Ok(Ty::BOOLEAN),
@@ -508,7 +509,7 @@ impl Types {
             (Tag::Int, Op::Slash) => Ok(Ty::REAL),
             (Tag::Int, _) => Ok(self.common(a, b)),
             (Tag::Bool, Op::And | Op::Or | Op::Xor) => Ok(Ty::BOOLEAN),
-            _ => Err(41),
+            _ => Err(code::OPERAND_TYPES_MISMATCH),
         }
     }
 
@@ -518,7 +519,7 @@ impl Types {
         let real = a == Ty::REAL;
         if matches!(op, Op::Round | Op::Trunc | Op::Sqrt | Op::Int | Op::Frac) {
             return match (real || tag == Some(Tag::Int), op) {
-                (false, _) => Err(79),
+                (false, _) => Err(code::INTEGER_OR_REAL_EXPRESSION_EXPECTED),
                 (_, Op::Round | Op::Trunc) => Ok(Ty::LONGINT),
                 _ => Ok(Ty::REAL),
             };
@@ -535,15 +536,15 @@ impl Types {
             (Some(Tag::Int), Op::Neg | Op::Abs | Op::Sqr) => Ok(Ty::INTEGER),
             (Some(Tag::Bool), Op::Not) => Ok(Ty::BOOLEAN),
             (Some(Tag::Int), Op::Not) => Ok(a),
-            (_, Op::Neg | Op::Not) => Err(41),
-            (_, Op::Abs | Op::Sqr) => Err(79),
+            (_, Op::Neg | Op::Not) => Err(code::OPERAND_TYPES_MISMATCH),
+            (_, Op::Abs | Op::Sqr) => Err(code::INTEGER_OR_REAL_EXPRESSION_EXPECTED),
             (Some(Tag::Int), Op::Odd) => Ok(Ty::BOOLEAN),
             (Some(Tag::Int), Op::Chr) => Ok(Ty::CHAR),
             (Some(Tag::Int), Op::Ord) => Ok(a),
             (Some(_), Op::Ord) => Ok(Ty::INTEGER),
             (Some(_), Op::Succ | Op::Pred) => Ok(a),
-            (None, Op::Succ | Op::Pred | Op::Ord) => Err(39),
-            _ => Err(38),
+            (None, Op::Succ | Op::Pred | Op::Ord) => Err(code::ORDINAL_EXPRESSION_EXPECTED),
+            _ => Err(code::INTEGER_EXPRESSION_EXPECTED),
         }
     }
 
@@ -552,12 +553,12 @@ impl Types {
     pub fn convert(&self, which: i64, target: Ty, value: Ty) -> Result<Ty, u16> {
         match (which, self.tag(target)) {
             (26 | 27, Some(_)) => Ok(Ty::LONGINT),
-            (26 | 27, None) => Err(104),
-            (28, _) if !self.is_str(target) => Err(66),
+            (26 | 27, None) => Err(code::ORDINAL_VARIABLE_EXPECTED),
+            (28, _) if !self.is_str(target) => Err(code::STRING_VARIABLE_EXPECTED),
             (28, _) => self.unary(Op::Abs, value).map(|_| Ty::STRING),
             (_, Some(Tag::Int)) => Ok(Ty::LONGINT),
             _ if target == Ty::REAL => Ok(Ty::REAL),
-            _ => Err(103),
+            _ => Err(code::NUMERIC_VARIABLE_EXPECTED),
         }
     }
 

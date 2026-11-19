@@ -1,6 +1,6 @@
 //! Whole-program checker: declarations, name resolution, typing and constant folding.
 use crate::ast::{Ast, Id, Kind, List, Op, NO_NAME};
-use crate::driver::Diag;
+use crate::diag::{code, Diag};
 use crate::types::{Routine, Sym, SymKind, Symbol, Tag, Ty, Type, Types};
 
 /// System routines bound by handle right after System is loaded (decision 11).
@@ -192,7 +192,7 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
     }
     // Implicit helpers are bound here, before any program declaration can shadow them.
     let in_system = Diag {
-        code: 3,
+        code: code::UNKNOWN_IDENTIFIER,
         line: 0,
         col: 0,
     };
@@ -212,7 +212,7 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
     };
     if cx.routines.iter().any(|r| !r.defined) {
         return Err(Diag {
-            code: 59,
+            code: code::UNDEFINED_FORWARD,
             ..in_system
         });
     }
@@ -225,7 +225,7 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
     }
     cx.resolve_forward(body)?;
     if cx.routines.iter().any(|r| !r.defined) {
-        return Err(cx.err(root, 59));
+        return Err(cx.err(root, code::UNDEFINED_FORWARD));
     }
     cx.stmt(body)?;
     Ok(Info {
@@ -299,7 +299,7 @@ impl Cx<'_> {
 
     fn declare(&mut self, at: Id, name: u32, s: Symbol) -> R<Sym> {
         if self.scope[self.user..].iter().any(|e| e.0 == name) {
-            return Err(self.err(at, 4));
+            return Err(self.err(at, code::DUPLICATE_IDENTIFIER));
         }
         Ok(self.push(name, s))
     }
@@ -309,8 +309,11 @@ impl Cx<'_> {
     fn resolve_forward(&mut self, at: Id) -> R<()> {
         for (ty, name) in std::mem::take(&mut self.forward) {
             let to = self.type_of(at, name).map_err(|d| match d.code {
-                200 => d,
-                _ => Diag { code: 19, ..d },
+                code::NOT_SUPPORTED => d,
+                _ => Diag {
+                    code: code::UNDEFINED_POINTER_TARGET,
+                    ..d
+                },
             })?;
             self.types.v[ty.0 as usize] = Type::Ptr(to);
         }
@@ -332,7 +335,7 @@ impl Cx<'_> {
                     Kind::SetLit(l) if self.ast.items(l).iter().all(|&i| self.fixed(i)) => {
                         (e as i64, n.ty)
                     }
-                    _ => return Err(self.err(e, 133)),
+                    _ => return Err(self.err(e, code::CANNOT_EVALUATE)),
                 };
                 self.declare(d, name, Symbol::new(SymKind::Const, ty, val))?;
             }
@@ -343,7 +346,7 @@ impl Cx<'_> {
                     self.locals += 1;
                     self.local_bytes += size;
                     if self.local_bytes > MAX_DATA {
-                        return Err(self.err(d, 96));
+                        return Err(self.err(d, code::TOO_MANY_VARIABLES));
                     }
                     // Aggregates always live in the frame.
                     let taken = self.types.in_memory(ty);
@@ -353,7 +356,7 @@ impl Cx<'_> {
                     let val = self.end as i64;
                     self.end += size;
                     if self.end - GLOBALS > MAX_DATA {
-                        return Err(self.err(d, 96));
+                        return Err(self.err(d, code::TOO_MANY_VARIABLES));
                     }
                     Symbol::new(SymKind::Var, ty, val)
                 };
@@ -372,7 +375,7 @@ impl Cx<'_> {
     /// The type a declaration `name = spec` defines; `type T = T` is error 21.
     fn spec(&mut self, spec: Id, name: u32) -> R<Ty> {
         match self.ast.nodes[spec as usize].kind {
-            Kind::Name(n) if n == name => Err(self.err(spec, 21)),
+            Kind::Name(n) if n == name => Err(self.err(spec, code::ERROR_IN_TYPE)),
             Kind::Name(n) => self.type_of(spec, n),
             Kind::Enum(names) => {
                 let ty = self.types.enumeration(self.ast.items(names).len() as i64);
@@ -395,10 +398,10 @@ impl Cx<'_> {
             Kind::StrType(size) => {
                 self.expr(size)?;
                 let Kind::IntLit(n) = self.ast.nodes[size as usize].kind else {
-                    return Err(self.err(spec, 133));
+                    return Err(self.err(spec, code::CANNOT_EVALUATE));
                 };
                 if !(1..=255).contains(&n) {
-                    return Err(self.err(spec, 25));
+                    return Err(self.err(spec, code::INVALID_STRING_LENGTH));
                 }
                 Ok(self.types.string(n as u8))
             }
@@ -407,7 +410,7 @@ impl Cx<'_> {
                 for ix in self.ast.items(indexes).to_vec() {
                     let ty = self.spec(ix, NO_NAME)?;
                     if self.types.tag(ty).is_none() {
-                        return Err(self.err(ix, 29));
+                        return Err(self.err(ix, code::ORDINAL_TYPE_EXPECTED));
                     }
                     index.push(ty);
                 }
@@ -415,7 +418,7 @@ impl Cx<'_> {
                 for &ix in index.iter().rev() {
                     ty = self.types.array(ix, ty);
                     if self.types.size(ty) > MAX_DATA {
-                        return Err(self.err(spec, 22));
+                        return Err(self.err(spec, code::STRUCTURE_TOO_LARGE));
                     }
                 }
                 Ok(ty)
@@ -424,7 +427,7 @@ impl Cx<'_> {
                 let mut fields = Vec::new();
                 let size = self.fields(items, 0, &mut fields)?;
                 if size > MAX_DATA {
-                    return Err(self.err(spec, 22));
+                    return Err(self.err(spec, code::STRUCTURE_TOO_LARGE));
                 }
                 Ok(self.types.record(fields, size))
             }
@@ -438,16 +441,16 @@ impl Cx<'_> {
                     self.expr(id)?;
                     let n = self.ast.nodes[id as usize];
                     let Kind::IntLit(v) = n.kind else {
-                        return Err(self.err(spec, 133));
+                        return Err(self.err(spec, code::CANNOT_EVALUATE));
                     };
                     *end = (v, n.ty);
                 }
                 let [(a, ta), (b, tb)] = ends;
                 if !self.types.compat(ta, tb) {
-                    return Err(self.err(spec, 26));
+                    return Err(self.err(spec, code::TYPE_MISMATCH));
                 }
                 if a > b {
-                    return Err(self.err(spec, 28));
+                    return Err(self.err(spec, code::LOWER_BOUND_GREATER));
                 }
                 Ok(self.types.subrange(a, b, ta))
             }
@@ -465,7 +468,7 @@ impl Cx<'_> {
                     self.type_of(spec, result)?
                 };
                 if self.types.is_str(result) || result == Ty::REAL {
-                    return Err(self.err(spec, 200));
+                    return Err(self.err(spec, code::NOT_SUPPORTED));
                 }
                 Ok(self.types.proc(sig, result))
             }
@@ -483,7 +486,7 @@ impl Cx<'_> {
                     let ty = self.spec(spec, NO_NAME)?;
                     if name != NO_NAME {
                         if out.iter().any(|f| f.0 == name) {
-                            return Err(self.err(item, 4));
+                            return Err(self.err(item, code::DUPLICATE_IDENTIFIER));
                         }
                         out.push((name, ty, end));
                         end += self.types.size(ty);
@@ -506,10 +509,10 @@ impl Cx<'_> {
 
     fn type_of(&self, at: Id, name: u32) -> R<Ty> {
         match self.lookup(name).map(|s| self.syms[s.0 as usize]) {
-            None => Err(self.err(at, 3)),
+            None => Err(self.err(at, code::UNKNOWN_IDENTIFIER)),
             Some(s) if s.kind == SymKind::Type => Ok(s.ty),
-            Some(s) if s.kind == SymKind::Omitted => Err(self.err(at, 200)),
-            Some(_) => Err(self.err(at, 12)),
+            Some(s) if s.kind == SymKind::Omitted => Err(self.err(at, code::NOT_SUPPORTED)),
+            Some(_) => Err(self.err(at, code::TYPE_IDENTIFIER_EXPECTED)),
         }
     }
 
@@ -533,7 +536,7 @@ impl Cx<'_> {
         } else {
             let ty = self.type_of(d, result)?;
             if self.types.is_agg(ty) {
-                return Err(self.err(d, 34));
+                return Err(self.err(d, code::INVALID_RESULT_TYPE));
             }
             Some(ty)
         };
@@ -544,7 +547,7 @@ impl Cx<'_> {
         let r = match known.map(|s| self.syms[s.0 as usize]) {
             None => {
                 if func && rty.is_none() {
-                    return Err(self.err(d, 86));
+                    return Err(self.err(d, code::COLON_EXPECTED));
                 }
                 let (result, defined) = (rty.unwrap_or(Ty::NONE), false);
                 let (params, body, nlocals) = (tys.clone(), 0, 0);
@@ -577,22 +580,22 @@ impl Cx<'_> {
             Some(s) if s.kind == SymKind::Routine => {
                 let r = &self.routines[s.val as usize];
                 if r.defined || r.func != func {
-                    return Err(self.err(d, 4));
+                    return Err(self.err(d, code::DUPLICATE_IDENTIFIER));
                 }
                 if block.is_none() {
-                    return Err(self.err(d, 36));
+                    return Err(self.err(d, code::BEGIN_EXPECTED));
                 }
                 if params.is_some() && (tys != r.params || refs != r.byref)
                     || rty.is_some_and(|t| t != r.result)
                 {
-                    return Err(self.err(d, 131));
+                    return Err(self.err(d, code::HEADER_MISMATCH));
                 }
                 if params.is_some() {
                     self.routines[s.val as usize].names = names;
                 }
                 s.val as usize
             }
-            Some(_) => return Err(self.err(d, 4)),
+            Some(_) => return Err(self.err(d, code::DUPLICATE_IDENTIFIER)),
         };
         let Some(block) = block else {
             return Ok(());
@@ -648,7 +651,7 @@ impl Cx<'_> {
             let s = self.syms[e.1 .0 as usize];
             s.kind == SymKind::Routine && !self.routines[s.val as usize].defined
         }) {
-            return Err(self.err(body, 59));
+            return Err(self.err(body, code::UNDEFINED_FORWARD));
         }
         self.stmt(body)?;
         self.routines[r].body = body;
@@ -713,38 +716,40 @@ impl Cx<'_> {
             |name: u32, call: bool| match self.lookup(name).map(|s| self.syms[s.0 as usize]) {
                 Some(s) if s.kind == SymKind::Routine && self.routines[s.val as usize].func => {
                     if call || self.routines[s.val as usize].params.is_empty() {
-                        122
+                        code::INVALID_VARIABLE_REFERENCE
                     } else {
-                        88
+                        code::LEFT_PAREN_EXPECTED
                     }
                 }
-                Some(s) if s.kind == SymKind::Intrinsic && intrinsic_op(s.val).is_some() => 122,
-                _ => 20,
+                Some(s) if s.kind == SymKind::Intrinsic && intrinsic_op(s.val).is_some() => {
+                    code::INVALID_VARIABLE_REFERENCE
+                }
+                _ => code::VARIABLE_EXPECTED,
             };
         match self.ast.nodes[e as usize].kind {
             Kind::Binary(_, a, _) => match self.bad_var_arg(a) {
-                0 => 89,
+                0 => code::RIGHT_PAREN_EXPECTED,
                 c => c,
             },
             Kind::Call(callee, args) => match self.ast.nodes[callee as usize].kind {
                 // A type cast of a variable is a variable.
                 Kind::Name(n) if self.type_of(callee, n).is_ok() => {
                     let first = self.ast.items(args).first();
-                    first.map_or(20, |&a| self.bad_var_arg(a))
+                    first.map_or(code::VARIABLE_EXPECTED, |&a| self.bad_var_arg(a))
                 }
                 Kind::Name(name) => function(name, true),
-                _ => 20,
+                _ => code::VARIABLE_EXPECTED,
             },
             Kind::Deref(_) => 0,
             Kind::Index(base, ..) | Kind::Field(base, _) => self.bad_var_arg(base),
             Kind::Name(name) if self.with_field(name).is_some() => 0,
             Kind::Name(name) => match self.lookup(name).map(|s| self.syms[s.0 as usize]) {
-                None => 3,
-                Some(s) if s.kind == SymKind::Omitted => 200,
+                None => code::UNKNOWN_IDENTIFIER,
+                Some(s) if s.kind == SymKind::Omitted => code::NOT_SUPPORTED,
                 Some(s) if matches!(s.kind, SymKind::Var | SymKind::Local | SymKind::Ref) => 0,
                 Some(_) => function(name, false),
             },
-            _ => 20,
+            _ => code::VARIABLE_EXPECTED,
         }
     }
 
@@ -763,12 +768,12 @@ impl Cx<'_> {
             self.expr(arg)?;
             return match self.ast.nodes[arg as usize].ty == ty {
                 true => Ok(()),
-                false => Err(self.err(at, 26)),
+                false => Err(self.err(at, code::TYPE_MISMATCH)),
             };
         };
         let (sym, s) = self.resolve(arg, name)?;
         if s.ty != ty {
-            return Err(self.err(at, 26));
+            return Err(self.err(at, code::TYPE_MISMATCH));
         }
         self.capture(sym, true);
         self.ast.nodes[arg as usize].kind = Kind::Var(sym);
@@ -789,29 +794,29 @@ impl Cx<'_> {
     /// statement or call.
     fn proc_value(&mut self, at: Id, want: Ty, e: Id) -> R<()> {
         let Kind::Name(name) = self.ast.nodes[e as usize].kind else {
-            return Err(self.err(e, 20));
+            return Err(self.err(e, code::VARIABLE_EXPECTED));
         };
         let (sym, s) = self.resolve(e, name)?;
         let kind = match s.kind {
             SymKind::Routine => {
                 let r = s.val as usize;
                 if self.routines[r].depth > 1 {
-                    return Err(self.err(at, 143));
+                    return Err(self.err(at, code::INVALID_PROCEDURE_REFERENCE));
                 }
                 if self.signature(r) != want {
-                    return Err(self.err(at, 26));
+                    return Err(self.err(at, code::TYPE_MISMATCH));
                 }
                 self.routines[r].addressed = true;
                 Kind::ProcRef(r as u32)
             }
             SymKind::Var | SymKind::Local | SymKind::Ref => {
                 if s.ty != want {
-                    return Err(self.err(at, 26));
+                    return Err(self.err(at, code::TYPE_MISMATCH));
                 }
                 self.capture(sym, false);
                 Kind::Var(sym)
             }
-            _ => return Err(self.err(e, 20)),
+            _ => return Err(self.err(e, code::VARIABLE_EXPECTED)),
         };
         self.ast.nodes[e as usize].kind = kind;
         self.ast.nodes[e as usize].ty = want;
@@ -825,10 +830,12 @@ impl Cx<'_> {
     }
 
     fn resolve(&self, id: Id, name: u32) -> R<(Sym, Symbol)> {
-        let s = self.lookup(name).ok_or(self.err(id, 3))?;
+        let s = self
+            .lookup(name)
+            .ok_or(self.err(id, code::UNKNOWN_IDENTIFIER))?;
         let sym = self.syms[s.0 as usize];
         match sym.kind {
-            SymKind::Omitted => Err(self.err(id, 200)),
+            SymKind::Omitted => Err(self.err(id, code::NOT_SUPPORTED)),
             _ => Ok((s, sym)),
         }
     }
@@ -861,7 +868,7 @@ impl Cx<'_> {
                 self.expr(selector)?;
                 let sel = self.ast.nodes[selector as usize].ty;
                 if self.types.tag(sel).is_none() {
-                    return Err(self.err(id, 39));
+                    return Err(self.err(id, code::ORDINAL_EXPRESSION_EXPECTED));
                 }
                 for arm in self.ast.items(arms).to_vec() {
                     let Kind::Arm(labels, body) = self.ast.nodes[arm as usize].kind else {
@@ -887,10 +894,10 @@ impl Cx<'_> {
                     || self.types.sig(s.ty).is_some()
                     || self.types.tag(s.ty).is_none()
                 {
-                    return Err(self.err(var, 97));
+                    return Err(self.err(var, code::INVALID_FOR_VARIABLE));
                 }
                 if !matches!(s.kind, SymKind::Var | SymKind::Local) {
-                    return Err(self.err(var, 20));
+                    return Err(self.err(var, code::VARIABLE_EXPECTED));
                 }
                 self.ast.nodes[var as usize].kind = Kind::Var(sym);
                 self.ast.nodes[var as usize].ty = s.ty;
@@ -924,10 +931,10 @@ impl Cx<'_> {
                         (Kind::Var(ret), self.routines[s.val as usize].result)
                     }
                     SymKind::Routine if self.routines[s.val as usize].func => {
-                        return Err(self.err(target, 122));
+                        return Err(self.err(target, code::INVALID_VARIABLE_REFERENCE));
                     }
-                    SymKind::Routine => return Err(self.err(target, 85)),
-                    _ => return Err(self.err(target, 113)),
+                    SymKind::Routine => return Err(self.err(target, code::SEMICOLON_EXPECTED)),
+                    _ => return Err(self.err(target, code::ERROR_IN_STATEMENT)),
                 };
                 self.ast.nodes[target as usize].kind = kind;
                 self.ast.nodes[target as usize].ty = ty;
@@ -939,7 +946,7 @@ impl Cx<'_> {
                     self.expr(d)?;
                     let ty = self.ast.nodes[d as usize].ty;
                     if !self.types.is_record(ty) {
-                        return Err(self.err(d, 75));
+                        return Err(self.err(d, code::RECORD_VARIABLE_EXPECTED));
                     }
                     self.withs.push((d, ty));
                 }
@@ -967,7 +974,7 @@ impl Cx<'_> {
                     SymKind::Intrinsic if s.val >= 26 => self.convert(id, s.val, args)?,
                     SymKind::Intrinsic if s.val == 9 => {
                         if !self.ast.items(args).is_empty() {
-                            return Err(self.err(id, 85));
+                            return Err(self.err(id, code::SEMICOLON_EXPECTED));
                         }
                         Kind::Exit
                     }
@@ -977,14 +984,14 @@ impl Cx<'_> {
                         self.arguments(id, params, refs, args, false, builtin)?;
                         Kind::Invoke(s.val as u32, args)
                     }
-                    SymKind::Routine => return Err(self.err(id, 122)),
+                    SymKind::Routine => return Err(self.err(id, code::INVALID_VARIABLE_REFERENCE)),
                     SymKind::Var | SymKind::Local | SymKind::Ref => match self.types.sig(s.ty) {
                         Some((params, refs, Ty::NONE)) => {
                             self.indirect(id, callee, params, refs, args, false)?
                         }
-                        _ => return Err(self.err(id, 91)),
+                        _ => return Err(self.err(id, code::ASSIGN_EXPECTED)),
                     },
-                    _ => return Err(self.err(callee, 113)),
+                    _ => return Err(self.err(callee, code::ERROR_IN_STATEMENT)),
                 };
                 self.ast.nodes[id as usize].kind = kind;
             }
@@ -1016,18 +1023,24 @@ impl Cx<'_> {
         let items = self.ast.items(args).to_vec();
         let code = match (params.len(), items.len()) {
             (0, 0) => 0,
-            (0, _) => 85 + 4 * (in_expr && !builtin) as u16,
-            (_, 0) => 88,
-            (p, a) if a < p => 87,
-            (p, a) if a > p => 89,
+            (0, _) => {
+                if in_expr && !builtin {
+                    code::RIGHT_PAREN_EXPECTED
+                } else {
+                    code::SEMICOLON_EXPECTED
+                }
+            }
+            (_, 0) => code::LEFT_PAREN_EXPECTED,
+            (p, a) if a < p => code::COMMA_EXPECTED,
+            (p, a) if a > p => code::RIGHT_PAREN_EXPECTED,
             _ => 0,
         };
-        if code == 88 {
+        if code == code::LEFT_PAREN_EXPECTED {
             let follow = self.ast.follow.iter().find(|f| f.0 == at);
             let line = follow.map_or(self.ast.nodes[at as usize].line, |f| f.1);
             return Err(Diag {
                 line,
-                ..self.err(at, 88)
+                ..self.err(at, code::LEFT_PAREN_EXPECTED)
             });
         }
         if code != 0 {
@@ -1035,7 +1048,7 @@ impl Cx<'_> {
         }
         for ((&arg, &ty), &byref) in items.iter().zip(&params).zip(&refs) {
             if matches!(self.ast.nodes[arg as usize].kind, Kind::Fmt(..)) {
-                return Err(self.err(at, 89));
+                return Err(self.err(at, code::RIGHT_PAREN_EXPECTED));
             }
             if byref {
                 self.var_arg(at, arg, ty)?;
@@ -1055,11 +1068,11 @@ impl Cx<'_> {
     fn argument_assignable(&mut self, at: Id, ty: Ty, arg: Id, builtin: bool) -> R<()> {
         self.assignable(at, ty, arg).map_err(|d| {
             let code = match () {
-                _ if d.code != 26 || !builtin => d.code,
-                _ if self.types.is_str(ty) => 67,
-                _ if self.types.tag(ty) == Some(Tag::Char) => 106,
-                _ if self.types.tag(ty) == Some(Tag::Int) => 38,
-                _ => 26,
+                _ if d.code != code::TYPE_MISMATCH || !builtin => d.code,
+                _ if self.types.is_str(ty) => code::STRING_EXPRESSION_EXPECTED,
+                _ if self.types.tag(ty) == Some(Tag::Char) => code::CHAR_EXPRESSION_EXPECTED,
+                _ if self.types.tag(ty) == Some(Tag::Int) => code::INTEGER_EXPRESSION_EXPECTED,
+                _ => code::TYPE_MISMATCH,
             };
             Diag { code, ..d }
         })
@@ -1103,13 +1116,13 @@ impl Cx<'_> {
             self.expr(end)?;
             let n = self.ast.nodes[end as usize];
             let Kind::IntLit(v) = n.kind else {
-                return Err(self.err(label, 133));
+                return Err(self.err(label, code::CANNOT_EVALUATE));
             };
             if !self.types.compat(sel, n.ty) {
-                return Err(self.err(label, 74));
+                return Err(self.err(label, code::CASE_TYPES_MISMATCH));
             }
             if self.types.tag(sel) == Some(Tag::Int) && !(-32768..=32767).contains(&v) {
-                return Err(self.err(label, 112));
+                return Err(self.err(label, code::CASE_CONSTANT_OUT_OF_RANGE));
             }
         }
         Ok(())
@@ -1152,7 +1165,7 @@ impl Cx<'_> {
         self.expr(cond)?;
         match self.ast.nodes[cond as usize].ty {
             Ty::BOOLEAN => Ok(()),
-            _ => Err(self.err(at, 40)),
+            _ => Err(self.err(at, code::BOOLEAN_EXPRESSION_EXPECTED)),
         }
     }
 
@@ -1161,7 +1174,7 @@ impl Cx<'_> {
         let v = self.ast.nodes[value as usize];
         if self.types.is_str(dest) {
             if !self.types.is_str(v.ty) && self.types.tag(v.ty) != Some(Tag::Char) {
-                return Err(self.err(at, 26));
+                return Err(self.err(at, code::TYPE_MISMATCH));
             }
             self.coerce_str(value);
             return Ok(());
@@ -1169,7 +1182,11 @@ impl Cx<'_> {
         if dest == Ty::REAL {
             self.coerce_real(value);
             let real = self.ast.nodes[value as usize].ty == Ty::REAL;
-            return if real { Ok(()) } else { Err(self.err(at, 26)) };
+            return if real {
+                Ok(())
+            } else {
+                Err(self.err(at, code::TYPE_MISMATCH))
+            };
         }
         if self.types.is_agg(dest) {
             // Name equivalence: only the very same type; sets need compatible bases.
@@ -1177,17 +1194,17 @@ impl Cx<'_> {
             return if v.ty == dest || set {
                 Ok(())
             } else {
-                Err(self.err(at, 26))
+                Err(self.err(at, code::TYPE_MISMATCH))
             };
         }
         if !self.types.compat(dest, v.ty) {
-            return Err(self.err(at, 26));
+            return Err(self.err(at, code::TYPE_MISMATCH));
         }
         match v.kind {
             Kind::IntLit(c) => {
                 let (lo, hi, ..) = self.types.ord(dest);
                 if c < lo || c > hi {
-                    return Err(self.err(at, 76));
+                    return Err(self.err(at, code::CONSTANT_OUT_OF_RANGE));
                 }
                 Ok(())
             }
@@ -1204,7 +1221,7 @@ impl Cx<'_> {
             for f in [Some(w), d].into_iter().flatten() {
                 self.expr(f)?;
                 if self.types.tag(self.ast.nodes[f as usize].ty) != Some(Tag::Int) {
-                    return Err(self.err(a, 38));
+                    return Err(self.err(a, code::INTEGER_EXPRESSION_EXPECTED));
                 }
             }
         }
@@ -1212,10 +1229,10 @@ impl Cx<'_> {
         let n = self.ast.nodes[value as usize];
         let plain = self.types.is_str(n.ty) || n.ty == Ty::REAL;
         if self.types.tag(n.ty) == Some(Tag::Enum) || !plain && self.types.tag(n.ty).is_none() {
-            return Err(self.err(value, 64));
+            return Err(self.err(value, code::CANNOT_READ_OR_WRITE));
         }
         if decimals.is_some() && n.ty != Ty::REAL {
-            return Err(self.err(a, 89));
+            return Err(self.err(a, code::RIGHT_PAREN_EXPECTED));
         }
         Ok(())
     }
@@ -1238,15 +1255,22 @@ impl Cx<'_> {
                 let Some((ix, lo, hi, elem)) =
                     self.types.array_of(self.ast.nodes[base as usize].ty)
                 else {
-                    return Err(self.err(e, if more { 93 } else { 121 }));
+                    return Err(self.err(
+                        e,
+                        if more {
+                            code::RIGHT_BRACKET_EXPECTED
+                        } else {
+                            code::INVALID_QUALIFIER
+                        },
+                    ));
                 };
                 self.expr(index)?;
                 let i = self.ast.nodes[index as usize];
                 if !self.types.compat(ix, i.ty) {
-                    return Err(self.err(e, 26));
+                    return Err(self.err(e, code::TYPE_MISMATCH));
                 }
                 if matches!(i.kind, Kind::IntLit(c) if c < lo || c > hi) {
-                    return Err(self.err(e, 76));
+                    return Err(self.err(e, code::CONSTANT_OUT_OF_RANGE));
                 }
                 (n.kind, elem)
             }
@@ -1254,10 +1278,10 @@ impl Cx<'_> {
                 self.expr(base)?;
                 let bt = self.ast.nodes[base as usize].ty;
                 if !self.types.is_record(bt) {
-                    return Err(self.err(e, 121));
+                    return Err(self.err(e, code::INVALID_QUALIFIER));
                 }
                 let Some((ty, offset)) = self.types.field(bt, name) else {
-                    return Err(self.err(e, 44));
+                    return Err(self.err(e, code::FIELD_IDENTIFIER_EXPECTED));
                 };
                 (Kind::Field(base, offset), ty)
             }
@@ -1274,7 +1298,9 @@ impl Cx<'_> {
                     SymKind::Const => (Kind::IntLit(s.val), s.ty),
                     SymKind::Var | SymKind::Local | SymKind::Ref => match self.types.sig(s.ty) {
                         // A procedural variable in an expression is called.
-                        Some((_, _, Ty::NONE)) => return Err(self.err(e, 143)),
+                        Some((_, _, Ty::NONE)) => {
+                            return Err(self.err(e, code::INVALID_PROCEDURE_REFERENCE))
+                        }
                         Some((params, refs, result)) => {
                             let callee = self.ast.add(Kind::Name(name), n.line, n.col);
                             let none = self.ast.list(&[]);
@@ -1289,7 +1315,7 @@ impl Cx<'_> {
                         let r = &self.routines[s.val as usize];
                         let (func, result) = (r.func, r.result);
                         if !func {
-                            return Err(self.err(e, 143));
+                            return Err(self.err(e, code::INVALID_PROCEDURE_REFERENCE));
                         }
                         let none = self.ast.list(&[]);
                         let (params, refs) = self.routine_params(s.val as usize);
@@ -1304,9 +1330,9 @@ impl Cx<'_> {
                         (Kind::Invoke(s.val as u32, none), result)
                     }
                     SymKind::Intrinsic if intrinsic_op(s.val).is_some() => {
-                        return Err(self.err(e, 88));
+                        return Err(self.err(e, code::LEFT_PAREN_EXPECTED));
                     }
-                    _ => return Err(self.err(e, 42)),
+                    _ => return Err(self.err(e, code::ERROR_IN_EXPRESSION)),
                 }
             }
             Kind::Call(callee, args) => {
@@ -1319,7 +1345,7 @@ impl Cx<'_> {
                         let r = &self.routines[s.val as usize];
                         let (func, result) = (r.func, r.result);
                         if !func {
-                            return Err(self.err(callee, 143));
+                            return Err(self.err(callee, code::INVALID_PROCEDURE_REFERENCE));
                         }
                         let (params, refs) = self.routine_params(s.val as usize);
                         self.arguments(
@@ -1333,24 +1359,26 @@ impl Cx<'_> {
                         (Kind::Invoke(s.val as u32, args), result)
                     }
                     SymKind::Var | SymKind::Local | SymKind::Ref => match self.types.sig(s.ty) {
-                        Some((_, _, Ty::NONE)) => return Err(self.err(callee, 143)),
+                        Some((_, _, Ty::NONE)) => {
+                            return Err(self.err(callee, code::INVALID_PROCEDURE_REFERENCE))
+                        }
                         Some((params, refs, result)) => {
                             (self.indirect(e, callee, params, refs, args, true)?, result)
                         }
-                        None => return Err(self.err(e, 89)),
+                        None => return Err(self.err(e, code::RIGHT_PAREN_EXPECTED)),
                     },
                     SymKind::Intrinsic if intrinsic_op(s.val).is_some() => {
                         let items = self.ast.items(args).to_vec();
                         if items.len() > 1 {
-                            return Err(self.err(e, 89));
+                            return Err(self.err(e, code::RIGHT_PAREN_EXPECTED));
                         }
                         self.unary(e, intrinsic_op(s.val).unwrap_or(Op::Ord), items[0])?
                     }
                     SymKind::Intrinsic if s.val == 10 => self.size_of(e, args)?,
                     SymKind::Intrinsic if s.val == 11 => self.concat(e, args)?,
                     SymKind::Type => self.cast(e, s.ty, args)?,
-                    SymKind::Intrinsic => return Err(self.err(callee, 42)),
-                    _ => return Err(self.err(e, 89)),
+                    SymKind::Intrinsic => return Err(self.err(callee, code::ERROR_IN_EXPRESSION)),
+                    _ => return Err(self.err(e, code::RIGHT_PAREN_EXPECTED)),
                 }
             }
             Kind::AddrOf(a) => {
@@ -1358,7 +1386,7 @@ impl Cx<'_> {
                 match self.ast.nodes[a as usize].kind {
                     Kind::Var(sym) => self.capture(sym, true),
                     Kind::Index(..) | Kind::Field(..) | Kind::Deref(_) => {}
-                    _ => return Err(self.err(e, 20)),
+                    _ => return Err(self.err(e, code::VARIABLE_EXPECTED)),
                 }
                 (n.kind, Ty::POINTER)
             }
@@ -1366,7 +1394,7 @@ impl Cx<'_> {
                 self.expr(p)?;
                 match self.types.target(self.ast.nodes[p as usize].ty) {
                     Some(to) => (n.kind, to),
-                    None => return Err(self.err(e, 121)),
+                    None => return Err(self.err(e, code::INVALID_QUALIFIER)),
                 }
             }
             Kind::Paren(a) => {
@@ -1393,7 +1421,7 @@ impl Cx<'_> {
                     self.ast.nodes[hi as usize].ty,
                 );
                 if !self.types.compat(a, b) {
-                    return Err(self.err(hi, 26));
+                    return Err(self.err(hi, code::TYPE_MISMATCH));
                 }
                 (n.kind, a)
             }
@@ -1418,7 +1446,7 @@ impl Cx<'_> {
                     self.ast.nodes[b as usize].kind,
                 ) {
                     (Kind::IntLit(_), Kind::IntLit(0)) if matches!(op, Op::Div | Op::Mod) => {
-                        return Err(self.err(e, 62));
+                        return Err(self.err(e, code::DIVISION_BY_ZERO));
                     }
                     (Kind::RealLit(x), Kind::RealLit(y))
                         if ty == Ty::REAL && (op != Op::Slash || y != 0.0) =>
@@ -1463,13 +1491,13 @@ impl Cx<'_> {
     /// `T(x)`: the ordinal value of `x` as type `ty`.
     fn cast(&mut self, at: Id, ty: Ty, args: List) -> R<(Kind, Ty)> {
         let [arg] = self.ast.items(args)[..] else {
-            return Err(self.err(at, 89));
+            return Err(self.err(at, code::RIGHT_PAREN_EXPECTED));
         };
         self.expr(arg)?;
         let a = self.ast.nodes[arg as usize];
         let scalar = |t: Ty| self.types.tag(t).is_some() || self.types.is_ptr(t);
         if !scalar(ty) || !scalar(a.ty) {
-            return Err(self.err(at, 200));
+            return Err(self.err(at, code::NOT_SUPPORTED));
         }
         Ok(match a.kind {
             Kind::IntLit(v) => self.constant(v, ty),
@@ -1482,12 +1510,19 @@ impl Cx<'_> {
     fn edit_string(&mut self, at: Id, insert: bool, args: List) -> R<Kind> {
         let items = self.ast.items(args).to_vec();
         if items.len() != 3 {
-            return Err(self.err(at, if items.len() < 3 { 87 } else { 89 }));
+            return Err(self.err(
+                at,
+                if items.len() < 3 {
+                    code::COMMA_EXPECTED
+                } else {
+                    code::RIGHT_PAREN_EXPECTED
+                },
+            ));
         }
         let target = items[insert as usize];
         let ty = self.variable(target)?;
         if !self.types.is_str(ty) {
-            return Err(self.err(target, 66));
+            return Err(self.err(target, code::STRING_VARIABLE_EXPECTED));
         }
         let rest = if insert {
             [items[0], items[2]]
@@ -1528,7 +1563,14 @@ impl Cx<'_> {
         let items = self.ast.items(args).to_vec();
         let (n, t) = [(1, 0), (1, 0), (2, 1), (3, 1)][which as usize - 26];
         if items.len() < n || items.len() > n + (which < 28) as usize {
-            return Err(self.err(at, if items.len() < n { 87 } else { 89 }));
+            return Err(self.err(
+                at,
+                if items.len() < n {
+                    code::COMMA_EXPECTED
+                } else {
+                    code::RIGHT_PAREN_EXPECTED
+                },
+            ));
         }
         let target = items[t];
         let ty = self.variable(target)?;
@@ -1575,7 +1617,11 @@ impl Cx<'_> {
                 self.expr(items[0])?;
                 self.argument_assignable(at, Ty::STRING, items[0], true)?;
                 let code = |d: Diag| Diag {
-                    code: if d.code == 26 { 98 } else { d.code },
+                    code: if d.code == code::TYPE_MISMATCH {
+                        code::INTEGER_VARIABLE_EXPECTED
+                    } else {
+                        d.code
+                    },
                     ..d
                 };
                 self.var_arg(at, items[2], Ty::INTEGER).map_err(code)?;
@@ -1598,7 +1644,14 @@ impl Cx<'_> {
         let items = self.ast.items(args).to_vec();
         let want = [1, 1, 2, 2, 1, 1, 1][which as usize - 14];
         if items.len() != want {
-            return Err(self.err(at, if items.len() < want { 87 } else { 89 }));
+            return Err(self.err(
+                at,
+                if items.len() < want {
+                    code::COMMA_EXPECTED
+                } else {
+                    code::RIGHT_PAREN_EXPECTED
+                },
+            ));
         }
         let p = items[0];
         if which == 20 {
@@ -1608,7 +1661,7 @@ impl Cx<'_> {
         }
         let ty = self.variable(p)?;
         let to = self.types.target(ty);
-        let to = to.ok_or(self.err(p, 65))?;
+        let to = to.ok_or(self.err(p, code::POINTER_VARIABLE_EXPECTED))?;
         let pos = self.ast.nodes[at as usize];
         let size = items.get(1).copied().unwrap_or_else(|| {
             let k = self
@@ -1640,7 +1693,7 @@ impl Cx<'_> {
     fn concat(&mut self, at: Id, args: List) -> R<(Kind, Ty)> {
         let items = self.ast.items(args).to_vec();
         if items.is_empty() {
-            return Err(self.err(at, 42));
+            return Err(self.err(at, code::ERROR_IN_EXPRESSION));
         }
         let (line, col) = (
             self.ast.nodes[at as usize].line,
@@ -1651,7 +1704,7 @@ impl Cx<'_> {
             self.expr(x)?;
             let ty = self.ast.nodes[x as usize].ty;
             if !self.types.is_str(ty) && self.types.tag(ty) != Some(Tag::Char) {
-                return Err(self.err(at, 67));
+                return Err(self.err(at, code::STRING_EXPRESSION_EXPECTED));
             }
             self.coerce_str(x);
             if i > 0 {
@@ -1666,13 +1719,13 @@ impl Cx<'_> {
     /// `SizeOf(type name or variable)`, a constant.
     fn size_of(&mut self, at: Id, args: List) -> R<(Kind, Ty)> {
         let [arg] = self.ast.items(args)[..] else {
-            return Err(self.err(at, 89));
+            return Err(self.err(at, code::RIGHT_PAREN_EXPECTED));
         };
         let ty = match self.ast.nodes[arg as usize].kind {
             Kind::Name(name) if self.with_field(name).is_none() => {
                 let (_, s) = self.resolve(arg, name)?;
                 if s.kind == SymKind::Const || s.kind == SymKind::Routine {
-                    return Err(self.err(arg, 20));
+                    return Err(self.err(arg, code::VARIABLE_EXPECTED));
                 }
                 s.ty
             }
