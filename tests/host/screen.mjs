@@ -208,18 +208,24 @@ test("sleep advances the clock that time reads, and does not wait", () => {
   assert.equal(h.imports.time(2), 50);
 });
 
-test("print is a teletype: cursor, CR LF BS BEL, wrap and scroll", () => {
+test("print is a teletype: cursor, CR LF BS BEL, LF to column 1, wrap and scroll", () => {
   const screen = new Screen();
   const text = (s) => Uint8Array.from(s, (c) => c.charCodeAt(0));
   screen.print(text("ab\r\ncd\x07\x08X\n"));
   assert.deepEqual(rows(screen).slice(0, 3), ["ab", "cX", ""]);
-  assert.ok(dump(screen.cells, 0).includes("cursor 3 3\n"));
+  assert.ok(dump(screen.cells, 0).includes("cursor 1 3\n"));
   screen.print(text("\r" + "y".repeat(80)));
   assert.equal(rows(screen)[2], "y".repeat(80));
   assert.ok(dump(screen.cells, 0).includes("cursor 1 4\n"));
   screen.print(text("\n".repeat(30) + "end"));
   assert.equal(rows(screen)[24], "end");
   assert.equal(rows(screen)[0], "");
+});
+
+test("a lone LF on the teletype starts the next row in column 1", () => {
+  const screen = new Screen();
+  screen.print(Uint8Array.from("ab\ncd", (c) => c.charCodeAt(0)));
+  assert.deepEqual(rows(screen).slice(0, 2), ["ab", "cd"]);
 });
 
 test("a Screen can be built over a shared array and writes into it", () => {

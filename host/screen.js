@@ -85,12 +85,13 @@ export class Screen {
 
   // Console output of a program without Crt: a teletype. Characters go to the cursor cell
   // (keeping its attribute) and the cursor wraps at column 80; the screen scrolls up after
-  // the last row. CR, LF and BS move the cursor; BEL is ignored.
+  // the last row. CR, LF and BS move the cursor; BEL is ignored. LF is a new line (column 1 of
+  // the next row) because WriteLn without Crt ends with LF only, as the Node runner prints it.
   print(bytes) {
     for (const byte of bytes) {
       let [col, row] = [this.cells[CURSOR], this.cells[CURSOR + 1]];
       if (byte === CR) col = 0;
-      else if (byte === LF) row++;
+      else if (byte === LF) [col, row] = [0, row + 1];
       else if (byte === BS) col = Math.max(col - 1, 0);
       else if (byte !== BEL) {
         const at = this.cell(col, row);
