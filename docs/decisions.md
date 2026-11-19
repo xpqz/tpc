@@ -673,3 +673,14 @@ Under the user's borrowing rule (decision 51): the IDE is feature-complete at 1,
 its plan checkpoint stops features at 2,200, so its limit goes from 2,500 to 2,300; the
 System/Crt/Dos runtime (1,396 of 1,500 after the Dos additions, with `Random` and the
 empty-name `Assign` still to come) goes from 1,500 to 1,700. Total unchanged at 15,000.
+
+## 53. A Utils unit for routines SWAG programs write themselves
+
+User direction. Many SWAG programs carry their own Power, Tan, Hex, Trim, UpperCase, Min/Max
+or LeadingZero, because TP 5.0 has none of them. A non-TP unit `Utils` (runtime/utils.pas,
+embedded like Crt and Dos) gathers them as a short, readable reference a student can use.
+It is plain TP 5.0 Pascal, so the oracle compiles the same source and every expected output
+still comes from TP 5.0. It counts against the runtime budget (at most 130 lines). It adds
+nothing to System, so programs that declare these names themselves are unaffected.
+Rejected: adding them to System (not TP, and would clash with programs' own declarations);
+a compiler-side intrinsic set (costs Rust lines, cannot be checked by the oracle).
