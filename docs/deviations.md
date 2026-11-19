@@ -85,3 +85,4 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
 | D26 | A variable with the name of a used unit | Error 4 in the same scope; in a nested routine the variable hides the unit name | A unit name followed by `.` and an identifier is always the qualified name, so `U.x` in a routine that declares its own `U` reads the unit's `x` | Needs a local named like a used unit; no test |
+| D27 | A variable named like a used unit, in the same scope | Error 4 | Accepted | Not tested |
