@@ -1255,6 +1255,10 @@ impl Cx<'_> {
                 return Err(self.err(target, code::INVALID_VARIABLE_REFERENCE));
             }
             SymKind::Routine(_) => return Err(self.err(target, code::SEMICOLON_EXPECTED)),
+            // `Random` is a function without parameters, like a user's.
+            SymKind::Intrinsic(Intrinsic::Random) => {
+                return Err(self.err(target, code::INVALID_VARIABLE_REFERENCE));
+            }
             SymKind::Intrinsic(i) if i.is_function() => {
                 return Err(self.err(target, code::LEFT_PAREN_EXPECTED));
             }
@@ -1751,6 +1755,10 @@ impl Cx<'_> {
                 let no_args = self.ast.list(&[]);
                 self.function_call(e, e, r, no_args)?
             }
+            SymKind::Intrinsic(Intrinsic::Random) => {
+                let no_args = self.ast.list(&[]);
+                self.random_call(e, no_args)?
+            }
             SymKind::Intrinsic(i) if i.is_function() => {
                 return Err(self.err(e, code::LEFT_PAREN_EXPECTED));
             }
@@ -1764,7 +1772,13 @@ impl Cx<'_> {
         let routine = &self.routines[r as usize];
         let (is_function, result, origin) = (routine.is_function, routine.result, routine.origin);
         if !is_function {
-            return Err(self.err(not_function_at, code::INVALID_PROCEDURE_REFERENCE));
+            // TP's own procedures are no part of an expression at all (error 42).
+            let error = if origin == Origin::System {
+                code::ERROR_IN_EXPRESSION
+            } else {
+                code::INVALID_PROCEDURE_REFERENCE
+            };
+            return Err(self.err(not_function_at, error));
         }
         let params = routine.params.clone();
         let args = self.default_input(e, r, args);
@@ -1794,6 +1808,7 @@ impl Cx<'_> {
             SymKind::Intrinsic(Intrinsic::SizeOf) => self.size_of(e, args)?,
             SymKind::Intrinsic(i) if i.is_real_function() => self.real_function(e, i, args)?,
             SymKind::Intrinsic(Intrinsic::Concat) => self.concat(e, args)?,
+            SymKind::Intrinsic(Intrinsic::Random) => self.random_call(e, args)?,
             SymKind::Intrinsic(i) => match i.unary_op() {
                 Some(op) => {
                     let items = self.ast.items_vec(args);
@@ -2309,6 +2324,22 @@ impl Cx<'_> {
         };
         let call = self.helper_call(at, helper, &[operand], Ty::REAL);
         Ok((self.ast.kind(call), Ty::REAL))
+    }
+
+    /// `Random` is a Real in [0, 1); `Random(n)` is a Word below `n`, for an integer `n`.
+    /// Each is a call of the System routine that draws it.
+    fn random_call(&mut self, at: Id, args: List) -> R<(Kind, Ty)> {
+        let items = self.ast.items_vec(args);
+        self.expect_arg_count(at, items.len(), 0, 1)?;
+        let call = match items.first() {
+            None => self.helper_call(at, Helper::RandomReal, &[], Ty::REAL),
+            Some(&range) => {
+                self.expr(range)?;
+                self.argument_assignable(at, Ty::WORD, range, Origin::System)?;
+                self.helper_call(at, Helper::RandomWord, &[range], Ty::WORD)
+            }
+        };
+        Ok((self.ast.kind(call), self.ast.ty(call)))
     }
 
     /// The address of the variable `arg` of an untyped `var` parameter: any variable is

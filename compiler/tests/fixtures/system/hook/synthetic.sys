@@ -149,3 +149,11 @@ function ArcTanReal(x: Real): Real;
 begin
   ArcTanReal := 0
 end;
+function RandomWord(range: Word): Word;
+begin
+  RandomWord := 0
+end;
+function RandomReal: Real;
+begin
+  RandomReal := 0
+end;

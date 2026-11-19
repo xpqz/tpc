@@ -7,7 +7,7 @@
   StrCmp, StrAssign, StrInt, ValLong, ValReal, StrDelete, StrInsert, SetOp, SetAdd, SetIn,
   SetCmp, HeapGet, HeapPut, HeapMark, HeapRelease, HostWrite, RtError, HostHalt, Fmt_Real, TextOut,
   TextNewLine, TextFlush, CheckIo, Assign, Eof, Eoln, ReadChar, ReadLong, ReadReal, ReadStr,
-  ReadLnEnd, ExpReal, LnReal, SinReal, CosReal, ArcTanReal.
+  ReadLnEnd, ExpReal, LnReal, SinReal, CosReal, ArcTanReal, RandomReal, RandomWord.
   HeapOrg, Text and Input are also found by name.
 
   The console hooks (ConsoleOut, ConsoleLine, ConsoleHooked) are how Crt takes over Write and
@@ -40,6 +40,7 @@ function Fs_Write(handle, address, count: LongInt): LongInt; external;
 function Fs_Close(handle: LongInt): LongInt; external;
 function ReadLine(address, max: LongInt): LongInt; external;
 function HostKey: LongInt; external 'readkey';
+function HostTime(what: LongInt): LongInt; external 'time';
 
 var
   ExitCode: Integer;
@@ -89,6 +90,51 @@ end;
 function Pi: Real;
 begin
   Pi := 3.14159265358979323846
+end;
+
+{ Random numbers: the linear congruential generator of Turbo Pascal 5.0, step for step, so that
+  a program that sets RandSeed gets the very numbers TP does.
+  Every draw first advances the seed, modulo 2^32:
+      RandSeed := RandSeed * 134775813 + 1
+  and then reads the new seed. Random(n) is the high 16 bits of the new seed, taken modulo n
+  (0 when n is 0); Random without an argument is the new seed read as an unsigned number,
+  divided by 2^32, a Real in [0, 1). A LongInt product wraps around in WASM, which is the
+  modulo. The compiler calls RandomWord for Random(n) and RandomReal for Random. }
+var
+  RandSeed: LongInt;
+
+procedure NextRandSeed;
+begin
+  RandSeed := RandSeed * 134775813 + 1
+end;
+
+function RandomWord(range: Word): Word;
+var highBits: LongInt;
+begin
+  NextRandSeed;
+  highBits := (RandSeed shr 16) and 65535;
+  if range = 0 then
+    RandomWord := 0
+  else
+    RandomWord := Word(highBits mod range)
+end;
+
+function RandomReal: Real;
+var unsigned: Real;
+begin
+  NextRandSeed;
+  unsigned := RandSeed;
+  if RandSeed < 0 then unsigned := unsigned + 4294967296.0;
+  RandomReal := unsigned / 4294967296.0
+end;
+
+{ Seeds the generator from the clock: the time of day in hundredths of a second. Reading
+  time(0) first fixes the reading that time(1) and time(2) describe (docs/abi.md section 8). }
+procedure Randomize;
+var day: LongInt;
+begin
+  day := HostTime(0);
+  RandSeed := HostTime(1) * 100 + HostTime(2)
 end;
 
 { The transcendental functions. The compiler calls ExpReal, LnReal, SinReal, CosReal and
