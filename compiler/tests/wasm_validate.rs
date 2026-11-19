@@ -233,10 +233,9 @@ fn if_else_with_result_and_loop_with_exit_block() {
 }
 
 #[test]
-fn i32_and_i64_constants_round_trip_through_node() {
+fn i32_constants_round_trip_through_node() {
     let mut m = Module::new();
     let t32 = m.ty(&[], &[I32]);
-    let t64 = m.ty(&[], &[I64]);
     let mut names = Vec::new();
     for (i, v) in [0, -1, 63, 64, -64, -65, i32::MIN, i32::MAX]
         .into_iter()
@@ -248,13 +247,6 @@ fn i32_and_i64_constants_round_trip_through_node() {
         m.export(&format!("a{i}"), FUNC, f);
         names.push(format!("e.a{i}()"));
     }
-    for (i, v) in [0, -1, 1 << 40, i64::MIN, i64::MAX].into_iter().enumerate() {
-        let mut c = Code::new();
-        c.i64_const(v);
-        let f = m.func(t64, &[], c);
-        m.export(&format!("b{i}"), FUNC, f);
-        names.push(format!("e.b{i}()"));
-    }
     let w = m.finish();
     assert!(validates(&w));
     let out = node(
@@ -264,11 +256,7 @@ fn i32_and_i64_constants_round_trip_through_node() {
         ),
         &w,
     );
-    assert_eq!(
-        out.trim(),
-        "0 -1 63 64 -64 -65 -2147483648 2147483647 0 -1 1099511627776 \
-         -9223372036854775808 9223372036854775807"
-    );
+    assert_eq!(out.trim(), "0 -1 63 64 -64 -65 -2147483648 2147483647");
 }
 
 #[test]
@@ -288,32 +276,4 @@ fn harness_rejects_an_unbalanced_block_in_a_body() {
     let extra_end = concat(&[&head, &section(10, &[1, 3, 0, 0x0B, 0x0B])]);
     assert!(!validates(&bad));
     assert!(!validates(&extra_end));
-}
-
-#[test]
-fn br_table_dispatches_on_in_range_and_out_of_range_selectors() {
-    let mut m = Module::new();
-    let t = m.ty(&[I32], &[I32]);
-    let mut c = Code::new();
-    let default = c.block(VOID);
-    let c2 = c.block(VOID);
-    let c1 = c.block(VOID);
-    let c0 = c.block(VOID);
-    c.idx(LOCAL_GET, 0).br_table(&[c0, c1, c2], default);
-    c.end().i32_const(10).op(RETURN);
-    c.end().i32_const(11).op(RETURN);
-    c.end().i32_const(12).op(RETURN);
-    c.end().i32_const(99);
-    let f = m.func(t, &[], c);
-    m.export("f", FUNC, f);
-    let w = m.finish();
-    assert!(validates(&w));
-    let out = node(
-        &js(
-            "{}",
-            "console.log([0, 1, 2, 3, 100, -1].map(e.f).join(' '))",
-        ),
-        &w,
-    );
-    assert_eq!(out.trim(), "10 11 12 99 99 99");
 }

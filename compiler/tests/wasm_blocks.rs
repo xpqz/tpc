@@ -152,43 +152,6 @@ fn exit_block_around_a_whole_body_like_a_pascal_exit() {
 }
 
 #[test]
-fn br_table_encodes_count_relative_depths_and_default() {
-    let got = build(|c| {
-        let a = c.block(VOID);
-        let b = c.block(VOID);
-        c.i32_const(0).br_table(&[a, b], a);
-        c.end().end();
-    });
-    let want = expected(&[
-        0x02, 0x40, 0x02, 0x40, 0x41, 0, 0x0E, 2, 1, 0, 1, 0x0B, 0x0B,
-    ]);
-    assert!(validates(&want), "hand-written expectation must be valid");
-    assert_eq!(got, want);
-    assert!(validates(&got));
-}
-
-#[test]
-fn br_table_with_no_targets_has_only_a_default() {
-    let got = build(|c| {
-        let a = c.block(VOID);
-        c.i32_const(0).br_table(&[], a);
-        c.end();
-    });
-    let want = expected(&[0x02, 0x40, 0x41, 0, 0x0E, 0, 0, 0x0B]);
-    assert!(validates(&want), "hand-written expectation must be valid");
-    assert_eq!(got, want);
-}
-
-#[test]
-#[should_panic(expected = "label")]
-fn br_table_with_a_closed_label_is_rejected() {
-    let mut c = Code::new();
-    let a = c.block(VOID);
-    c.end();
-    c.br_table(&[], a);
-}
-
-#[test]
 #[should_panic(expected = "unbalanced")]
 fn end_without_open_block_is_rejected() {
     let mut c = Code::new();

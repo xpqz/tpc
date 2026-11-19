@@ -3,7 +3,7 @@
 //! `push_dec`.
 
 /// A compile error: TP error number and the source position TP reports it at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Diag {
     pub code: u16,
     pub line: u32,

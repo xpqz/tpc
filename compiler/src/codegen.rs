@@ -27,6 +27,7 @@ const SP: u32 = 0;
 const STDOUT: i32 = 1;
 
 const UNREACHABLE: u8 = 0x00;
+const RETURN: u8 = 0x0F;
 const CALL: u8 = 0x10;
 const SELECT: u8 = 0x1B;
 const LOCAL_GET: u8 = 0x20;
@@ -35,36 +36,52 @@ const LOCAL_TEE: u8 = 0x22;
 const GLOBAL_GET: u8 = 0x23;
 const GLOBAL_SET: u8 = 0x24;
 const I32_LOAD: u8 = 0x28;
+const F64_LOAD: u8 = 0x2B;
+const I32_LOAD8_S: u8 = 0x2C;
+const I32_LOAD8_U: u8 = 0x2D;
+const I32_LOAD16_S: u8 = 0x2E;
+const I32_LOAD16_U: u8 = 0x2F;
 const I32_STORE: u8 = 0x36;
+const F64_STORE: u8 = 0x39;
 const I32_STORE8: u8 = 0x3A;
-const RETURN: u8 = 0x0F;
+const I32_STORE16: u8 = 0x3B;
 const I32_EQZ: u8 = 0x45;
 const I32_EQ: u8 = 0x46;
 const I32_NE: u8 = 0x47;
+const I32_LT_S: u8 = 0x48;
 const I32_LT_U: u8 = 0x49;
+const I32_GT_S: u8 = 0x4A;
 const I32_LE_S: u8 = 0x4C;
 const I32_LE_U: u8 = 0x4D;
-const I32_OR: u8 = 0x72;
 const I32_GE_S: u8 = 0x4E;
-const I32_GT_S: u8 = 0x4A;
-const I32_LT_S: u8 = 0x48;
+const F64_EQ: u8 = 0x61;
+const F64_NE: u8 = 0x62;
+const F64_LT: u8 = 0x63;
+const F64_GT: u8 = 0x64;
+const F64_LE: u8 = 0x65;
+const F64_GE: u8 = 0x66;
 const I32_ADD: u8 = 0x6A;
-const I32_MUL: u8 = 0x6C;
 const I32_SUB: u8 = 0x6B;
+const I32_MUL: u8 = 0x6C;
 const I32_DIV_S: u8 = 0x6D;
 const I32_DIV_U: u8 = 0x6E;
 const I32_REM_S: u8 = 0x6F;
 const I32_REM_U: u8 = 0x70;
 const I32_AND: u8 = 0x71;
+const I32_OR: u8 = 0x72;
 const I32_XOR: u8 = 0x73;
 const I32_SHL: u8 = 0x74;
 const I32_SHR_S: u8 = 0x75;
-const F64_EQ: u8 = 0x61;
-const F64_LOAD: u8 = 0x2B;
-const F64_STORE: u8 = 0x39;
+const I32_SHR_U: u8 = 0x76;
+const F64_ABS: u8 = 0x99;
+const F64_NEG: u8 = 0x9A;
 const F64_TRUNC: u8 = 0x9D;
+const F64_SQRT: u8 = 0x9F;
+const F64_ADD: u8 = 0xA0;
 const F64_SUB: u8 = 0xA1;
 const F64_MUL: u8 = 0xA2;
+const F64_DIV: u8 = 0xA3;
+const F64_CONVERT_I32_S: u8 = 0xB7;
 /// Bytes of the buffer `fmt_real` fills: the widest field (255) or the longest fixed number.
 const REAL_BUF: u32 = 512;
 
@@ -455,37 +472,37 @@ fn real_quotient() -> Code {
     let mut c = Code::new();
     c.idx(LOCAL_GET, 1).f64_const(0.0).op(F64_EQ).if_(VOID);
     c.i32_const(200).idx(CALL, HOST_RTERROR).end();
-    c.idx(LOCAL_GET, 0).idx(LOCAL_GET, 1).op(0xA3);
+    c.idx(LOCAL_GET, 0).idx(LOCAL_GET, 1).op(F64_DIV);
     c
 }
 
 fn real_op(op: Op) -> u8 {
     match op {
-        Op::Add => 0xA0,
+        Op::Add => F64_ADD,
         Op::Sub => F64_SUB,
         Op::Mul => F64_MUL,
         Op::Eq => F64_EQ,
-        Op::Ne => 0x62,
-        Op::Lt => 0x63,
-        Op::Gt => 0x64,
-        Op::Le => 0x65,
-        Op::Ge => 0x66,
+        Op::Ne => F64_NE,
+        Op::Lt => F64_LT,
+        Op::Gt => F64_GT,
+        Op::Le => F64_LE,
+        Op::Ge => F64_GE,
         _ => unreachable!("Real operators"),
     }
 }
 
 fn binary_op(op: Op) -> u8 {
     match op {
-        Op::Add => 0x6A,
-        Op::Sub => 0x6B,
-        Op::Mul => 0x6C,
+        Op::Add => I32_ADD,
+        Op::Sub => I32_SUB,
+        Op::Mul => I32_MUL,
         Op::Div => I32_DIV_S,
         Op::Mod => I32_REM_S,
-        Op::And => 0x71,
-        Op::Or => 0x72,
-        Op::Xor => 0x73,
-        Op::Shl => 0x74,
-        Op::Shr => 0x76,
+        Op::And => I32_AND,
+        Op::Or => I32_OR,
+        Op::Xor => I32_XOR,
+        Op::Shl => I32_SHL,
+        Op::Shr => I32_SHR_U,
         Op::Eq => I32_EQ,
         Op::Ne => I32_NE,
         Op::Lt => I32_LT_S,
@@ -674,7 +691,7 @@ impl Gen<'_> {
     fn store(&mut self, ty: Ty, offset: u32) {
         let size = self.info.types.ord(ty).2;
         self.code.mem(
-            [I32_STORE8, 0x3B, 0, I32_STORE][size as usize - 1],
+            [I32_STORE8, I32_STORE16, 0, I32_STORE][size as usize - 1],
             0,
             offset,
         );
@@ -693,10 +710,10 @@ impl Gen<'_> {
 
     fn load_op(&self, ty: Ty) -> u8 {
         match self.info.types.ord(ty) {
-            (_, _, 1, true) => 0x2C,
-            (_, _, 1, false) => 0x2D,
-            (_, _, 2, true) => 0x2E,
-            (_, _, 2, false) => 0x2F,
+            (_, _, 1, true) => I32_LOAD8_S,
+            (_, _, 1, false) => I32_LOAD8_U,
+            (_, _, 2, true) => I32_LOAD16_S,
+            (_, _, 2, false) => I32_LOAD16_U,
             _ => I32_LOAD,
         }
     }
@@ -1120,7 +1137,7 @@ impl Gen<'_> {
                 self.str(e);
                 self.code.idx(LOCAL_SET, t);
                 self.code.idx(LOCAL_GET, t).i32_const(1).op(I32_ADD);
-                self.code.idx(LOCAL_GET, t).mem(0x2D, 0, 0);
+                self.code.idx(LOCAL_GET, t).mem(I32_LOAD8_U, 0, 0);
                 self.width(w);
                 self.code.idx(CALL, WSTR + self.layout.fmt);
             }
@@ -1198,7 +1215,7 @@ impl Gen<'_> {
             }
             Kind::IntToReal(a) => {
                 self.expr(a);
-                self.code.op(0xB7);
+                self.code.op(F64_CONVERT_I32_S);
             }
             Kind::Var(_) | Kind::Index(..) | Kind::Field(..) | Kind::Deref(_) => {
                 let offset = self.addr(e);
@@ -1232,9 +1249,9 @@ impl Gen<'_> {
             Kind::Unary(op, a) => {
                 self.real(a);
                 self.code.op(match op {
-                    Op::Neg => 0x9A,
-                    Op::Abs => 0x99,
-                    Op::Sqrt => 0x9F,
+                    Op::Neg => F64_NEG,
+                    Op::Abs => F64_ABS,
+                    Op::Sqrt => F64_SQRT,
                     _ => F64_TRUNC,
                 });
             }
@@ -1279,10 +1296,13 @@ impl Gen<'_> {
                     self.reload(t);
                     self.code.op(F64_TRUNC);
                     self.frac(t);
-                    self.code.f64_const(2.0).op(F64_MUL).op(F64_TRUNC).op(0xA0);
+                    self.code
+                        .f64_const(2.0)
+                        .op(F64_MUL)
+                        .op(F64_TRUNC)
+                        .op(F64_ADD);
                 }
-                // `i32.trunc_sat_f64_s`
-                self.code.op(0xFC).op(2);
+                self.code.truncate_f64_saturating();
             }
             Kind::Unary(op, a) => self.unary(op, a, n.ty),
             Kind::Binary(op, a, b) if self.ast.nodes[a as usize].ty == Ty::REAL => {

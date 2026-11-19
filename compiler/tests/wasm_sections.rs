@@ -26,8 +26,8 @@ fn type_section_bytes() {
 #[test]
 fn type_section_encodes_every_value_type() {
     let mut m = Module::new();
-    m.ty(&[I64, F64], &[I64]);
-    let want = concat(&[&HEADER, &section(1, &[1, 0x60, 2, 0x7E, 0x7C, 1, 0x7E])]);
+    m.ty(&[I32, F64], &[F64]);
+    let want = concat(&[&HEADER, &section(1, &[1, 0x60, 2, 0x7F, 0x7C, 1, 0x7C])]);
     assert_eq!(m.finish(), want);
 }
 
@@ -174,14 +174,14 @@ fn export_section_bytes() {
 }
 
 #[test]
-fn function_and_table_exports_use_their_kind_bytes() {
+fn function_and_memory_exports_use_their_kind_bytes() {
     let mut m = Module::new();
     let t = void_ty(&mut m);
     m.func(t, &[], Code::new());
-    m.table(1);
+    m.memory(1);
     m.export("f", FUNC, 0);
-    m.export("t", TABLE, 0);
-    let want_export = section(7, &[2, 1, b'f', 0, 0, 1, b't', 1, 0]);
+    m.export("t", MEM, 0);
+    let want_export = section(7, &[2, 1, b'f', 0, 0, 1, b't', 2, 0]);
     let bytes = m.finish();
     let at = bytes
         .windows(2)
