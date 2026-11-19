@@ -1,0 +1,27 @@
+File: GOOD.PAS
+
+Saved GOOD.PAS
+
+Ready
+Cannot open NOPE.PAS
+Opened BAD.PAS
+Error 3 in BAD.PAS 2:1
+Error 3 in BAD.PAS 2:1
+Exit code -2
+Opened GOOD.PAS
+Compiled
+Exit code 2
+Saved GOOD.PAS
+
+
+
+
+
+
+
+
+
+
+
+cursor 15 14
+exit 0

@@ -171,8 +171,9 @@ export async function withPage(body) {
     const page = {
       name,
       origin: `http://localhost:${server.port}`,
-      async open(wasm) {
-        await backend.navigate(`${this.origin}/host/index.html?wasm=${wasm}`);
+      // `query` adds page parameters, such as `&compiler=/tmp/browser/compiler.wasm`.
+      async open(wasm, query = "") {
+        await backend.navigate(`${this.origin}/host/index.html?wasm=${wasm}${query}`);
         await until("the page's terminal", () => this.eval("!!window.__grid"));
       },
       // Statements are fine: the last value is returned, as JSON, whatever the browser.
@@ -220,6 +221,11 @@ export const KEYS = {
   down: { key: "ArrowDown", vk: 40, w3c: "\uE015" },
   right: { key: "ArrowRight", vk: 39, w3c: "\uE014" },
   f12: { key: "F12", vk: 123, w3c: "\uE03C" },
+  f2: { key: "F2", vk: 113, w3c: "\uE032" },
+  f3: { key: "F3", vk: 114, w3c: "\uE033" },
+  f9: { key: "F9", vk: 120, w3c: "\uE039" },
+  enter: { key: "Enter", vk: 13, w3c: "\uE007" },
+  dot: { key: ".", text: ".", vk: 190, w3c: "." },
 };
 
 // Writes wasm bytes under tmp/browser/ (served with the repository); returns the URL path.
