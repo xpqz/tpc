@@ -498,6 +498,18 @@ const
   LineFeed = 10;
   EndOfFile = 26;
   BufferSize = 256;
+  { TP I/O error numbers, as IOResult reports them. }
+  IoNotAssigned = 102;
+  IoNotOpen = 103;
+  IoNotInput = 104;
+  IoNotOutput = 105;
+  IoInvalidNumber = 106;
+  { The modes of Fs_Open (docs/abi.md): read, create or truncate, append; and the console's
+    file descriptor. }
+  HostRead = 0;
+  HostCreate = 1;
+  HostAppend = 2;
+  StdOut = 1;
   ConsoleLineMax = 254; { room in the buffer for the CR LF that end a console line }
 
 type
@@ -540,12 +552,12 @@ procedure TextOut(target, address, count: LongInt);
 var f: PText; written: LongInt;
 begin
   if InOutRes <> 0 then Exit;
-  if target = 0 then HostWrite(1, address, count)
+  if target = 0 then HostWrite(StdOut, address, count)
   else
   begin
     f := PText(target);
-    if f^.Mode = ModeConsoleOutput then HostWrite(1, address, count)
-    else if f^.Mode <> ModeOutput then InOutRes := 105
+    if f^.Mode = ModeConsoleOutput then HostWrite(StdOut, address, count)
+    else if f^.Mode <> ModeOutput then InOutRes := IoNotOutput
     else
     begin
       written := Fs_Write(f^.Handle, address, count);
@@ -582,10 +594,12 @@ var handle: LongInt;
 begin
   if f.Mode = ModeUnassigned then
   begin
-    InOutRes := 102;
+    InOutRes := IoNotAssigned;
     Exit
   end;
   if f.Mode >= ModeConsoleInput then Exit;
+  { The status of closing the old file is not reported; `handle` takes it only because a
+    function result cannot be dropped. }
   if (f.Mode = ModeInput) or (f.Mode = ModeOutput) then handle := Fs_Close(f.Handle);
   f.Mode := ModeClosed;
   handle := Fs_Open(LongInt(@f.Name[1]), Ord(f.Name[0]), hostMode);
@@ -602,17 +616,17 @@ end;
 
 procedure Reset(var f: Text);
 begin
-  OpenFile(f, 0, ModeInput)
+  OpenFile(f, HostRead, ModeInput)
 end;
 
 procedure Rewrite(var f: Text);
 begin
-  OpenFile(f, 1, ModeOutput)
+  OpenFile(f, HostCreate, ModeOutput)
 end;
 
 procedure Append(var f: Text);
 begin
-  OpenFile(f, 2, ModeOutput)
+  OpenFile(f, HostAppend, ModeOutput)
 end;
 
 procedure Close(var f: Text);
@@ -624,7 +638,7 @@ begin
     f.Mode := ModeClosed;
     if status < 0 then InOutRes := Integer(-status)
   end
-  else if f.Mode < ModeConsoleInput then InOutRes := 103
+  else if f.Mode < ModeConsoleInput then InOutRes := IoNotOpen
 end;
 
 { The buffer of a console file holds one line and the CR LF the host does not deliver. }
@@ -674,7 +688,9 @@ begin
     f.Pos := 0;
     f.Len := 0;
     if not f.Ended then
+    begin
       if f.Mode = ModeConsoleInput then FillFromConsole(f) else FillFromFile(f)
+    end
   end;
   Fill := f.Pos < f.Len
 end;
@@ -686,7 +702,7 @@ begin
   CanRead := False;
   if InOutRes <> 0 then Exit;
   if (f.Mode = ModeInput) or (f.Mode = ModeConsoleInput) then CanRead := True
-  else InOutRes := 104
+  else InOutRes := IoNotInput
 end;
 
 function Eof(var f: Text): Boolean;
@@ -762,7 +778,7 @@ begin
   if Length(token) > 0 then
   begin
     value := ValLong(token, code);
-    if code <> 0 then InOutRes := 106 else ReadLong := value
+    if code <> 0 then InOutRes := IoInvalidNumber else ReadLong := value
   end
 end;
 
@@ -774,7 +790,7 @@ begin
   if Length(token) > 0 then
   begin
     value := ValReal(token, code);
-    if code <> 0 then InOutRes := 106 else ReadReal := value
+    if code <> 0 then InOutRes := IoInvalidNumber else ReadReal := value
   end
 end;
 
