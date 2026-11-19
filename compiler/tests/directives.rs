@@ -305,23 +305,13 @@ fn an_error_in_an_include_prints_its_file_and_one_after_it_the_input_name() {
     assert!(err.starts_with("p.pas(4,"), "{err}");
 }
 
-// ---- Switch letters that share `{$I`: the include form must not swallow `{$I+}` / `{$I-}` ----
+// ---- Switch letters that share `{$I`: the include form must not swallow `{$I+}` / `{$I-}`
+// (`{$I+}` and `{$I-}` themselves are tested in text_files.rs) ----
 
 fn compile_text(text: &str) -> (i32, String) {
     let dir = work();
     write(&dir, "p.pas", text);
     tp5c(&dir, &["p.pas", "-o", "p.wasm"])
-}
-
-#[test]
-fn io_check_switches_are_still_unsupported_and_are_not_includes() {
-    // Error 200 until the I/O checking switch is implemented; never 15 (file not found).
-    for directive in ["{$I+}", "{$I-}", "{$i-}", "(*$I+*)", "{$I-,R+}", "{$R+,I-}"] {
-        let (code, err) = compile_text(&format!("program P;\n{directive}\nbegin end.\n"));
-        assert_eq!(code, 1, "{directive}");
-        assert!(err.starts_with("p.pas(2,"), "{directive}: {err}");
-        assert!(err.contains(": Error 200: "), "{directive}: {err}");
-    }
 }
 
 #[test]
