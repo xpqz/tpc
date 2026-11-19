@@ -161,7 +161,7 @@ B="$ROOT/tools/budget.txt"
 SRC=compiler/src
 EXPECTED=$(cat <<EOT
 1100|$SRC/diag.rs $SRC/ffi.rs $SRC/driver.rs $SRC/lib.rs $SRC/main.rs $SRC/units.rs compiler/build.rs
-1400|$SRC/types.rs
+1400|$SRC/types.rs $SRC/symbols.rs
 1500|runtime
 2000|$SRC/ast.rs $SRC/parse.rs
 2200|$SRC/check.rs

@@ -20,100 +20,11 @@
 //! a chain of `+`. Codegen then needs no knowledge of them.
 use crate::ast::{Ast, Id, Kind, List, Op, NO_NAME};
 use crate::diag::{code, Diag};
+use crate::symbols::{name_of, Helper, SymbolError, Symbols, MAX_DATA};
 use crate::types::{
-    ConstValue, Field, FrameCopy, Intrinsic, ParamType, Routine, Signature, Sym, SymKind, Symbol,
-    Tag, Ty, TypedConst, Types,
+    ConstValue, Field, Intrinsic, ParamType, Routine, Signature, Sym, SymKind, Symbol, Tag, Ty,
+    TypedConst, Types,
 };
-
-/// The System routines that the compiler calls on its own behalf, bound by name right after
-/// System is loaded (decision 11).
-#[derive(Clone, Copy)]
-pub enum Helper {
-    AbsLong,
-    StrCat,
-    StrCmp,
-    StrAssign,
-    StrDelete,
-    StrInsert,
-    HeapGet,
-    HeapPut,
-    HeapMark,
-    HeapRelease,
-    SetOp,
-    SetAdd,
-    SetIn,
-    SetCmp,
-    StrInt,
-    ValLong,
-    ValReal,
-    RangeChk,
-    HostWrite,
-    HostRtError,
-    FmtReal,
-}
-
-impl Helper {
-    const ALL: [Helper; 21] = [
-        Helper::AbsLong,
-        Helper::StrCat,
-        Helper::StrCmp,
-        Helper::StrAssign,
-        Helper::StrDelete,
-        Helper::StrInsert,
-        Helper::HeapGet,
-        Helper::HeapPut,
-        Helper::HeapMark,
-        Helper::HeapRelease,
-        Helper::SetOp,
-        Helper::SetAdd,
-        Helper::SetIn,
-        Helper::SetCmp,
-        Helper::StrInt,
-        Helper::ValLong,
-        Helper::ValReal,
-        Helper::RangeChk,
-        Helper::HostWrite,
-        Helper::HostRtError,
-        Helper::FmtReal,
-    ];
-
-    /// The routine's name in `runtime/system.pas`, upper-cased.
-    fn name(self) -> &'static [u8] {
-        match self {
-            Helper::AbsLong => b"ABSLONG",
-            Helper::StrCat => b"STRCAT",
-            Helper::StrCmp => b"STRCMP",
-            Helper::StrAssign => b"STRASSIGN",
-            Helper::StrDelete => b"STRDELETE",
-            Helper::StrInsert => b"STRINSERT",
-            Helper::HeapGet => b"HEAPGET",
-            Helper::HeapPut => b"HEAPPUT",
-            Helper::HeapMark => b"HEAPMARK",
-            Helper::HeapRelease => b"HEAPRELEASE",
-            Helper::SetOp => b"SETOP",
-            Helper::SetAdd => b"SETADD",
-            Helper::SetIn => b"SETIN",
-            Helper::SetCmp => b"SETCMP",
-            Helper::StrInt => b"STRINT",
-            Helper::ValLong => b"VALLONG",
-            Helper::ValReal => b"VALREAL",
-            Helper::RangeChk => b"RANGECHK",
-            Helper::HostWrite => b"HOSTWRITE",
-            Helper::HostRtError => b"RTERROR",
-            Helper::FmtReal => b"FMT_REAL",
-        }
-    }
-}
-
-/// The most bytes of one structure, of all globals, or of one routine's locals.
-const MAX_DATA: u32 = 65535;
-
-/// Static data: globals start here, after the code generator's fixed header (bytes 256 to
-/// 278: the characters it writes and its digit buffer), rounded up to a multiple of 8.
-pub const GLOBALS: u32 = 280;
-
-/// The first 4 bytes of a frame hold the static link of a nested routine.
-const STATIC_LINK_BYTES: u32 = 4;
 
 pub struct Info {
     pub types: Types,
@@ -138,69 +49,6 @@ impl Info {
 
 type R<T> = Result<T, Diag>;
 
-/// Predefined names: types, constants, and the intrinsics the compiler expands itself.
-const PREDEFINED: &[(&[u8], SymKind, Ty)] = &[
-    (b"BYTE", SymKind::Type, Ty::BYTE),
-    (b"SHORTINT", SymKind::Type, Ty::SHORTINT),
-    (b"INTEGER", SymKind::Type, Ty::INTEGER),
-    (b"WORD", SymKind::Type, Ty::WORD),
-    (b"LONGINT", SymKind::Type, Ty::LONGINT),
-    (b"BOOLEAN", SymKind::Type, Ty::BOOLEAN),
-    (b"CHAR", SymKind::Type, Ty::CHAR),
-    (b"REAL", SymKind::Type, Ty::REAL),
-    (
-        b"PI",
-        SymKind::Const(ConstValue::Real(std::f64::consts::PI)),
-        Ty::REAL,
-    ),
-    (b"SINGLE", SymKind::Omitted, Ty::NONE),
-    (b"DOUBLE", SymKind::Omitted, Ty::NONE),
-    (b"EXTENDED", SymKind::Omitted, Ty::NONE),
-    (b"COMP", SymKind::Omitted, Ty::NONE),
-    (b"SEG", SymKind::Omitted, Ty::NONE),
-    (b"OFS", SymKind::Omitted, Ty::NONE),
-    (b"PTR", SymKind::Omitted, Ty::NONE),
-    (b"POINTER", SymKind::Type, Ty::POINTER),
-    (b"NIL", SymKind::Const(ConstValue::Int(0)), Ty::POINTER),
-    (b"FALSE", SymKind::Const(ConstValue::Int(0)), Ty::BOOLEAN),
-    (b"TRUE", SymKind::Const(ConstValue::Int(1)), Ty::BOOLEAN),
-    (b"STRING", SymKind::Type, Ty::STRING),
-    (b"WRITE", SymKind::Intrinsic(Intrinsic::Write), Ty::NONE),
-    (b"WRITELN", SymKind::Intrinsic(Intrinsic::WriteLn), Ty::NONE),
-    (b"ORD", SymKind::Intrinsic(Intrinsic::Ord), Ty::NONE),
-    (b"CHR", SymKind::Intrinsic(Intrinsic::Chr), Ty::NONE),
-    (b"SUCC", SymKind::Intrinsic(Intrinsic::Succ), Ty::NONE),
-    (b"PRED", SymKind::Intrinsic(Intrinsic::Pred), Ty::NONE),
-    (b"ODD", SymKind::Intrinsic(Intrinsic::Odd), Ty::NONE),
-    (b"ABS", SymKind::Intrinsic(Intrinsic::Abs), Ty::NONE),
-    (b"SQR", SymKind::Intrinsic(Intrinsic::Sqr), Ty::NONE),
-    (b"EXIT", SymKind::Intrinsic(Intrinsic::Exit), Ty::NONE),
-    (b"SIZEOF", SymKind::Intrinsic(Intrinsic::SizeOf), Ty::NONE),
-    (b"CONCAT", SymKind::Intrinsic(Intrinsic::Concat), Ty::NONE),
-    (b"DELETE", SymKind::Intrinsic(Intrinsic::Delete), Ty::NONE),
-    (b"INSERT", SymKind::Intrinsic(Intrinsic::Insert), Ty::NONE),
-    (b"NEW", SymKind::Intrinsic(Intrinsic::New), Ty::NONE),
-    (b"DISPOSE", SymKind::Intrinsic(Intrinsic::Dispose), Ty::NONE),
-    (b"GETMEM", SymKind::Intrinsic(Intrinsic::GetMem), Ty::NONE),
-    (b"FREEMEM", SymKind::Intrinsic(Intrinsic::FreeMem), Ty::NONE),
-    (b"MARK", SymKind::Intrinsic(Intrinsic::Mark), Ty::NONE),
-    (b"RELEASE", SymKind::Intrinsic(Intrinsic::Release), Ty::NONE),
-    (
-        b"RUNERROR",
-        SymKind::Intrinsic(Intrinsic::RunError),
-        Ty::NONE,
-    ),
-    (b"ROUND", SymKind::Intrinsic(Intrinsic::Round), Ty::NONE),
-    (b"TRUNC", SymKind::Intrinsic(Intrinsic::Trunc), Ty::NONE),
-    (b"SQRT", SymKind::Intrinsic(Intrinsic::Sqrt), Ty::NONE),
-    (b"INT", SymKind::Intrinsic(Intrinsic::Int), Ty::NONE),
-    (b"FRAC", SymKind::Intrinsic(Intrinsic::Frac), Ty::NONE),
-    (b"INC", SymKind::Intrinsic(Intrinsic::Inc), Ty::NONE),
-    (b"DEC", SymKind::Intrinsic(Intrinsic::Dec), Ty::NONE),
-    (b"STR", SymKind::Intrinsic(Intrinsic::Str), Ty::NONE),
-    (b"VAL", SymKind::Intrinsic(Intrinsic::Val), Ty::NONE),
-];
-
 /// A parameter as declared, with the node that declares it.
 struct ParamDecl {
     node: Id,
@@ -209,32 +57,12 @@ struct ParamDecl {
     by_ref: bool,
 }
 
-/// The checker's state that a routine body saves on entry and restores on exit.
-struct SavedScope {
-    scope_len: usize,
-    first_user_scope: usize,
-    next_local: u32,
-    local_bytes: u32,
-}
-
 struct Cx<'a> {
     ast: &'a mut Ast,
     types: Types,
-    syms: Vec<Symbol>,
-    /// Visible names, innermost last.
-    scope: Vec<(u32, Sym)>,
-    /// Scope entries below this index are predefined or from System and may be redeclared.
-    first_user_scope: usize,
-    /// First address after the globals declared so far.
-    data_end: u32,
+    symbols: Symbols,
     typed_consts: Vec<TypedConst>,
     routines: Vec<Routine>,
-    /// The routines being checked, outermost first; its length is the current depth.
-    routine_stack: Vec<usize>,
-    /// The next free local index.
-    next_local: u32,
-    /// Bytes of the current routine's local variables.
-    local_bytes: u32,
     /// The record designators of the enclosing `with` statements, innermost last.
     withs: Vec<(Id, Ty)>,
     helpers: [u32; Helper::ALL.len()],
@@ -243,23 +71,17 @@ struct Cx<'a> {
 }
 
 pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
+    let symbols = Symbols::new(ast);
     let mut cx = Cx {
         ast,
         types: Types::new(),
-        syms: Vec::new(),
-        scope: Vec::new(),
-        first_user_scope: 0,
-        data_end: GLOBALS,
+        symbols,
         typed_consts: Vec::new(),
         routines: Vec::new(),
-        routine_stack: Vec::new(),
-        next_local: 0,
-        local_bytes: 0,
         withs: Vec::new(),
         helpers: [0; Helper::ALL.len()],
         forward: Vec::new(),
     };
-    cx.declare_predefined();
     let Kind::Program {
         name,
         declarations,
@@ -274,7 +96,7 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
         cx.decl(d)?;
     }
     let heap = cx.bind_system_names()?;
-    cx.first_user_scope = cx.scope.len();
+    cx.symbols.start_user_region();
     if name != NO_NAME {
         cx.declare(root, name, Symbol::new(SymKind::Prog, Ty::NONE))?;
     }
@@ -288,9 +110,9 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
     cx.stmt(body)?;
     Ok(Info {
         types: cx.types,
-        syms: cx.syms,
+        data_end: cx.symbols.data_end(),
+        syms: cx.symbols.into_symbols(),
         routines: cx.routines,
-        data_end: cx.data_end,
         typed_consts: cx.typed_consts,
         helpers: cx.helpers,
         heap,
@@ -335,85 +157,26 @@ fn fold(op: Op, a: i64, b: i64) -> i64 {
 }
 
 impl Cx<'_> {
-    fn declare_predefined(&mut self) {
-        for &(name, kind, ty) in PREDEFINED {
-            let name = self.ast.intern(name);
-            self.push(name, Symbol::new(kind, ty));
-        }
-    }
-
-    /// Binds the System routines the compiler calls on its own (`Helper`) and finds `HeapOrg`,
-    /// before any program declaration can shadow them. Returns the address of `HeapOrg`.
+    /// Finds the System names the compiler relies on; a gap is an error in System itself, so
+    /// it is reported at line 0.
     fn bind_system_names(&mut self) -> R<u32> {
         let broken_system = Diag {
             code: code::UNKNOWN_IDENTIFIER,
             line: 0,
             col: 0,
         };
-        for helper in Helper::ALL {
-            let name = self.ast.intern(helper.name());
-            let Some((
-                _,
-                Symbol {
-                    kind: SymKind::Routine(r),
-                    ..
-                },
-            )) = self.lookup_symbol(name)
-            else {
-                return Err(broken_system);
-            };
-            self.helpers[helper as usize] = r;
-        }
-        let heap_org = self.ast.intern(b"HEAPORG");
-        let Some((
-            _,
-            Symbol {
-                kind: SymKind::Var(address),
-                ..
-            },
-        )) = self.lookup_symbol(heap_org)
-        else {
-            return Err(broken_system);
-        };
+        let names = self
+            .symbols
+            .bind_system_names(self.ast)
+            .map_err(|_| broken_system)?;
         if self.routines.iter().any(|r| !r.defined) {
             return Err(Diag {
                 code: code::UNDEFINED_FORWARD,
                 ..broken_system
             });
         }
-        Ok(address)
-    }
-
-    /// Adds a symbol and makes `name` refer to it from here on.
-    fn push(&mut self, name: u32, symbol: Symbol) -> Sym {
-        self.syms.push(Symbol {
-            depth: self.routine_stack.len() as u32,
-            ..symbol
-        });
-        let sym = Sym(self.syms.len() as u32 - 1);
-        self.scope.push((name, sym));
-        sym
-    }
-
-    fn lookup(&self, name: u32) -> Option<Sym> {
-        self.scope.iter().rev().find(|e| e.0 == name).map(|e| e.1)
-    }
-
-    fn symbol(&self, sym: Sym) -> Symbol {
-        self.syms[sym.0 as usize]
-    }
-
-    fn lookup_symbol(&self, name: u32) -> Option<(Sym, Symbol)> {
-        let sym = self.lookup(name)?;
-        Some((sym, self.symbol(sym)))
-    }
-
-    /// The name of a `Name` node.
-    fn name_of(&self, id: Id) -> u32 {
-        match self.ast.kind(id) {
-            Kind::Name(name) => name,
-            _ => unreachable!("the parser names it"),
-        }
+        self.helpers = names.helpers;
+        Ok(names.heap)
     }
 
     fn err(&self, id: Id, code: u16) -> Diag {
@@ -421,16 +184,19 @@ impl Cx<'_> {
         Diag { code, line, col }
     }
 
-    /// Declares `name` in the current scope; a second declaration in the same scope is an
+    /// Declares `name` in the current region; a second declaration in the same region is an
     /// error, but a user declaration may hide a predefined or System one.
     fn declare(&mut self, at: Id, name: u32, symbol: Symbol) -> R<Sym> {
-        if self.scope[self.first_user_scope..]
-            .iter()
-            .any(|e| e.0 == name)
-        {
-            return Err(self.err(at, code::DUPLICATE_IDENTIFIER));
+        let declared = self.symbols.declare(name, symbol);
+        declared.map_err(|error| self.symbol_error(at, error))
+    }
+
+    /// The TP error for a failed symbol operation at node `at`.
+    fn symbol_error(&self, at: Id, error: SymbolError) -> Diag {
+        match error {
+            SymbolError::AlreadyDeclared => self.err(at, code::DUPLICATE_IDENTIFIER),
+            SymbolError::TooManyVariables => self.err(at, code::TOO_MANY_VARIABLES),
         }
-        Ok(self.push(name, symbol))
     }
 
     /// Resolves the pointer types declared with a target not yet declared. Called where a type
@@ -498,8 +264,10 @@ impl Cx<'_> {
             return Err(self.err(d, code::PROCEDURE_TYPE_NOT_ALLOWED));
         }
         self.initial_value(ty, init)?;
-        let address = self.data_end;
-        let symbol = self.global_variable(d, ty, self.types.size(ty))?;
+        let address = self.symbols.data_end();
+        let size = self.types.size(ty);
+        let symbol = self.symbols.global_variable(ty, size);
+        let symbol = symbol.map_err(|error| self.symbol_error(d, error))?;
         self.typed_consts.push(TypedConst { address, ty, init });
         self.declare(d, name, symbol)?;
         Ok(())
@@ -616,42 +384,18 @@ impl Cx<'_> {
     fn var_decl(&mut self, d: Id, name: u32, type_name: u32) -> R<()> {
         let ty = self.type_of(d, type_name)?;
         let size = self.types.size(ty);
-        let symbol = if self.routine_stack.is_empty() {
-            self.global_variable(d, ty, size)?
+        let symbol = if self.symbols.is_nested() {
+            self.symbols.local_variable(&self.types, ty, size)
         } else {
-            self.local_variable(d, ty, size)?
+            self.symbols.global_variable(ty, size)
         };
+        let symbol = symbol.map_err(|error| self.symbol_error(d, error))?;
         self.declare(d, name, symbol)?;
         Ok(())
     }
 
-    /// A global lives at the next free static address.
-    fn global_variable(&mut self, d: Id, ty: Ty, size: u32) -> R<Symbol> {
-        let address = self.data_end;
-        self.data_end += size;
-        if self.data_end - GLOBALS > MAX_DATA {
-            return Err(self.err(d, code::TOO_MANY_VARIABLES));
-        }
-        Ok(Symbol::new(SymKind::Var(address), ty))
-    }
-
-    /// A local is the next WASM local; aggregates and other in-memory types always live in
-    /// the frame.
-    fn local_variable(&mut self, d: Id, ty: Ty, size: u32) -> R<Symbol> {
-        let index = self.next_local;
-        self.next_local += 1;
-        self.local_bytes += size;
-        if self.local_bytes > MAX_DATA {
-            return Err(self.err(d, code::TOO_MANY_VARIABLES));
-        }
-        Ok(Symbol {
-            needs_frame_slot: self.types.in_memory(ty),
-            ..Symbol::new(SymKind::Local(index), ty)
-        })
-    }
-
     fn type_of(&self, at: Id, name: u32) -> R<Ty> {
-        match self.lookup_symbol(name) {
+        match self.symbols.lookup_symbol(name) {
             None => Err(self.err(at, code::UNKNOWN_IDENTIFIER)),
             Some((_, symbol)) => match symbol.kind {
                 SymKind::Type => Ok(symbol.ty),
@@ -688,7 +432,7 @@ impl Cx<'_> {
         let members = self.ast.items_vec(names);
         let ty = self.types.enumeration(members.len() as i64);
         for (ordinal, id) in members.into_iter().enumerate() {
-            let name = self.name_of(id);
+            let name = name_of(self.ast, id);
             let value = SymKind::Const(ConstValue::Int(ordinal as i64));
             self.declare(id, name, Symbol::new(value, ty))?;
         }
@@ -881,7 +625,7 @@ impl Cx<'_> {
     fn check_import_signature(&self, d: Id, signature: &Signature) -> R<()> {
         let passed_by_value =
             |p: &ParamType| !p.by_ref && !self.types.is_agg(p.ty) && !self.types.is_str(p.ty);
-        let nested = !self.routine_stack.is_empty();
+        let nested = self.symbols.is_nested();
         let result_is_i32 = !self.types.in_memory(signature.result);
         if nested || !result_is_i32 || !signature.params.iter().all(passed_by_value) {
             return Err(self.err(d, code::NOT_SUPPORTED));
@@ -932,21 +676,17 @@ impl Cx<'_> {
         signature: Signature,
         block: Option<Id>,
     ) -> R<usize> {
-        let existing = self.scope[self.first_user_scope..]
-            .iter()
-            .find(|e| e.0 == name)
-            .map(|e| self.symbol(e.1));
-        match existing.map(|s| s.kind) {
+        match self.symbols.lookup_in_region(name).map(|s| s.kind) {
             None => {
                 if signature.is_function && signature.result == Ty::NONE {
                     return Err(self.err(d, code::COLON_EXPECTED));
                 }
-                let depth = self.routine_stack.len() as u32 + 1;
+                let depth = self.symbols.depth() + 1;
                 let result_ptr = self.types.in_memory(signature.result);
-                let builtin = self.first_user_scope == 0;
+                let builtin = self.symbols.in_system_region();
                 self.routines
                     .push(Routine::new(signature, depth, result_ptr, builtin));
-                if let Some(&parent) = self.routine_stack.last() {
+                if let Some(parent) = self.symbols.current_routine() {
                     self.routines[parent].has_children = true;
                 }
                 let index = self.routines.len() - 1;
@@ -991,26 +731,6 @@ impl Cx<'_> {
         Ok(())
     }
 
-    fn enter_routine(&mut self, r: usize) -> SavedScope {
-        let saved = SavedScope {
-            scope_len: self.scope.len(),
-            first_user_scope: self.first_user_scope,
-            next_local: self.next_local,
-            local_bytes: std::mem::take(&mut self.local_bytes),
-        };
-        self.first_user_scope = saved.scope_len;
-        self.routine_stack.push(r);
-        saved
-    }
-
-    fn leave_routine(&mut self, saved: SavedScope) {
-        self.routine_stack.pop();
-        self.scope.truncate(saved.scope_len);
-        self.first_user_scope = saved.first_user_scope;
-        self.next_local = saved.next_local;
-        self.local_bytes = saved.local_bytes;
-    }
-
     /// Checks the body of routine `r`: its parameters and result become locals (hidden
     /// parameters first), then its declarations and statements are checked, and finally
     /// `place_frame` decides which locals move to the frame.
@@ -1019,53 +739,34 @@ impl Cx<'_> {
             unreachable!("the parser makes a block")
         };
         self.routines[r].defined = true;
-        let first_symbol = self.syms.len();
-        let saved = self.enter_routine(r);
+        let first_symbol = self.symbols.symbol_count();
         let first_param = self.routines[r].hidden_params();
-        self.next_local = first_param + self.routines[r].params.len() as u32;
-        let declared_params = self.next_local;
+        let declared_params = first_param + self.routines[r].params.len() as u32;
+        let saved = self.symbols.enter_routine(r, declared_params);
         if self.routines[r].is_function {
-            self.declare_result(r);
+            self.routines[r].result_sym = self.symbols.declare_result(&self.routines[r]);
         }
         self.declare_params(r, block, first_param)?;
         for decl in self.ast.items_vec(declarations) {
             self.decl(decl)?;
         }
         self.resolve_forward(body)?;
-        if self.scope[saved.scope_len..].iter().any(|e| {
-            let SymKind::Routine(callee) = self.symbol(e.1).kind else {
+        let left_undefined = self.symbols.declared_since(&saved).any(|s| {
+            let SymKind::Routine(callee) = s.kind else {
                 return false;
             };
             !self.routines[callee as usize].defined
-        }) {
+        });
+        if left_undefined {
             return Err(self.err(body, code::UNDEFINED_FORWARD));
         }
         self.stmt(body)?;
         self.routines[r].body = body;
-        self.routines[r].nlocals = self.next_local - declared_params;
-        self.place_frame(r, first_symbol);
-        self.leave_routine(saved);
+        self.routines[r].nlocals = self.symbols.next_local() - declared_params;
+        self.symbols
+            .place_frame(&mut self.routines[r], first_symbol, &self.types);
+        self.symbols.leave_routine(saved);
         Ok(())
-    }
-
-    /// The function result is a hidden parameter holding its address when it lives in
-    /// memory, otherwise a local after the parameters. It has no name: assignments to the
-    /// function's own name are redirected to it.
-    fn declare_result(&mut self, r: usize) {
-        let routine = &self.routines[r];
-        let ty = routine.result;
-        let kind = if routine.result_ptr {
-            SymKind::Ref(routine.has_static_link() as u32)
-        } else {
-            let index = self.next_local;
-            self.next_local += 1;
-            SymKind::Local(index)
-        };
-        self.routines[r].result_sym = Sym(self.syms.len() as u32);
-        self.syms.push(Symbol {
-            depth: self.routine_stack.len() as u32,
-            ..Symbol::new(kind, ty)
-        });
     }
 
     /// Declares the parameters as locals, the first one being local `first_param`.
@@ -1074,76 +775,10 @@ impl Cx<'_> {
         let names = self.routines[r].names.clone();
         for (i, (&name, param)) in names.iter().zip(&params).enumerate() {
             let index = first_param + i as u32;
-            let kind = if param.by_ref {
-                SymKind::Ref(index)
-            } else {
-                SymKind::Local(index)
-            };
-            let symbol = Symbol {
-                needs_frame_slot: !param.by_ref && self.types.in_memory(param.ty),
-                ..Symbol::new(kind, param.ty)
-            };
+            let symbol = Symbols::parameter(&self.types, index, param.ty, param.by_ref);
             self.declare(block, name, symbol)?;
         }
         Ok(())
-    }
-
-    /// Moves the locals that need a frame slot (symbols of this routine from `first_symbol`
-    /// on) to the frame, in declaration order with no padding. A routine with a static link
-    /// keeps it in the first 4 bytes. A `var` parameter keeps its address in the frame. A
-    /// parameter moved this way is copied there by the prologue (`FrameCopy`).
-    fn place_frame(&mut self, r: usize, first_symbol: usize) {
-        let depth = self.routine_stack.len() as u32;
-        let routine = &self.routines[r];
-        let parameter_locals = routine.params.len() as u32 + routine.hidden_params();
-        let mut size = if routine.has_static_link() {
-            STATIC_LINK_BYTES
-        } else {
-            0
-        };
-        let first_slot = size;
-        let mut copies = Vec::new();
-        for s in &mut self.syms[first_symbol..] {
-            if s.depth != depth || !s.needs_frame_slot {
-                continue;
-            }
-            let (is_ref, local) = match s.kind {
-                SymKind::Local(local) => (false, local),
-                SymKind::Ref(local) => (true, local),
-                _ => continue,
-            };
-            // A `var` parameter's frame slot holds its 4-byte address.
-            let ty = if is_ref { Ty::LONGINT } else { s.ty };
-            if local < parameter_locals {
-                copies.push(FrameCopy {
-                    local,
-                    offset: size,
-                    ty,
-                });
-            }
-            s.kind = if is_ref {
-                SymKind::FrameRef(size)
-            } else {
-                SymKind::Frame(size)
-            };
-            size += self.types.size(ty);
-        }
-        let routine = &mut self.routines[r];
-        routine.framed = size > first_slot || routine.has_children;
-        routine.frame = size;
-        routine.copies = copies;
-    }
-
-    /// A reference to `sym` from the current routine: a `Local` or `Ref` of an enclosing
-    /// routine is captured, a `Local` passed as a `var` argument is address-taken; both move
-    /// it to the frame.
-    fn capture(&mut self, sym: Sym, by_ref: bool) {
-        let depth = self.routine_stack.len() as u32;
-        let symbol = &mut self.syms[sym.0 as usize];
-        let is_local_or_ref = matches!(symbol.kind, SymKind::Local(_) | SymKind::Ref(_));
-        let used_by_nested_routine = is_local_or_ref && symbol.depth < depth;
-        let passed_by_reference = by_ref && matches!(symbol.kind, SymKind::Local(_));
-        symbol.needs_frame_slot |= used_by_nested_routine || passed_by_reference;
     }
 
     // ---- Variable and procedural arguments ----
@@ -1170,7 +805,7 @@ impl Cx<'_> {
             Kind::Deref(_) => None,
             Kind::Index { base, .. } | Kind::Field(base, _) => self.var_arg_error(base),
             Kind::Name(name) if self.with_field(name).is_some() => None,
-            Kind::Name(name) => match self.lookup_symbol(name) {
+            Kind::Name(name) => match self.symbols.lookup_symbol(name) {
                 None => Some(code::UNKNOWN_IDENTIFIER),
                 Some((_, s)) if s.kind == SymKind::Omitted => Some(code::NOT_SUPPORTED),
                 Some((_, s)) if s.kind.is_variable() => None,
@@ -1182,7 +817,7 @@ impl Cx<'_> {
 
     /// The error for a function name used where a variable is wanted.
     fn function_reference_error(&self, name: u32, is_call: bool) -> u16 {
-        match self.lookup_symbol(name).map(|(_, s)| s.kind) {
+        match self.symbols.lookup_symbol(name).map(|(_, s)| s.kind) {
             Some(SymKind::Routine(r)) if self.routines[r as usize].is_function => {
                 let takes_arguments = !self.routines[r as usize].params.is_empty();
                 if is_call || !takes_arguments {
@@ -1219,7 +854,7 @@ impl Cx<'_> {
         if symbol.ty != ty {
             return Err(self.err(at, code::TYPE_MISMATCH));
         }
-        self.capture(sym, true);
+        self.symbols.capture(sym, true);
         self.ast.resolve(arg, Kind::Var(sym), ty);
         Ok(())
     }
@@ -1255,7 +890,7 @@ impl Cx<'_> {
                 if symbol.ty != want {
                     return Err(self.err(at, code::TYPE_MISMATCH));
                 }
-                self.capture(sym, false);
+                self.symbols.capture(sym, false);
                 Kind::Var(sym)
             }
             _ => return Err(self.err(e, code::VARIABLE_EXPECTED)),
@@ -1276,6 +911,7 @@ impl Cx<'_> {
     /// The symbol a name refers to; a predefined type this compiler omits is error 200.
     fn resolve(&self, id: Id, name: u32) -> R<(Sym, Symbol)> {
         let (sym, symbol) = self
+            .symbols
             .lookup_symbol(name)
             .ok_or(self.err(id, code::UNKNOWN_IDENTIFIER))?;
         match symbol.kind {
@@ -1388,8 +1024,8 @@ impl Cx<'_> {
 
     /// The control variable must be a local of this routine or a global of ordinal type.
     fn for_statement(&mut self, id: Id, variable: Id, first: Id, last: Id, body: Id) -> R<()> {
-        let (sym, symbol) = self.resolve(variable, self.name_of(variable))?;
-        let is_outer = symbol.depth < self.routine_stack.len() as u32;
+        let (sym, symbol) = self.resolve(variable, name_of(self.ast, variable))?;
+        let is_outer = symbol.depth < self.symbols.depth();
         let is_reference = matches!(symbol.kind, SymKind::Ref(_));
         let is_outer_local = matches!(symbol.kind, SymKind::Local(_)) && is_outer;
         if is_reference
@@ -1423,13 +1059,13 @@ impl Cx<'_> {
         let (sym, symbol) = self.resolve(target, name)?;
         let (kind, ty) = match symbol.kind {
             kind if kind.is_variable() => {
-                self.capture(sym, false);
+                self.symbols.capture(sym, false);
                 (Kind::Var(sym), symbol.ty)
             }
             // Assigning to the name of the function being defined sets its result.
             SymKind::Routine(r) if self.is_enclosing_function(r) => {
                 let result = self.routines[r as usize].result_sym;
-                self.capture(result, false);
+                self.symbols.capture(result, false);
                 (Kind::Var(result), self.routines[r as usize].result)
             }
             SymKind::Routine(r) if self.routines[r as usize].is_function => {
@@ -1444,7 +1080,7 @@ impl Cx<'_> {
 
     /// True if routine `r` is a function being defined now (this one or one around it).
     fn is_enclosing_function(&self, r: u32) -> bool {
-        self.routine_stack.contains(&(r as usize)) && self.routines[r as usize].is_function
+        self.symbols.is_being_checked(r as usize) && self.routines[r as usize].is_function
     }
 
     /// `at` is the assignment of `value` to a target of type `ty`.
@@ -1475,7 +1111,7 @@ impl Cx<'_> {
     /// rewritten to what codegen expects: `Invoke`, `Indirect`, `Write`, `Exit`, or the
     /// assignment of a helper's result (see the module comment).
     fn call_statement(&mut self, id: Id, callee: Id, args: List) -> R<()> {
-        let (_, symbol) = self.resolve(callee, self.name_of(callee))?;
+        let (_, symbol) = self.resolve(callee, name_of(self.ast, callee))?;
         let kind = match symbol.kind {
             SymKind::Intrinsic(i @ (Intrinsic::Write | Intrinsic::WriteLn)) => {
                 for arg in self.ast.items_vec(args) {
@@ -1595,9 +1231,9 @@ impl Cx<'_> {
         args: List,
         in_expr: bool,
     ) -> R<Kind> {
-        let (sym, symbol) = self.resolve(callee, self.name_of(callee))?;
+        let (sym, symbol) = self.resolve(callee, name_of(self.ast, callee))?;
         self.arguments(at, params, args, in_expr, false)?;
-        self.capture(sym, false);
+        self.symbols.capture(sym, false);
         self.ast.resolve(callee, Kind::Var(sym), symbol.ty);
         Ok(Kind::Indirect(callee, args))
     }
@@ -1736,7 +1372,7 @@ impl Cx<'_> {
             Kind::AddrOf(operand) => {
                 self.expr(operand)?;
                 match self.ast.kind(operand) {
-                    Kind::Var(sym) => self.capture(sym, true),
+                    Kind::Var(sym) => self.symbols.capture(sym, true),
                     Kind::Index { .. } | Kind::Field(..) | Kind::Deref(_) => {}
                     _ => return Err(self.err(e, code::VARIABLE_EXPECTED)),
                 }
@@ -1828,7 +1464,7 @@ impl Cx<'_> {
                     (self.indirect(e, callee, params, no_args, true)?, result)
                 }
                 None => {
-                    self.capture(sym, false);
+                    self.symbols.capture(sym, false);
                     (Kind::Var(sym), symbol.ty)
                 }
             },
@@ -1859,7 +1495,7 @@ impl Cx<'_> {
     /// `name(args)` in an expression: a function, a procedural variable, an intrinsic, or a
     /// type cast.
     fn call_expr(&mut self, e: Id, callee: Id, args: List) -> R<(Kind, Ty)> {
-        let (_, symbol) = self.resolve(callee, self.name_of(callee))?;
+        let (_, symbol) = self.resolve(callee, name_of(self.ast, callee))?;
         Ok(match symbol.kind {
             SymKind::Routine(r) => {
                 let call = self.function_call(e, callee, r, args)?;
@@ -1890,7 +1526,7 @@ impl Cx<'_> {
     /// System's `Length` of a string constant is a constant.
     fn folded_length(&self, callee: Id, r: u32, args: List) -> Option<(Kind, Ty)> {
         let is_length = self.routines[r as usize].builtin
-            && self.ast.names[self.name_of(callee) as usize] == b"LENGTH";
+            && self.ast.names[name_of(self.ast, callee) as usize] == b"LENGTH";
         let Kind::StrLit(s) = self.ast.kind(*self.ast.items(args).first()?) else {
             return None;
         };
