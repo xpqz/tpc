@@ -102,11 +102,11 @@ test("print: text, CR, LF and the cursor", () => {
   assert.equal(grid[1], 7, "attribute stays light grey on black");
 });
 
-test("print: LF alone moves down without returning to column 0, fd 2 draws too", () => {
+test("print: LF alone starts the next row in column 0, fd 2 draws too", () => {
   const { grid, out } = screen();
   out(1, bytes("ab\ncd"));
   out(2, bytes("!"));
-  assert.equal(rowText(grid, 1), "  cd!");
+  assert.equal(rowText(grid, 1), "cd!");
 });
 
 test("print: backspace moves left, stops at column 0, bell is silent", () => {
