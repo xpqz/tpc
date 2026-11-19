@@ -341,3 +341,13 @@ error-table work goes in data, not checker logic); codegen ~1,080; Rust compiler
 ~3,965 under the 10,000. If the checker would pass 2,200, cut Phase 5 scope (candidates:
 `{$I-}` file-local tracking, qualified names `U.X` beyond the plan, typed-constant edge
 cases) before compressing code.
+
+## 34. Symbols and frame layout move to their plan component
+
+Plan §1 budgets "Types, symbols, frame layout" (1,400) separately from the checker
+(2,200), but the scope stack, storage choice and frame placement were written in
+check.rs. #57 moves them into symbols.rs under the types component. Conditions: symbols.rs
+owns its state and never depends on the checker (guarded by a test); limits are
+unchanged; behaviour is byte-identical. Measured before the move: about 165 checker lines.
+Checker allowances for #52-#54 are set at each RED verdict at ~1.5x the implementer's
+estimate, with negatives pruned there.
