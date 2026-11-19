@@ -9,7 +9,6 @@
 //! the line of the element.
 mod common;
 mod driver;
-mod sysutil;
 use driver::*;
 use std::path::{Path, PathBuf};
 
