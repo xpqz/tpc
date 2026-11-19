@@ -8,6 +8,7 @@
 //! variable `TP5_NOW_MS`. Those expectations are calendar facts (weekdays and leap years
 //! worked out independently of the runtime), not TP output.
 mod common;
+use common::OutputGuarded as _;
 mod driver;
 use common::node;
 use driver::*;
@@ -104,7 +105,7 @@ fn run_with_clock(dir: &Path, now_ms: u64) -> String {
         .arg(root().join("tests/run.mjs"))
         .arg(dir.join("clock.wasm"))
         .env("TP5_NOW_MS", now_ms.to_string())
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     String::from_utf8(o.stdout).unwrap()
@@ -129,7 +130,7 @@ fn the_runner_clock_defaults_to_the_real_time() {
         .arg(root().join("tests/run.mjs"))
         .arg(dir.join("clock.wasm"))
         .env_remove("TP5_NOW_MS")
-        .output()
+        .output_guarded()
         .unwrap();
     let out = String::from_utf8(o.stdout).unwrap();
     let year: u32 = out.split('-').next().unwrap().parse().unwrap();

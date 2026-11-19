@@ -2,6 +2,7 @@
 //! script option `--keys`, and the screen dump printed after a program that imports `screen`
 //! (decisions 37 to 39, docs/abi.md section 8).
 mod common;
+use common::OutputGuarded as _;
 use common::*;
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -131,7 +132,7 @@ fn run(name: &str, wasm: &[u8], keys: Option<&str>, now_ms: &str) -> Output {
         std::fs::write(&k, text).unwrap();
         cmd.arg("--keys").arg(k);
     }
-    cmd.arg(w).output().expect("node must be installed")
+    cmd.arg(w).output_guarded().expect("node must be installed")
 }
 
 fn stdout(o: &Output) -> String {
@@ -316,7 +317,7 @@ fn a_missing_key_script_file_is_a_runner_error() {
         .arg("--keys")
         .arg(scratch("does_not_exist.keys"))
         .arg(w)
-        .output()
+        .output_guarded()
         .unwrap();
     assert_eq!(o.status.code(), Some(2));
     assert!(stderr(&o).contains("cannot read"), "{}", stderr(&o));

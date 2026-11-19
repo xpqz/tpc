@@ -1,8 +1,68 @@
 #![allow(dead_code)]
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
+
+/// How long a child process of a test may run. A child that outlives it is hung, not slow: the
+/// longest legitimate one (the IDE tests) takes seconds.
+const CHILD_DEADLINE: Duration = Duration::from_secs(300);
+
+/// Hang guard for the node children of the tests: `output_guarded` is `Command::output` that
+/// kills the child at the deadline and fails with the output it had written, so a hung child
+/// fails one test instead of stalling the whole run. The deadline is never what a test asserts.
+pub trait OutputGuarded {
+    fn output_guarded(&mut self) -> std::io::Result<Output>;
+}
+
+impl OutputGuarded for Command {
+    fn output_guarded(&mut self) -> std::io::Result<Output> {
+        let child = self
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        wait_within_deadline(child, CHILD_DEADLINE)
+    }
+}
+
+/// Reads a pipe to its end on a thread of its own, so a full pipe never blocks the child.
+fn drain(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = pipe.read_to_end(&mut bytes);
+        bytes
+    })
+}
+
+/// Waits for `child` (stdout and stderr piped); at `deadline` kills it and panics with its output.
+pub fn wait_within_deadline(mut child: Child, deadline: Duration) -> std::io::Result<Output> {
+    let stdout = drain(child.stdout.take().unwrap());
+    let stderr = drain(child.stderr.take().unwrap());
+    let (done, finished) = std::sync::mpsc::channel();
+    let pid = child.id();
+    let waiter = std::thread::spawn(move || {
+        let status = child.wait();
+        let _ = done.send(());
+        status
+    });
+    if finished.recv_timeout(deadline).is_err() {
+        // The waiter owns the child; killing by id ends it and so ends the waiter and the pipes.
+        let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+        let _ = waiter.join();
+        panic!(
+            "child process hung for {deadline:?} and was killed\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&stdout.join().unwrap()),
+            String::from_utf8_lossy(&stderr.join().unwrap())
+        );
+    }
+    Ok(Output {
+        status: waiter.join().unwrap()?,
+        stdout: stdout.join().unwrap(),
+        stderr: stderr.join().unwrap(),
+    })
+}
 
 pub const HEADER: [u8; 8] = [0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00];
 
@@ -89,7 +149,7 @@ pub fn node(js: &str, wasm: &[u8]) -> String {
         .unwrap()
         .write_all(hex.as_bytes())
         .unwrap();
-    let out = child.wait_with_output().unwrap();
+    let out = wait_within_deadline(child, CHILD_DEADLINE).unwrap();
     assert!(
         out.status.success(),
         "node failed: {}",

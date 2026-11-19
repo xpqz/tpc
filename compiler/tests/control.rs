@@ -3,6 +3,7 @@
 //! re-derives them with `tools/tp5.sh`). The target corpus programs are copied without
 //! PENDING into a scratch directory and checked with the real compiler.
 mod common;
+use common::OutputGuarded as _;
 mod driver;
 use driver::*;
 use std::path::PathBuf;
@@ -321,7 +322,7 @@ fn run_wasm(name: &str, wasm: &[u8]) -> Result<Vec<u8>, String> {
     let out = Command::new("node")
         .arg(root().join("tests/run.mjs"))
         .arg(&path)
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     if out.status.success() {
         Ok(out.stdout)
@@ -392,7 +393,7 @@ fn runtime_errors_print_before_then_error_200() {
         let out = Command::new("node")
             .arg(root().join("tests/run.mjs"))
             .arg(&path)
-            .output()
+            .output_guarded()
             .unwrap();
         let text = String::from_utf8_lossy(&out.stdout).into_owned();
         if text != "before\nRuntime error 200\n" || out.status.code() != Some(200) {
@@ -420,7 +421,7 @@ fn oracle_agrees() {
         std::fs::write(&p, [src, "\n"].concat()).unwrap();
         let o = Command::new(root().join("tools/tp5.sh"))
             .arg(&p)
-            .output()
+            .output_guarded()
             .unwrap();
         String::from_utf8_lossy(&o.stdout).into_owned()
     };

@@ -1,6 +1,8 @@
 //! Tooling for the IDE (decisions 40 to 44): the TP 5.0 limit probes (tests/ide/limits) against
 //! this compiler. The tp_only probes are not run here: they record
 //! what only the real Turbo Pascal does.
+mod common;
+use common::OutputGuarded as _;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -12,7 +14,7 @@ fn node(args: &[&str]) {
     let o = Command::new("node")
         .args(args)
         .current_dir(root())
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     assert!(
         o.status.success(),
@@ -37,7 +39,7 @@ fn limit_probes_give_the_same_output_as_real_turbo_pascal() {
             .arg(&src)
             .arg("-o")
             .arg(&wasm)
-            .output()
+            .output_guarded()
             .unwrap();
         assert!(
             compile.status.success(),

@@ -37,9 +37,15 @@ function virtualClock() {
 
 export const CANNED = "canned";
 
+// Compiles and instantiates synchronously. The asynchronous WebAssembly.compile and
+// instantiate hand the work to V8's background threads, and under load (parallel test
+// processes) a big module's compile then sometimes never completes on Node 23.
+export function instantiate(bytes, imports) {
+  return new WebAssembly.Instance(new WebAssembly.Module(bytes), imports);
+}
+
 export async function loadCompiler(path) {
-  const { instance } = await WebAssembly.instantiate(read(path), {});
-  return new Compiler(instance);
+  return new Compiler(instantiate(read(path), {}));
 }
 
 // Runs a compiled program inside the IDE's call: a second Host shares the IDE's screen, keys
@@ -86,7 +92,7 @@ export async function run(
   bytes, { files = null, input = null, keys = null, compiler = null, onSaved } = {}) {
   let module;
   try {
-    module = await WebAssembly.compile(bytes);
+    module = new WebAssembly.Module(bytes);
   } catch (e) {
     throw new RunnerError(`invalid wasm: ${e.message}`);
   }
@@ -115,7 +121,7 @@ export async function run(
       throw new RunnerError(`missing export ${name}`);
     }
   }
-  const instance = await WebAssembly.instantiate(module, { host: host.imports });
+  const instance = new WebAssembly.Instance(module, { host: host.imports });
   host.attach(instance);
   const sp = instance.exports.sp;
   const sp0 = sp?.value;

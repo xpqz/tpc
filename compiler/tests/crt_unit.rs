@@ -9,6 +9,7 @@
 //! dump. The virtual clock of `Delay` is not observable in TP 5.0 (decision 38), so those
 //! expectations are arithmetic on a fixed clock (`TP5_NOW_MS`), not TP output.
 mod common;
+use common::OutputGuarded as _;
 mod driver;
 use common::node;
 use driver::*;
@@ -201,7 +202,7 @@ fn run_measure(ms: u32, now_ms: u64) -> String {
         .arg(root().join("tests/run.mjs"))
         .arg(dir.join("measure.wasm"))
         .env("TP5_NOW_MS", now_ms.to_string())
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     String::from_utf8(o.stdout).unwrap()

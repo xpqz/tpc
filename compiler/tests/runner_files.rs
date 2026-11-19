@@ -124,7 +124,7 @@ fn run(wasm: &[u8], args: &[&str], stdin: Option<&[u8]>) -> Output {
         pipe.write_all(bytes).unwrap();
     }
     drop(pipe);
-    child.wait_with_output().unwrap()
+    wait_within_deadline(child, std::time::Duration::from_secs(300)).unwrap()
 }
 
 fn dir_args() -> Vec<String> {

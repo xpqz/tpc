@@ -15,6 +15,7 @@
 //! Measured but not pinned: a variable named like a used unit is error 4 (unit names are
 //! identifiers of the `uses` part's scope).
 mod common;
+use common::OutputGuarded as _;
 mod driver;
 use driver::*;
 use std::path::{Path, PathBuf};
@@ -210,7 +211,7 @@ fn tp5c(cwd: &Path, args: &[&str]) -> (i32, String) {
     let o = Command::new(env!("CARGO_BIN_EXE_tp5c"))
         .current_dir(cwd)
         .args(args)
-        .output()
+        .output_guarded()
         .unwrap();
     (
         o.status.code().unwrap_or(-1),
@@ -222,7 +223,7 @@ fn run(dir: &Path, wasm: &str) -> String {
     let o = Command::new("node")
         .arg(root().join("tests/run.mjs"))
         .arg(dir.join(wasm))
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     String::from_utf8(o.stdout).unwrap()
@@ -350,7 +351,7 @@ fn unit_initialisation_is_kept_though_nothing_else_of_the_unit_is_used() {
 fn wasm_api_registers_files_and_reports_the_file_of_an_error() {
     let target = Command::new("sh")
         .arg(root().join("scripts/cargo-target.sh"))
-        .output()
+        .output_guarded()
         .unwrap();
     let target = String::from_utf8(target.stdout).unwrap();
     let target = target.trim();
@@ -380,7 +381,7 @@ fn wasm_api_registers_files_and_reports_the_file_of_an_error() {
         .arg(neg.join("error_inside_a_unit_names_the_unit_file.pas"))
         .arg(fx("neg/interface_cycle_of_three_units.pas"))
         .arg(neg.join("unit_not_found.pas"))
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     assert!(
         out.status.success(),

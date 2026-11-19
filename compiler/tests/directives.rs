@@ -25,6 +25,7 @@
 //! - a `{$R+}` or `{$R-}` in an include stays in force after it; one in a unit does not reach
 //!   the program.
 mod common;
+use common::OutputGuarded as _;
 mod driver;
 use driver::*;
 use std::path::{Path, PathBuf};
@@ -203,7 +204,7 @@ fn tp5c(cwd: &Path, args: &[&str]) -> (i32, String) {
     let o = Command::new(env!("CARGO_BIN_EXE_tp5c"))
         .current_dir(cwd)
         .args(args)
-        .output()
+        .output_guarded()
         .unwrap();
     (
         o.status.code().unwrap_or(-1),
@@ -215,7 +216,7 @@ fn run(dir: &Path, wasm: &str) -> String {
     let o = Command::new("node")
         .arg(root().join("tests/run.mjs"))
         .arg(dir.join(wasm))
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     String::from_utf8(o.stdout).unwrap()
@@ -365,7 +366,7 @@ fn a_program_with_only_taken_branches_equals_the_same_program_without_directives
 fn wasm_api_reads_include_files_from_the_file_table_and_reports_their_file() {
     let target = Command::new("sh")
         .arg(root().join("scripts/cargo-target.sh"))
-        .output()
+        .output_guarded()
         .unwrap();
     let target = String::from_utf8(target.stdout).unwrap();
     let target = target.trim();
@@ -395,7 +396,7 @@ fn wasm_api_reads_include_files_from_the_file_table_and_reports_their_file() {
             "neg/error_in_an_include_nested_in_an_include_names_the_inner_file.pas",
         ))
         .arg(fx("neg/include_inside_a_case_statement.pas"))
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     assert!(
         out.status.success(),

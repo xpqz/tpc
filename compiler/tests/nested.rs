@@ -3,6 +3,7 @@
 //! Corpus programs are copied without PENDING into a scratch directory and checked with the
 //! real compiler; expected output and `N LINE` come from the real TP 5.0 (`tools/tp5.sh`).
 mod common;
+use common::OutputGuarded as _;
 mod driver;
 use common::*;
 use driver::*;
@@ -260,7 +261,7 @@ fn run_source(name: &str, src: &str) -> (i32, String, String) {
     let o = Command::new("node")
         .arg(root().join("tests/run.mjs"))
         .arg(&path)
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     (
         o.status.code().unwrap_or(-1),
@@ -311,7 +312,7 @@ fn sp_follows_nested_frames() {
     let o = Command::new("node")
         .args(["--input-type=module", "-e", SP_SCRIPT])
         .arg(&path)
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let want = format!("{TOP} {TOP} {TOP},{},{},{TOP}\n", TOP - 2, TOP - 8);
@@ -349,7 +350,7 @@ fn sp_probe_reads_a_hand_built_module() {
     let o = Command::new("node")
         .args(["--input-type=module", "-e", SP_SCRIPT])
         .arg(&path)
-        .output()
+        .output_guarded()
         .unwrap();
     let want = format!("{TOP} {TOP} {},{TOP}\n", TOP - 8);
     assert_eq!(String::from_utf8_lossy(&o.stdout), want);
@@ -366,7 +367,7 @@ fn oracle_agrees() {
         std::fs::write(&p, src).unwrap();
         let o = Command::new(root().join("tools/tp5.sh"))
             .arg(&p)
-            .output()
+            .output_guarded()
             .unwrap();
         String::from_utf8_lossy(&o.stdout).into_owned()
     };

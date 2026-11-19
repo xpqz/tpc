@@ -1,4 +1,5 @@
 mod common;
+use common::OutputGuarded as _;
 use common::*;
 use std::process::Command;
 use tp5c::wasm::*;
@@ -30,7 +31,7 @@ fn emitted_ok_module_validates_and_passes_through_the_runner() {
         .arg(root.join("tests/run.mjs"))
         .arg(&path)
         .arg(root.join("tests/runner/ok.out"))
-        .output()
+        .output_guarded()
         .unwrap();
     assert_eq!(
         out.status.code(),
@@ -42,7 +43,7 @@ fn emitted_ok_module_validates_and_passes_through_the_runner() {
     let out = Command::new("node")
         .arg(root.join("tests/run.mjs"))
         .arg(&path)
-        .output()
+        .output_guarded()
         .unwrap();
     assert_eq!(out.stdout, b"OK\n");
 }

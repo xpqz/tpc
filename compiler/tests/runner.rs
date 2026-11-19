@@ -1,4 +1,5 @@
 mod common;
+use common::OutputGuarded as _;
 use common::*;
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -16,7 +17,7 @@ fn runner(args: &[&std::ffi::OsStr]) -> Output {
     Command::new("node")
         .arg(root().join("tests/run.mjs"))
         .args(args)
-        .output()
+        .output_guarded()
         .expect("node must be installed")
 }
 
@@ -464,7 +465,11 @@ fn js_api_run_returns_stdout_and_code() {
         root().join("tests/run.mjs").display(),
         p.display()
     );
-    let o = Command::new("node").arg("-e").arg(script).output().unwrap();
+    let o = Command::new("node")
+        .arg("-e")
+        .arg(script)
+        .output_guarded()
+        .unwrap();
     assert!(o.status.success(), "{}", stderr(&o));
     assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), r#"["ff0a",4]"#);
 }
@@ -475,7 +480,11 @@ fn importing_the_module_does_not_run_the_cli() {
         "import('{}').then(() => console.log('imported'))",
         root().join("tests/run.mjs").display()
     );
-    let o = Command::new("node").arg("-e").arg(script).output().unwrap();
+    let o = Command::new("node")
+        .arg("-e")
+        .arg(script)
+        .output_guarded()
+        .unwrap();
     assert!(o.status.success(), "{}", stderr(&o));
     assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "imported");
 }

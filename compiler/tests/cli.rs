@@ -1,4 +1,5 @@
 mod common;
+use common::OutputGuarded as _;
 mod driver;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -7,7 +8,7 @@ fn tp5c(cwd: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_tp5c"))
         .current_dir(cwd)
         .args(args)
-        .output()
+        .output_guarded()
         .unwrap()
 }
 
