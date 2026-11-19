@@ -628,3 +628,21 @@ repaints the whole screen through View (decision 47) instead of saving what it c
 Titles and items are typed-constant record tables. `CmdNew = 7` lives in Menu; `Show` is
 public so a test can look at an open menu (a program blocked in `ReadKey` fails the corpus).
 **Reason.** Smallest menu that covers the plan; no screen-saving code.
+
+## 49. IDE Files: names, questions, messages, modified flag (accepted, #79)
+
+**Decision.** `Files` keeps the current name (`NONAME.PAS` until the first Save). Typed names are
+upper-cased and get `.PAS` when they contain no `.`. Prompts and questions are on the status line:
+`Open file: `, `Save file as: ` (Enter accepts, Esc or an empty name cancels, 40 characters at
+most) and `Save changes to NAME? (Y/N)` (Y saves and goes on only if the save worked, N discards,
+Esc cancels, other keys ignored). Open asks for the name first, then the question when the text is
+modified, then loads. Messages: `File not found` (missing file or path, text and name unchanged),
+`File too large` (the Buffer is left empty and the name reset, so a Save cannot overwrite the old
+file with nothing), `Cannot read file`, `Saved NAME`, `Cannot write file` (name and modified state
+unchanged). Save always writes, also when unmodified. New asks the question when modified, then
+clears. `Buffer.Modified` is an exact flag set by every edit and cleared by Clear, Load and Save
+(`SetModified` for the start of a session). The status-line line editor is `View.ReadPrompt`,
+shared by Keys (find) and Files. Main calls `ResetKeys` after New and Open so block marks do not
+point into replaced text.
+**Reason.** The exact flag is simpler than a text fingerprint; one prompt editor, in View.
+**Rejected.** Hash fingerprint in Files (not exact); a copy of the prompt editor in Files.

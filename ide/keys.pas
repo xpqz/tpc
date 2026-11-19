@@ -34,7 +34,6 @@ uses Crt, Buffer, View;
 const
   PageLines = 23;       { the height of the edit area }
   NoMark = -1;
-  MaxFindText = 40;
   BackspaceKey = #8;
   TabKey = #9;
   CtrlL = #12;
@@ -213,41 +212,6 @@ end;
 
 { ---- Find ---- }
 
-{ Reads a line of text on the status line. Enter accepts (True), Esc cancels (False). }
-function ReadPromptLine(Prompt: string; var Text: string): Boolean;
-var
-  Key: Char;
-  Finished, Accepted: Boolean;
-begin
-  Finished := False;
-  Accepted := False;
-  Text := '';
-  while not Finished do
-  begin
-    SetMessage(Prompt + Text);
-    Paint;
-    Key := ReadKey;
-    if Key = EnterKey then
-    begin
-      Finished := True;
-      Accepted := True;
-    end
-    else if Key = EscKey then
-      Finished := True
-    else if Key = #0 then
-      Key := ReadKey
-    else if Key = BackspaceKey then
-    begin
-      if Length(Text) > 0 then
-        Text := Copy(Text, 1, Length(Text) - 1);
-    end
-    else if (Key >= ' ') and (Length(Text) < MaxFindText) then
-      Text := Text + Key;
-  end;
-  SetMessage('');
-  ReadPromptLine := Accepted;
-end;
-
 { True when the find text is in the buffer at Pos; capitals and small letters are equal. }
 function FindTextAt(Pos: LongInt): Boolean;
 var
@@ -287,7 +251,7 @@ procedure FindCommand;
 var
   Answer: string;
 begin
-  if ReadPromptLine('Find: ', Answer) then
+  if ReadPrompt('Find: ', Answer) then
   begin
     if Answer <> '' then
       FindText := Answer;
