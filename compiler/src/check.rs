@@ -63,6 +63,24 @@ impl Info {
 
 type R<T> = Result<T, Diag>;
 
+/// The file of a `Read` or `Write` and where its items begin.
+struct FileArg {
+    file: Id,
+    /// Index of the first item that is not the file itself.
+    first_item: usize,
+    /// The item at index 0 has already been checked as an expression (it was a variable that
+    /// turned out not to be a file).
+    first_item_checked: bool,
+}
+
+/// A record field reached by its bare name inside a `with`: the record's designator, and the
+/// field's type and byte offset.
+struct WithField {
+    record: Id,
+    ty: Ty,
+    offset: u32,
+}
+
 /// A parameter as declared, with the node that declares it.
 struct ParamDecl {
     node: Id,
@@ -359,9 +377,11 @@ impl Cx<'_> {
         }
         match self.ast.kind(d) {
             Kind::ConstDecl(name, value) => self.const_decl(d, name, value),
-            Kind::TypedConst(name, type_name, init) => {
-                self.typed_const_decl(d, name, type_name, init)
-            }
+            Kind::TypedConst {
+                name,
+                type_name,
+                init,
+            } => self.typed_const_decl(d, name, type_name, init),
             Kind::VarDecl(name, type_name) => self.var_decl(d, name, type_name),
             Kind::TypeDecl(name, spec) => {
                 let ty = self.spec(spec, name)?;
@@ -418,8 +438,8 @@ impl Cx<'_> {
         }
         match self.types.array_of(ty) {
             // `array_of` also describes a String; a String initialiser is a scalar one.
-            Some((_, lo, hi, elem)) if !self.types.is_str(ty) => {
-                self.array_initialiser(init, (hi - lo + 1) as usize, elem)
+            Some(array) if !self.types.is_str(ty) => {
+                self.array_initialiser(init, (array.hi - array.lo + 1) as usize, array.elem)
             }
             _ => self.scalar_initialiser(ty, init),
         }
@@ -984,26 +1004,26 @@ impl Cx<'_> {
         if let Some(error) = self.var_arg_error(arg) {
             return Err(self.err(arg, error));
         }
-        let named = match self.ast.kind(arg) {
-            Kind::Name(name) if self.with_field(name).is_none() => Some(name),
-            _ => None,
-        };
-        let Some(name) = named else {
-            // An argument the checker made itself (`Input`) is already resolved.
-            if !matches!(self.ast.kind(arg), Kind::Var(_)) {
-                self.expr(arg)?;
+        match self.ast.kind(arg) {
+            Kind::Name(name) if self.with_field(name).is_none() => {
+                let (sym, symbol) = self.resolve(arg, name)?;
+                if symbol.ty != ty {
+                    return Err(self.var_mismatch(at, ty));
+                }
+                self.symbols.capture(sym, true);
+                self.ast.resolve(arg, Kind::Var(sym), ty);
             }
-            if self.ast.ty(arg) != ty {
-                return Err(self.var_mismatch(at, ty));
+            kind => {
+                // A field, element or dereference is checked as an expression. An argument the
+                // checker made itself (`Input`) is already resolved.
+                if !matches!(kind, Kind::Var(_)) {
+                    self.expr(arg)?;
+                }
+                if self.ast.ty(arg) != ty {
+                    return Err(self.var_mismatch(at, ty));
+                }
             }
-            return Ok(());
-        };
-        let (sym, symbol) = self.resolve(arg, name)?;
-        if symbol.ty != ty {
-            return Err(self.var_mismatch(at, ty));
         }
-        self.symbols.capture(sym, true);
-        self.ast.resolve(arg, Kind::Var(sym), ty);
         Ok(())
     }
 
@@ -1047,11 +1067,11 @@ impl Cx<'_> {
         Ok(())
     }
 
-    /// The field `name` of an enclosing `with` record: its designator, type and offset.
-    fn with_field(&self, name: u32) -> Option<(Id, Ty, u32)> {
-        let found = |&(designator, ty): &(Id, Ty)| {
-            let (field_ty, offset) = self.types.field(ty, name)?;
-            Some((designator, field_ty, offset))
+    /// The field `name` of the innermost enclosing `with` record that has one.
+    fn with_field(&self, name: u32) -> Option<WithField> {
+        let found = |&(record, record_ty): &(Id, Ty)| {
+            let (ty, offset) = self.types.field(record_ty, name)?;
+            Some(WithField { record, ty, offset })
         };
         self.withs.iter().rev().find_map(found)
     }
@@ -1262,14 +1282,7 @@ impl Cx<'_> {
         let (_, symbol) = self.resolve(callee, self.ast.name_of(callee))?;
         let kind = match symbol.kind {
             SymKind::Intrinsic(i @ (Intrinsic::Write | Intrinsic::WriteLn)) => {
-                let items = self.ast.items_vec(args);
-                let (file, start, checked) = self.console_or_file(id, &items, false)?;
-                for (n, &arg) in items.iter().enumerate().skip(start) {
-                    self.write_arg(arg, checked && n == 0)?;
-                }
-                let mut parts = vec![file];
-                parts.extend(&items[start..]);
-                Kind::Write(self.ast.list(&parts), i == Intrinsic::WriteLn)
+                self.write_call(id, args, i == Intrinsic::WriteLn)?
             }
             SymKind::Intrinsic(i @ (Intrinsic::Read | Intrinsic::ReadLn)) => {
                 self.read_call(id, args, i == Intrinsic::ReadLn)?
@@ -1411,11 +1424,11 @@ impl Cx<'_> {
             return Ok(());
         }
         if self.types.is_agg(dest) {
-            // Name equivalence: only the very same type; sets need compatible bases.
-            let compatible_sets = self.types.is_set(dest) && self.types.compat(dest, node.ty);
             if self.types.is_file(dest) {
                 return Err(self.err(at, code::ILLEGAL_ASSIGNMENT));
             }
+            // Name equivalence: only the very same type; sets need compatible bases.
+            let compatible_sets = self.types.is_set(dest) && self.types.compat(dest, node.ty);
             if node.ty == dest || compatible_sets {
                 return Ok(());
             }
@@ -1467,6 +1480,15 @@ impl Cx<'_> {
         self.ast.resolve(e, kind, Ty::STRING);
     }
 
+    /// The types `Write` accepts: integers, Char, Boolean, Real, String and array of Char; not
+    /// enumerations, sets, records or pointers.
+    fn is_writable(&self, ty: Ty) -> bool {
+        let is_text_or_real =
+            self.types.is_str(ty) || self.types.is_char_array(ty) || ty == Ty::REAL;
+        let is_enum = self.types.tag(ty) == Some(Tag::Enum);
+        !is_enum && (is_text_or_real || self.types.tag(ty).is_some())
+    }
+
     /// One argument of `Write`/`WriteLn`: `value`, or `value : width [: decimals]`. `checked`
     /// says that `console_or_file` already checked the expression.
     fn write_arg(&mut self, arg: Id, checked: bool) -> R<()> {
@@ -1491,10 +1513,7 @@ impl Cx<'_> {
             self.expr(value)?;
         }
         let ty = self.ast.ty(value);
-        let is_text_or_real =
-            self.types.is_str(ty) || self.types.is_char_array(ty) || ty == Ty::REAL;
-        let is_enum = self.types.tag(ty) == Some(Tag::Enum);
-        if is_enum || (!is_text_or_real && self.types.tag(ty).is_none()) {
+        if !self.is_writable(ty) {
             return Err(self.err(value, code::CANNOT_READ_OR_WRITE));
         }
         if decimals.is_some() && ty != Ty::REAL {
@@ -1571,7 +1590,7 @@ impl Cx<'_> {
     /// `base[index]`: the base is an array or a string, the index of the index type.
     fn index_expr(&mut self, e: Id, base: Id, index: Id, continues: bool) -> R<(Kind, Ty)> {
         self.expr(base)?;
-        let Some((index_ty, lo, hi, element)) = self.types.array_of(self.ast.ty(base)) else {
+        let Some(array) = self.types.array_of(self.ast.ty(base)) else {
             let error = if continues {
                 code::RIGHT_BRACKET_EXPECTED
             } else {
@@ -1581,13 +1600,13 @@ impl Cx<'_> {
         };
         self.expr(index)?;
         let index_node = self.ast.node(index);
-        if !self.types.compat(index_ty, index_node.ty) {
+        if !self.types.compat(array.index, index_node.ty) {
             return Err(self.err(e, code::TYPE_MISMATCH));
         }
-        if matches!(index_node.kind, Kind::IntLit(c) if c < lo || c > hi) {
+        if matches!(index_node.kind, Kind::IntLit(c) if c < array.lo || c > array.hi) {
             return Err(self.err(e, code::CONSTANT_OUT_OF_RANGE));
         }
-        Ok((self.ast.kind(e), element))
+        Ok((self.ast.kind(e), array.elem))
     }
 
     /// `base.name` becomes the field at its byte offset.
@@ -1607,8 +1626,8 @@ impl Cx<'_> {
     /// when it is a function-valued procedural variable), or a function called without
     /// arguments.
     fn name_expr(&mut self, e: Id, name: u32) -> R<(Kind, Ty)> {
-        if let Some((record, ty, offset)) = self.with_field(name) {
-            return Ok((Kind::Field(record, offset), ty));
+        if let Some(field) = self.with_field(name) {
+            return Ok((Kind::Field(field.record, field.offset), field.ty));
         }
         let (sym, symbol) = self.resolve(e, name)?;
         Ok(match symbol.kind {
@@ -1674,17 +1693,19 @@ impl Cx<'_> {
                 Some((params, result)) => (self.indirect(e, callee, params, args, true)?, result),
                 None => return Err(self.err(e, code::RIGHT_PAREN_EXPECTED)),
             },
-            SymKind::Intrinsic(i) if i.unary_op().is_some() => {
-                let items = self.ast.items_vec(args);
-                if items.len() > 1 {
-                    return Err(self.err(e, code::RIGHT_PAREN_EXPECTED));
-                }
-                self.unary(e, i.unary_op().unwrap_or(Op::Ord), items[0])?
-            }
             SymKind::Intrinsic(Intrinsic::SizeOf) => self.size_of(e, args)?,
             SymKind::Intrinsic(Intrinsic::Concat) => self.concat(e, args)?,
+            SymKind::Intrinsic(i) => match i.unary_op() {
+                Some(op) => {
+                    let items = self.ast.items_vec(args);
+                    if items.len() > 1 {
+                        return Err(self.err(e, code::RIGHT_PAREN_EXPECTED));
+                    }
+                    self.unary(e, op, items[0])?
+                }
+                None => return Err(self.err(callee, code::ERROR_IN_EXPRESSION)),
+            },
             SymKind::Type => self.cast(e, symbol.ty, args)?,
-            SymKind::Intrinsic(_) => return Err(self.err(callee, code::ERROR_IN_EXPRESSION)),
             _ => return Err(self.err(e, code::RIGHT_PAREN_EXPECTED)),
         })
     }
@@ -1702,15 +1723,18 @@ impl Cx<'_> {
         Ok((Kind::Indirect(callee, args), result))
     }
 
-    /// System's `Length` of a string constant is a constant.
+    /// System's `Length` of a string constant is a constant. It is the only function that is
+    /// folded, so it is recognised by its name.
     fn folded_length(&self, callee: Id, r: u32, args: List) -> Option<(Kind, Ty)> {
-        let is_length = self.routines[r as usize].builtin
-            && self.ast.names[self.ast.name_of(callee) as usize] == b"LENGTH";
+        let name = &self.ast.names[self.ast.name_of(callee) as usize];
+        if !self.routines[r as usize].builtin || name != b"LENGTH" {
+            return None;
+        }
         let Kind::StrLit(s) = self.ast.kind(*self.ast.items(args).first()?) else {
             return None;
         };
         let length = self.ast.strs[s as usize].len() as i64;
-        is_length.then(|| (Kind::IntLit(length), self.types.const_ty(length)))
+        Some((Kind::IntLit(length), self.types.const_ty(length)))
     }
 
     /// `[a, b..c]`: the base type is the type of the elements, which must agree.
@@ -1901,15 +1925,17 @@ impl Cx<'_> {
 
     /// The file of `Read` and `Write`: a leading variable of type Text, else the console. A
     /// write to the console passes the file address 0, a read the console file `Input`.
-    /// Returns the file node, the index of the first item and whether that item has been
-    /// checked (it was a variable of another type).
-    fn console_or_file(&mut self, at: Id, items: &[Id], reading: bool) -> R<(Id, usize, bool)> {
+    fn console_or_file(&mut self, at: Id, items: &[Id], reading: bool) -> R<FileArg> {
         let first = items.first().copied();
         let variable = first.filter(|&e| self.var_arg_error(e).is_none());
         if let Some(first) = variable {
             self.expr(first)?;
             if self.types.is_file(self.ast.ty(first)) {
-                return Ok((first, 1, false));
+                return Ok(FileArg {
+                    file: first,
+                    first_item: 1,
+                    first_item_checked: false,
+                });
             }
         }
         let console = if reading {
@@ -1917,7 +1943,11 @@ impl Cx<'_> {
         } else {
             self.ast.typed(Kind::IntLit(0), Ty::LONGINT, at)
         };
-        Ok((console, 0, variable.is_some()))
+        Ok(FileArg {
+            file: console,
+            first_item: 0,
+            first_item_checked: variable.is_some(),
+        })
     }
 
     /// A reference to System's `Input`.
@@ -1925,15 +1955,35 @@ impl Cx<'_> {
         self.ast.typed(Kind::Var(self.input), self.types.text, at)
     }
 
+    /// `Write(f, a, b)`: the file node followed by the checked items.
+    fn write_call(&mut self, at: Id, args: List, newline: bool) -> R<Kind> {
+        let items = self.ast.items_vec(args);
+        let FileArg {
+            file,
+            first_item,
+            first_item_checked,
+        } = self.console_or_file(at, &items, false)?;
+        for (n, &arg) in items.iter().enumerate().skip(first_item) {
+            self.write_arg(arg, first_item_checked && n == 0)?;
+        }
+        let mut parts = vec![file];
+        parts.extend(&items[first_item..]);
+        Ok(Kind::Write(self.ast.list(&parts), newline))
+    }
+
     /// `Read(f, a, b)` is `a := ReadChar(f)` (or `ReadLong`, `ReadReal`, `ReadStr`, by the
     /// type of `a`) for each variable, so narrowing and truncation are the assignment's;
     /// `ReadLn` ends with `ReadLnEnd(f)`.
     fn read_call(&mut self, at: Id, args: List, line_end: bool) -> R<Kind> {
         let items = self.ast.items_vec(args);
-        let (file, start, checked) = self.console_or_file(at, &items, true)?;
+        let FileArg {
+            file,
+            first_item,
+            first_item_checked,
+        } = self.console_or_file(at, &items, true)?;
         let mut steps = Vec::new();
-        for (n, &target) in items.iter().enumerate().skip(start) {
-            steps.push(self.read_item(at, file, target, checked && n == 0)?);
+        for (n, &target) in items.iter().enumerate().skip(first_item) {
+            steps.push(self.read_item(at, file, target, first_item_checked && n == 0)?);
         }
         if line_end {
             steps.push(self.helper_call(at, Helper::ReadLnEnd, &[file], Ty::NONE));
@@ -1955,8 +2005,12 @@ impl Cx<'_> {
         let (helper, result) = if self.types.tag(ty) == Some(Tag::Char) {
             (Helper::ReadChar, Ty::CHAR)
         } else if let Ok(result) = self.types.val_type(ty) {
-            let long_or_real = [Helper::ReadLong, Helper::ReadReal];
-            (long_or_real[(result == Ty::REAL) as usize], result)
+            let helper = if result == Ty::REAL {
+                Helper::ReadReal
+            } else {
+                Helper::ReadLong
+            };
+            (helper, result)
         } else if self.types.is_str(ty) {
             let capacity = Kind::IntLit(self.types.capacity(ty) as i64);
             args.push(self.ast.typed(capacity, Ty::INTEGER, at));
@@ -2057,7 +2111,7 @@ impl Cx<'_> {
         };
         let sum = self.ast.typed(sum, result, at);
         // `Inc` and `Dec` are never range checked.
-        self.ast.nodes[sum as usize].range_checks = false;
+        self.ast.set_range_checks(sum, false);
         Ok(Kind::Assign(target, sum))
     }
 

@@ -162,9 +162,12 @@ pub enum Kind {
     /// A unit's initialisation part (made by the checker): `Exit` inside leaves only this part.
     InitPart(Id),
     ConstDecl(u32, Id),
-    /// `name: type = init`: constant name, type name, initialiser (an expression, `ArrayInit`
-    /// or `RecordInit`).
-    TypedConst(u32, u32, Id),
+    /// `name: type = init`: `init` is an expression, `ArrayInit` or `RecordInit`.
+    TypedConst {
+        name: u32,
+        type_name: u32,
+        init: Id,
+    },
     /// `(a, b, c)`, stamped at the closing parenthesis, where TP reports a list that is too short.
     ArrayInit(List),
     /// `(f: a; g: b)`: `FieldInit` entries, stamped at the closing parenthesis.
@@ -309,9 +312,11 @@ impl Ast {
     pub fn typed(&mut self, kind: Kind, ty: Ty, at: Id) -> Id {
         let (line, col) = self.position(at);
         let id = self.add(kind, line, col);
-        self.nodes[id as usize].file = self.node(at).file;
-        self.nodes[id as usize].range_checks = self.node(at).range_checks;
-        self.nodes[id as usize].io_checks = self.node(at).io_checks;
+        let source = self.node(at);
+        let node = &mut self.nodes[id as usize];
+        node.file = source.file;
+        node.range_checks = source.range_checks;
+        node.io_checks = source.io_checks;
         self.set_ty(id, ty);
         id
     }
@@ -361,6 +366,10 @@ impl Ast {
 
     pub fn set_kind(&mut self, id: Id, kind: Kind) {
         self.nodes[id as usize].kind = kind;
+    }
+
+    pub fn set_range_checks(&mut self, id: Id, on: bool) {
+        self.nodes[id as usize].range_checks = on;
     }
 
     pub fn set_ty(&mut self, id: Id, ty: Ty) {

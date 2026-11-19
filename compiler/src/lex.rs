@@ -387,7 +387,8 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// The next token; `Eof` at the end of the text and after the final `END .`.
+    /// The next token; `Eof` at the end of the text and after the final `END .`, after which
+    /// nothing more is read.
     pub fn next_token(&mut self) -> Result<Tok, Diag> {
         let scanner = &mut self.scanner;
         while !self.finished && scanner.pos < scanner.src.len() {
@@ -400,12 +401,14 @@ impl<'a> Lexer<'a> {
                 continue;
             }
             scanner.mark_token_start();
-            let is_dereference = ends_operand(self.previous.as_ref());
             let token = match c {
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => Some(scanner.word()),
                 b'0'..=b'9' | b'$' => Some(scanner.number()?),
                 b'\'' | b'#' => Some(scanner.string()?),
-                b'^' if !is_dereference && scanner.control_char(0).is_some() => {
+                // After an operand `^` dereferences; anywhere else `^X` is a control character.
+                b'^' if !ends_operand(self.previous.as_ref())
+                    && scanner.control_char(0).is_some() =>
+                {
                     Some(scanner.control_char_token_or_string()?)
                 }
                 b'{' => scanner.comment(1, b"}")?,

@@ -68,7 +68,7 @@ struct Parser<'a> {
     ast: &'a mut Ast,
     stops: StopWords,
     /// Parsing an embedded runtime source, the only place `external` is allowed.
-    in_system: bool,
+    in_runtime: bool,
     /// Parsing a unit's interface part: a routine heading stands alone, as a forward.
     in_interface: bool,
     /// Names of the units this file may qualify names with: System, the unit itself, and
@@ -163,7 +163,7 @@ fn parser(ast: &mut Ast, tokens: Vec<Tok>) -> Parser<'_> {
         pos: 0,
         ast,
         stops: StopWords::default(),
-        in_system: false,
+        in_runtime: false,
         in_interface: false,
         unit_names: vec![system],
     }
@@ -172,7 +172,7 @@ fn parser(ast: &mut Ast, tokens: Vec<Tok>) -> Parser<'_> {
 /// System's declaration part, as a unit whose declarations are all in its interface.
 pub fn parse_system(ast: &mut Ast, toks: Vec<Tok>) -> R<Id> {
     let mut parser = parser(ast, toks);
-    parser.in_system = true;
+    parser.in_runtime = true;
     let declarations = parser.declarations()?;
     if parser.tok().kind != Tk::Eof {
         return Err(parser.err(code::BEGIN_EXPECTED));
@@ -198,7 +198,7 @@ pub fn parse_unit(ast: &mut Ast, toks: Vec<Tok>) -> R<Id> {
 /// A unit of the embedded runtime: like `parse_unit`, but it may declare `external` routines.
 pub fn parse_runtime_unit(ast: &mut Ast, toks: Vec<Tok>) -> R<Id> {
     let mut parser = parser(ast, toks);
-    parser.in_system = true;
+    parser.in_runtime = true;
     parser.unit()
 }
 
@@ -900,7 +900,9 @@ impl Parser<'_> {
         let external = self.external_directive(name)?;
         // An interface heading is complete at its `;`: the definition comes later.
         let heading_only = self.in_interface;
-        let block = if heading_only || external.is_some() || self.kw(b"FORWARD") {
+        // `kw` consumes `forward`, so it is the last test.
+        let has_no_body = heading_only || external.is_some() || self.kw(b"FORWARD");
+        let block = if has_no_body {
             None
         } else {
             let (line, col) = self.pos();
@@ -928,7 +930,7 @@ impl Parser<'_> {
     /// host. Only the runtime source may use it (TP5 links an .OBJ file instead; error 200).
     /// Returns the import's name, which is the routine's own `name` unless a string gives it.
     fn external_directive(&mut self, name: u32) -> R<Option<u32>> {
-        if !self.in_system {
+        if !self.in_runtime {
             self.unsupported(&[b"EXTERNAL"])?;
             return Ok(None);
         }
@@ -972,7 +974,11 @@ impl Parser<'_> {
             let kind = if self.sym(b":") {
                 let type_name = self.declared_type(b"=", out)?;
                 self.expect_sym(b"=", code::EQUALS_EXPECTED)?;
-                Kind::TypedConst(name, type_name, self.initialiser()?)
+                Kind::TypedConst {
+                    name,
+                    type_name,
+                    init: self.initialiser()?,
+                }
             } else {
                 self.expect_sym(b"=", code::EQUALS_EXPECTED)?;
                 Kind::ConstDecl(name, self.expr()?)

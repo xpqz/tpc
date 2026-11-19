@@ -484,7 +484,7 @@ fn static_image(ast: &Ast, info: &Info, ty: Ty, init: Id) -> Vec<u8> {
             image
         }
         Kind::ArrayInit(items) => {
-            let (_, _, _, element) = types.array_of(ty).expect("an array initialiser");
+            let element = types.array_of(ty).expect("an array initialiser").elem;
             let image = ast.items(items).iter();
             image
                 .flat_map(|&item| static_image(ast, info, element, item))
@@ -1068,7 +1068,8 @@ impl Gen<'_> {
     fn element_addr(&mut self, base: Id, index: Id) -> u32 {
         let offset = self.addr(base);
         let types = &self.info.types;
-        let (_, lo, hi, element) = types.array_of(self.ast.ty(base)).expect("checked array");
+        let array = types.array_of(self.ast.ty(base)).expect("checked array");
+        let (lo, hi, element) = (array.lo, array.hi, array.elem);
         let size = types.size(element);
         if let Kind::IntLit(c) = self.ast.kind(index) {
             return offset + (c - lo) as u32 * size;
@@ -1654,10 +1655,10 @@ impl Gen<'_> {
 
     /// An array of Char is written from its address: every element.
     fn write_char_array(&mut self, value: Id, ty: Ty, width: Option<Id>) {
-        let (_, low, high, _) = self.info.types.array_of(ty).expect("an array");
+        let array = self.info.types.array_of(ty).expect("an array");
         self.code.local_get(self.file);
         self.address_of(value);
-        self.code.i32_const((high - low + 1) as i32);
+        self.code.i32_const((array.hi - array.lo + 1) as i32);
         self.width(width);
         self.code.call(self.layout.indexes.write_string);
     }
