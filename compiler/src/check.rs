@@ -97,6 +97,8 @@ struct Cx<'a> {
     routines: Vec<Routine>,
     /// The record designators of the enclosing `with` statements, innermost last.
     withs: Vec<(Id, Ty)>,
+    /// How many calls enclose the code being checked, the call itself included.
+    call_depth: u32,
     helpers: [u32; HELPERS.len()],
     /// System's console input file, the file of `Read` and `Eof` without one.
     input: Sym,
@@ -121,6 +123,7 @@ pub fn check(ast: &mut Ast, plan: &Plan) -> R<Info> {
         typed_consts: Vec::new(),
         routines: Vec::new(),
         withs: Vec::new(),
+        call_depth: 0,
         helpers: [0; HELPERS.len()],
         input: Sym(0),
         forward: Vec::new(),
@@ -1133,7 +1136,9 @@ impl Cx<'_> {
             } => self.for_statement(id, variable, first, last, body)?,
             Kind::Assign(target, value) => self.assign_statement(id, target, value)?,
             Kind::With(records, body) => self.with_statement(records, body)?,
-            Kind::Call(callee, args) => self.call_statement(id, callee, args)?,
+            Kind::Call(callee, args) => {
+                self.within_call(|cx| cx.call_statement(id, callee, args))?
+            }
             _ => unreachable!("statements only"),
         }
         Ok(())
@@ -1373,11 +1378,9 @@ impl Cx<'_> {
         origin: Origin,
     ) -> R<()> {
         let items = self.ast.items_vec(args);
-        match argument_count_error(params.len(), items.len(), in_expr, origin) {
-            Some(code::LEFT_PAREN_EXPECTED) => return Err(self.missing_argument_list(at)),
-            Some(error) => return Err(self.err(at, error)),
-            None => {}
-        }
+        // The call is itself an argument of an enclosing call.
+        let nested = in_expr && self.call_depth > 1;
+        // TP checks the arguments that have a parameter before it counts them.
         for (&arg, param) in items.iter().zip(&params) {
             if matches!(self.ast.kind(arg), Kind::Fmt { .. }) {
                 return Err(self.err(at, code::RIGHT_PAREN_EXPECTED));
@@ -1391,7 +1394,19 @@ impl Cx<'_> {
                 self.argument_assignable(at, param.ty, arg, origin)?;
             }
         }
-        Ok(())
+        match argument_count_error(params.len(), items.len(), nested) {
+            Some(code::LEFT_PAREN_EXPECTED) => Err(self.missing_argument_list(at)),
+            Some(error) => Err(self.err(at, error)),
+            None => Ok(()),
+        }
+    }
+
+    /// Runs `check` on a call: its arguments are checked one call deeper.
+    fn within_call<T>(&mut self, check: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+        self.call_depth += 1;
+        let checked = check(self);
+        self.call_depth -= 1;
+        checked
     }
 
     /// TP reports a missing argument list at the line of the token after the name.
@@ -1582,7 +1597,7 @@ impl Cx<'_> {
                 continues,
             } => self.index_expr(e, base, index, continues)?,
             Kind::Field(base, name) => self.field_expr(e, base, name)?,
-            Kind::Call(callee, args) => self.call_expr(e, callee, args)?,
+            Kind::Call(callee, args) => self.within_call(|cx| cx.call_expr(e, callee, args))?,
             Kind::AddrOf(operand) => {
                 self.expr(operand)?;
                 match self.ast.kind(operand) {
@@ -2289,11 +2304,12 @@ impl Cx<'_> {
 }
 
 /// TP's error for the number of arguments in a call, or None if it matches. A routine with
-/// no parameters takes no parentheses: error 85, or 89 inside an expression.
-fn argument_count_error(params: usize, args: usize, in_expr: bool, origin: Origin) -> Option<u16> {
+/// no parameters takes no parentheses: TP reads the call as complete and fails on the `(`,
+/// with error 85 where a statement could end, or 89 where an argument list is open.
+fn argument_count_error(params: usize, args: usize, nested: bool) -> Option<u16> {
     match (params, args) {
         (0, 0) => None,
-        (0, _) if in_expr && origin == Origin::User => Some(code::RIGHT_PAREN_EXPECTED),
+        (0, _) if nested => Some(code::RIGHT_PAREN_EXPECTED),
         (0, _) => Some(code::SEMICOLON_EXPECTED),
         (_, 0) => Some(code::LEFT_PAREN_EXPECTED),
         (p, a) if a < p => Some(code::COMMA_EXPECTED),
