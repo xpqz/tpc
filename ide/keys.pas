@@ -20,6 +20,7 @@ const
   CmdRun = 4;
   CmdMenu = 5;          { MenuLetter is the pull-down to open, or #0 for F10 }
   CmdQuit = 6;
+  CmdNew = 7;           { File, New; only the menu gives it }
 
 var
   MenuLetter: Char;

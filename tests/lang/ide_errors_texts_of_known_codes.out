@@ -1,0 +1,27 @@
+2 [Identifier expected]
+3 [Unknown identifier]
+5 [Syntax error]
+33 [Type identifier expected]
+64 [Cannot Read or Write variables of this type]
+85 [";" expected]
+93 ["]" or ".)" expected]
+133 [Cannot evaluate this expression]
+200 [Feature not supported]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+cursor 1 10
+exit 0

@@ -2,8 +2,8 @@
 
   Main paints with View.Paint, which writes a placeholder on row 1, and then calls DrawBar to
   write the real bar over it. Run opens the pull-down for the letter in Keys.MenuLetter (#0,
-  from F10, opens the first menu) and returns the command chosen, in the codes of Keys plus
-  CmdNew. Run reads keys itself until a command is chosen or the menu is cancelled.
+  from F10, opens the first menu) and returns the command chosen, in the codes of Keys. Run
+  reads keys itself until a command is chosen or the menu is cancelled.
 
   The menus are one table of titles and one table of items; a menu owns the items from
   FirstItem to LastItem. A pull-down covers part of the edit area, so closing it, and
@@ -13,9 +13,6 @@
 unit Menu;
 
 interface
-
-const
-  CmdNew = 7;           { File, New: Main empties the buffer }
 
 procedure DrawBar;
 procedure Show(Menu, Selected: Integer);
@@ -29,7 +26,6 @@ const
   MenuRow = 1;
   PullDownRow = 2;
   PullDownWidth = 20;
-  BarAttr = $70;        { black on light grey }
   SelectedAttr = $07;   { light grey on black }
   EnterKey = #13;
   EscKey = #27;

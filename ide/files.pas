@@ -18,6 +18,10 @@ const
 function CurrentName: string;
 function IsModified: Boolean;
 
+{ True when the last NewFile or OpenFile replaced the text in the Buffer (also by emptying it
+  after a file that was too large); False when it was cancelled or the file was not read. }
+function TextReplaced: Boolean;
+
 { Treats the text in the Buffer as unmodified and unnamed (the start of a session). }
 procedure ResetFiles;
 
@@ -46,6 +50,7 @@ const
 var
   Name: string;
   HasName: Boolean;
+  Replaced: Boolean;
 
 function CurrentName: string;
 begin
@@ -55,6 +60,11 @@ end;
 function IsModified: Boolean;
 begin
   IsModified := Modified;
+end;
+
+function TextReplaced: Boolean;
+begin
+  TextReplaced := Replaced;
 end;
 
 { Records that the text in the Buffer is what the file called NewName holds. }
@@ -143,10 +153,12 @@ end;
 
 procedure NewFile;
 begin
+  Replaced := False;
   if SaveIfModified then
   begin
     Clear;
     ResetFiles;
+    Replaced := True;
   end;
 end;
 
@@ -159,10 +171,14 @@ var
 begin
   Code := Load(Target);
   if Code = 0 then
-    Adopt(Target, True)
+  begin
+    Adopt(Target, True);
+    Replaced := True;
+  end
   else if Code = LoadTooLarge then
   begin
     ResetFiles;
+    Replaced := True;
     SetMessage('File too large');
   end
   else if (Code = DosFileNotFound) or (Code = DosPathNotFound) then
@@ -175,6 +191,7 @@ procedure OpenFile;
 var
   Typed: string;
 begin
+  Replaced := False;
   if AskName('Open file: ', Typed) then
     if SaveIfModified then
       LoadFile(FullName(Typed));

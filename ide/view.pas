@@ -15,7 +15,12 @@ unit View;
 
 interface
 
+const
+  BarAttr = $70;        { black on light grey }
+
 procedure Reset;
+{ Clears the screen to the bar colour. }
+procedure ClearScreen;
 procedure SetMessage(Text: string);
 procedure SetInsertMode(Insert: Boolean);
 procedure Paint;
@@ -36,9 +41,8 @@ const
   EditRows = 23;
   StatusRow = 25;
   TabWidth = 8;
-  BarAttr = $70;        { black on light grey }
   EditAttr = $1E;       { yellow on blue }
-  MenuText = ' File  Edit  Run  Compile  Options';
+  MenuText = ' File  Run  Compile  Options';
   InsertTextColumn = 14;
   MessageColumn = 25;
   MaxPromptText = 40;
@@ -52,16 +56,21 @@ var
   Message: string;
   InsertMode: Boolean;
 
-{ Clears the whole screen to the bar colour (so the one cell of row 25 that is never written,
-  column 80, matches the status line) and forgets scrolling and the message. }
+{ The one cell of row 25 that is never written, column 80, matches the status line. }
+procedure ClearScreen;
+begin
+  TextAttr := BarAttr;
+  ClrScr;
+end;
+
+{ Clears the screen and forgets scrolling and the message. }
 procedure Reset;
 begin
   TopLine := 1;
   LeftColumn := 1;
   Message := '';
   InsertMode := True;
-  TextAttr := BarAttr;
-  ClrScr;
+  ClearScreen;
 end;
 
 procedure SetMessage(Text: string);
