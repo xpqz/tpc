@@ -208,6 +208,11 @@ const PREDEFINED: &[(&[u8], SymKind, Ty)] = &[
         Ty::NONE,
     ),
     (b"MOVE", SymKind::Intrinsic(Intrinsic::Move), Ty::NONE),
+    (
+        b"SETTEXTBUF",
+        SymKind::Intrinsic(Intrinsic::SetTextBuf),
+        Ty::NONE,
+    ),
     (b"EXP", SymKind::Intrinsic(Intrinsic::Exp), Ty::NONE),
     (b"LN", SymKind::Intrinsic(Intrinsic::Ln), Ty::NONE),
     (b"SIN", SymKind::Intrinsic(Intrinsic::Sin), Ty::NONE),

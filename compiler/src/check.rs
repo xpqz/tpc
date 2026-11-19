@@ -1011,17 +1011,23 @@ impl Cx<'_> {
     /// An argument of a `var` parameter of type `ty`: a variable of that very type. `at` is
     /// the call.
     fn var_arg(&mut self, at: Id, arg: Id, ty: Ty) -> R<()> {
+        self.var_arg_of(at, arg, &[ty])
+    }
+
+    /// Like `var_arg`, for a parameter that takes a variable of any of the types `tys`; the
+    /// variable is passed by address, so the types must have the same size.
+    fn var_arg_of(&mut self, at: Id, arg: Id, tys: &[Ty]) -> R<()> {
         if let Some(error) = self.var_arg_error(arg) {
             return Err(self.err(arg, error));
         }
         match self.ast.kind(arg) {
             Kind::Name(name) if self.with_field(name).is_none() => {
                 let (sym, symbol) = self.resolve(arg, name)?;
-                if symbol.ty != ty {
-                    return Err(self.var_mismatch(at, ty));
+                if !tys.contains(&symbol.ty) {
+                    return Err(self.var_mismatch(at, tys[0]));
                 }
                 self.symbols.capture(sym, true);
-                self.ast.resolve(arg, Kind::Var(sym), ty);
+                self.ast.resolve(arg, Kind::Var(sym), symbol.ty);
             }
             kind => {
                 // A field, element or dereference is checked as an expression. An argument the
@@ -1029,8 +1035,8 @@ impl Cx<'_> {
                 if !matches!(kind, Kind::Var(_)) {
                     self.expr(arg)?;
                 }
-                if self.ast.ty(arg) != ty {
-                    return Err(self.var_mismatch(at, ty));
+                if !tys.contains(&self.ast.ty(arg)) {
+                    return Err(self.var_mismatch(at, tys[0]));
                 }
             }
         }
@@ -1350,6 +1356,7 @@ impl Cx<'_> {
             SymKind::Intrinsic(Intrinsic::Halt) => self.halt_call(id, args)?,
             SymKind::Intrinsic(Intrinsic::FillChar) => self.fill_char(id, args)?,
             SymKind::Intrinsic(Intrinsic::Move) => self.move_bytes(id, args)?,
+            SymKind::Intrinsic(Intrinsic::SetTextBuf) => self.set_text_buf(id, args)?,
             SymKind::Intrinsic(Intrinsic::Str) => self.str_call(id, args)?,
             SymKind::Intrinsic(Intrinsic::Val) => self.val_call(id, args)?,
             SymKind::Intrinsic(Intrinsic::Exit) => {
@@ -2262,7 +2269,7 @@ impl Cx<'_> {
             .map_err(|code| self.err(target, code))?;
         self.expr(source)?;
         self.argument_assignable(at, Ty::STRING, source, Origin::System)?;
-        self.var_arg(at, error_code, Ty::INTEGER)
+        self.var_arg_of(at, error_code, &[Ty::INTEGER, Ty::WORD])
             .map_err(|d| Diag {
                 code: if d.code == code::TYPE_MISMATCH {
                     code::INTEGER_VARIABLE_EXPECTED
@@ -2344,6 +2351,19 @@ impl Cx<'_> {
         let dest = self.address_of_variable(at, items[1])?;
         self.byte_count(at, items[2])?;
         Ok(Kind::CopyMem(dest, source, items[2]))
+    }
+
+    /// `SetTextBuf(f, buffer[, size])` is checked and then dropped: file buffering is
+    /// internal to System, so a program's own buffer is never used (deviation D40).
+    fn set_text_buf(&mut self, at: Id, args: List) -> R<Kind> {
+        let items = self.ast.items_vec(args);
+        self.expect_arg_count(at, items.len(), 2, 3)?;
+        self.var_arg(at, items[0], self.types.text)?;
+        self.address_of_variable(at, items[1])?;
+        if let Some(&size) = items.get(2) {
+            self.byte_count(at, size)?;
+        }
+        Ok(Kind::Compound(self.ast.list(&[])))
     }
 
     /// `Halt` and `Halt(code)`: a call of System's `HostHalt` with the exit code, 0 without
