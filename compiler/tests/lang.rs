@@ -129,6 +129,12 @@ fn program_does_not_see_files_that_are_not_in_its_aux_directory() {
 }
 
 #[test]
+fn shared_directories_are_merged_with_the_aux_directory_and_the_own_unit_wins() {
+    let dir = fixture("lang/shared_dirs");
+    assert_eq!(check_lang(&dir, &real_compile), Vec::<String>::new());
+}
+
+#[test]
 fn input_file_is_the_program_stdin() {
     assert_eq!(lang("stdin"), Vec::<String>::new());
 }

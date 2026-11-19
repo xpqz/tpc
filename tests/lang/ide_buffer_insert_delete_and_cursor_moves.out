@@ -1,0 +1,26 @@
+empty: len 0 cur 0 []
+full: FALSE
+still empty: len 0 cur 0 []
+char at 0 of empty is #0
+typed: len 5 cur 5 [hello]
+left 2: len 5 cur 3 [hello]
+inserted: len 6 cur 4 [helXlo]
+backspaced: len 5 cur 3 [hello]
+deleted: len 4 cur 3 [helo]
+at start: len 4 cur 0 [helo]
+left at start stays: len 4 cur 0 [helo]
+inserted at start: len 5 cur 1 [>helo]
+right at end stays: len 5 cur 5 [>helo]
+end: len 5 cur 5 [>helo]
+set cursor below 0: len 5 cur 0 [>helo]
+set cursor past end: len 5 cur 5 [>helo]
+set cursor 3: len 5 cur 3 [>helo]
+char at -1 is #0, at len is #0
+chars around the cursor: el
+first > second h sum 9174
+after TextPointer: len 5 cur 3 [>helo]
+edit after TextPointer: len 6 cur 4 [>he!lo]
+cleared: len 0 cur 0 []
+deleted across a break: len 4 cur 2 [abef]
+typed at start: len 8 cur 3 [12|abZef]
+backspaced past the start: len 5 cur 0 [abZef]

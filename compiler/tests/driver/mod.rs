@@ -37,13 +37,45 @@ fn res(o: std::process::Output) -> Res {
     }
 }
 
-/// Runs `tp5c`; a directory `STEM/` next to the source `STEM.pas` is passed as the auxiliary
-/// directory that holds its units (decision 26).
+/// The auxiliary directory of `STEM.pas` (decision 26): the directory `STEM/` beside it, if any.
+/// `STEM.dirs` lists shared directories (paths from the repository root, one per line, as
+/// tools/tp5.sh reads it); then the files of those directories and of `STEM/` are merged into a
+/// scratch directory, `STEM/`'s files replacing shared ones of the same name.
+fn aux_dir(src: &Path) -> Option<PathBuf> {
+    let own = src.with_extension("");
+    let list = src.with_extension("dirs");
+    if !list.is_file() {
+        return own.is_dir().then_some(own);
+    }
+    let merged = crate::common::fresh_dir("driver");
+    let mut sources: Vec<PathBuf> = std::fs::read_to_string(list)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| root().join(line))
+        .collect();
+    if own.is_dir() {
+        sources.push(own);
+    }
+    for dir in sources {
+        // A shared directory that does not exist contributes nothing, so each program that
+        // needs its units fails on its own instead of aborting the whole sweep.
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries {
+            let file = entry.unwrap().path();
+            std::fs::copy(&file, merged.join(file.file_name().unwrap())).unwrap();
+        }
+    }
+    Some(merged)
+}
+
+/// Runs `tp5c` with the auxiliary directory of `src` (`aux_dir`).
 pub fn real_compile(src: &Path, out: &Path) -> Res {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_tp5c"));
     cmd.arg(src).arg("-o").arg(out);
-    let aux = src.with_extension("");
-    if aux.is_dir() {
+    if let Some(aux) = aux_dir(src) {
         cmd.arg("--dir").arg(aux);
     }
     res(cmd.output().unwrap())
@@ -241,8 +273,7 @@ fn expect_ok(r: &Res, what: &str) -> Result<(), String> {
 fn run_wasm(src: &Path, wasm: &Path, expected: &Path) -> Res {
     let mut cmd = Command::new("node");
     cmd.arg(root().join("tests/run.mjs"));
-    let aux = src.with_extension("");
-    if aux.is_dir() {
+    if let Some(aux) = aux_dir(src) {
         cmd.arg("--dir").arg(aux);
     }
     let input = src.with_extension("in");

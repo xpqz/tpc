@@ -1,0 +1,24 @@
+length 65521 cursor 65521 full TRUE
+insert when full: length 65521 cursor 65521
+lines 3277 checksum 87387302
+line of 40000: 2001 col 1 posof(2001,1) 40000 posof(2001,21) 40019 posof(3277,5) 65521
+last line starts 65520 ends 65521
+chars: GHIA past end #0
+cursor 50000: pos 50000 col 1
+line of the cursor 2501
+up: pos 49980 col 1
+down 2: pos 50020 col 1
+line end: pos 50039 col 20
+right: pos 50040 col 1
+across 32767: pos 32769 col 10
+line of the cursor 1639
+back across: pos 32766 col 7
+deleted 100: length 65421 cursor 64900 full FALSE
+typed 150: length 65521 accepted 100 cursor 110 full TRUE
+checksum 87329660
+end: pos 65521 col 2
+line of the end 3272
+after deleting 3000: length 62521 cursor 62521
+after deleting 3000 more: length 59521 lines 2977
+block checksum 79364732 same TRUE
+cleared: length 0

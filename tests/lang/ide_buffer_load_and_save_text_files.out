@@ -1,0 +1,23 @@
+load CRLF.TXT = 0
+crlf: len 18 cur 0 lines 4 [first||third line|]
+load NOEOL.TXT = 0
+no final break: len 11 cur 0 lines 3 [alpha|beta|]
+load EMPTY.TXT = 0
+empty: len 0 cur 0 lines 1 []
+load LONG.TXT = 0
+long line: len 307 lines 3 line 1 ends at 300 second line starts 301
+load NOSUCH.TXT = 2
+unchanged after a failed load: len 18 cur 3 lines 4 [first||third line|]
+save = 0
+OUT.TXT: 111 110 101 EOL 116 119 111 EOL
+OUT.TXT: 111 110 101 EOL 116 119 111 EOL 116 104 114 101 101 (no EOL)
+OUT.TXT:
+reloaded empty: len 0 cur 0 lines 1 []
+OUT.TXT: EOL 115 116 97 114 116 EOL 32 EOL 101 110 100 EOL
+round trip: len 13 cur 0 lines 5 [|start| |end|]
+load FIT.TXT = 0 len 65521 lines 657
+full TRUE length after one more insert 65521
+save and load again = 0 len 65521 lines 657
+last line starts 65521 char before 10
+load BIG.TXT = -1
+too large leaves it empty: len 0 cur 0 lines 1 []
