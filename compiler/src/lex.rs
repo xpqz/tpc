@@ -58,6 +58,16 @@ const SATURATE_AT: i64 = 1 << 40;
 const MAX_DECIMAL: i64 = 0x7FFF_FFFF;
 const MAX_HEX: i64 = 0xFFFF_FFFF;
 
+/// A byte that may start an identifier.
+pub fn is_ident_start(c: u8) -> bool {
+    c.is_ascii_alphabetic() || c == b'_'
+}
+
+/// A byte that may continue an identifier.
+pub fn is_ident_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_'
+}
+
 struct Scanner<'a> {
     src: &'a [u8],
     pos: usize,
@@ -196,7 +206,7 @@ impl Scanner<'_> {
     fn control_char(&self, ahead: usize) -> Option<u8> {
         let letter = self.peek(ahead + 1).to_ascii_uppercase();
         let next = self.peek(ahead + 2);
-        let next_is_identifier = next.is_ascii_alphanumeric() || next == b'_';
+        let next_is_identifier = is_ident_byte(next);
         let is_control =
             self.peek(ahead) == b'^' && (b'@'..=b'_').contains(&letter) && !next_is_identifier;
         is_control.then(|| letter - b'@')
@@ -306,7 +316,7 @@ impl Scanner<'_> {
 
     fn word(&mut self) -> Tok {
         let start = self.pos;
-        while self.peek(0).is_ascii_alphanumeric() || self.peek(0) == b'_' {
+        while is_ident_byte(self.peek(0)) {
             self.pos += 1;
         }
         let text = self.src[start..self.pos].to_ascii_uppercase();

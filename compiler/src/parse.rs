@@ -100,14 +100,11 @@ impl Parser<'_> {
         if self.kw(b"USES") {
             loop {
                 let (line, col) = self.pos();
+                // Built before the name is read, so it is positioned at the name.
+                let duplicate = self.err(code::DUPLICATE_IDENTIFIER);
                 let name = self.ident()?;
                 if self.unit_names.contains(&name) {
-                    return Err(Diag {
-                        code: code::DUPLICATE_IDENTIFIER,
-                        line,
-                        col,
-                        file: self.previous().file,
-                    });
+                    return Err(duplicate);
                 }
                 self.unit_names.push(name);
                 entries.push(self.ast.add(Kind::Name(name), line, col));

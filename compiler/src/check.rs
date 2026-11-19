@@ -179,10 +179,7 @@ impl Cx<'_> {
             .bind_system_names(self.ast)
             .map_err(|_| broken_system)?;
         if self.routines.iter().any(|r| !r.defined) {
-            return Err(Diag {
-                code: code::UNDEFINED_FORWARD,
-                ..broken_system
-            });
+            return Err(broken_system.with_code(code::UNDEFINED_FORWARD));
         }
         self.helpers = names.helpers;
         self.types.text = names.text;
@@ -269,9 +266,7 @@ impl Cx<'_> {
             self.decl(d)?;
         }
         self.resolve_forward(unit)?;
-        let undefined =
-            |s: Symbol| matches!(s.kind, SymKind::Routine(r) if !self.routines[r as usize].defined);
-        if self.symbols.own_symbols().any(undefined) {
+        if self.symbols.own_symbols().any(|s| self.is_undefined(s)) {
             return Err(self.err(unit, code::UNDEFINED_FORWARD));
         }
         self.stmt(body)?;
@@ -322,6 +317,11 @@ impl Cx<'_> {
         Ok(())
     }
 
+    /// A routine declared `forward` (or in a unit's interface) that has no body yet.
+    fn is_undefined(&self, symbol: Symbol) -> bool {
+        matches!(symbol.kind, SymKind::Routine(r) if !self.routines[r as usize].defined)
+    }
+
     /// Declares `name` in the current region; a second declaration in the same region is an
     /// error, but a user declaration may hide a predefined or System one.
     fn declare(&mut self, at: Id, name: u32, symbol: Symbol) -> R<Sym> {
@@ -343,10 +343,7 @@ impl Cx<'_> {
         for (pointer, name) in std::mem::take(&mut self.forward) {
             let to = self.type_of(at, name).map_err(|d| match d.code {
                 code::NOT_SUPPORTED => d,
-                _ => Diag {
-                    code: code::UNDEFINED_POINTER_TARGET,
-                    ..d
-                },
+                _ => d.with_code(code::UNDEFINED_POINTER_TARGET),
             })?;
             self.types.set_pointer_target(pointer, to);
         }
@@ -384,9 +381,7 @@ impl Cx<'_> {
             Kind::IntLit(v) => (ConstValue::Int(v), node.ty),
             Kind::RealLit(v) => (ConstValue::Real(v), Ty::REAL),
             Kind::StrLit(i) => (ConstValue::Str(i), Ty::STRING),
-            Kind::SetLit(items) if self.ast.items(items).iter().all(|&i| self.is_constant(i)) => {
-                (ConstValue::Set(value), node.ty)
-            }
+            Kind::SetLit(_) if self.is_constant_literal(value) => (ConstValue::Set(value), node.ty),
             _ => return Err(self.err(value, code::CANNOT_EVALUATE)),
         };
         self.declare(d, name, Symbol::new(SymKind::Const(constant), ty))?;
@@ -502,19 +497,27 @@ impl Cx<'_> {
         }
         self.expr(init)?;
         self.assignable(init, ty, init)?;
-        let is_constant = match self.ast.kind(init) {
-            Kind::IntLit(_) | Kind::RealLit(_) | Kind::StrLit(_) => true,
-            Kind::SetLit(items) => self.ast.items(items).iter().all(|&i| self.is_constant(i)),
-            _ => false,
-        };
-        if !is_constant {
+        if !self.is_constant_literal(init) {
             return Err(self.err(init, code::CANNOT_EVALUATE));
         }
         Ok(())
     }
 
+    /// An integer, Real or string literal, or a set literal whose elements are all constant.
+    fn is_constant_literal(&self, value: Id) -> bool {
+        match self.ast.kind(value) {
+            Kind::IntLit(_) | Kind::RealLit(_) | Kind::StrLit(_) => true,
+            Kind::SetLit(items) => self
+                .ast
+                .items(items)
+                .iter()
+                .all(|&i| self.is_constant_element(i)),
+            _ => false,
+        }
+    }
+
     /// A set element or range whose ends are integer constants.
-    fn is_constant(&self, item: Id) -> bool {
+    fn is_constant_element(&self, item: Id) -> bool {
         let is_literal = |i: Id| matches!(self.ast.kind(i), Kind::IntLit(_));
         match self.ast.kind(item) {
             Kind::Range(lo, hi) => is_literal(lo) && is_literal(hi),
@@ -895,13 +898,11 @@ impl Cx<'_> {
             self.decl(decl)?;
         }
         self.resolve_forward(body)?;
-        let left_undefined = self.symbols.declared_since(&saved).any(|s| {
-            let SymKind::Routine(callee) = s.kind else {
-                return false;
-            };
-            !self.routines[callee as usize].defined
-        });
-        if left_undefined {
+        if self
+            .symbols
+            .declared_since(&saved)
+            .any(|s| self.is_undefined(s))
+        {
             return Err(self.err(body, code::UNDEFINED_FORWARD));
         }
         self.stmt(body)?;
@@ -1371,7 +1372,7 @@ impl Cx<'_> {
             } else {
                 code::TYPE_MISMATCH
             };
-            Diag { code, ..d }
+            d.with_code(code)
         })
     }
 
@@ -2021,9 +2022,7 @@ impl Cx<'_> {
         } else {
             Helper::StrDelete
         };
-        let list = self.ast.list(&items);
-        let call = Kind::Invoke(self.helpers[helper as usize], list);
-        let call = self.ast.typed(call, Ty::STRING, at);
+        let call = self.helper_call(at, helper, &items, Ty::STRING);
         Ok(Kind::Assign(target, call))
     }
 

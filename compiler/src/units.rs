@@ -21,7 +21,7 @@
 //! which is how implementation parts may use each other (Turbo Pascal's rule, measured).
 use crate::ast::{Ast, Id, Kind, List, Plan};
 use crate::diag::{code, Diag};
-use crate::directives::{expand, in_file};
+use crate::directives::{expand, locate_in_file};
 use crate::lex::Tok;
 use crate::parse::{parse_program, parse_runtime_unit, parse_system, parse_unit};
 use crate::symbols::name_of;
@@ -68,9 +68,22 @@ fn parse_file(
     files: &[SourceFile],
     parse: fn(&mut Ast, Vec<Tok>) -> Result<Id, Diag>,
 ) -> Result<Id, Diag> {
-    ast.file = file;
     let tokens = expand(file, text, files)?;
-    parse(ast, tokens).map_err(|d| in_file(d, d.file, text))
+    parse(ast, tokens).map_err(|d| locate_in_file(d, d.file, text))
+}
+
+/// The tokens of a runtime source (System or an embedded unit) as file 0 with every token at
+/// line 0, so that no diagnostic of it carries a user line.
+fn runtime_tokens(source: &[u8]) -> Result<Vec<Tok>, Diag> {
+    let mut tokens = expand(0, source, &[]).map_err(|d| Diag { line: 0, ..d })?;
+    tokens.iter_mut().for_each(|t| t.line = 0);
+    Ok(tokens)
+}
+
+/// The file number of the file at `position` in the file table: the main program is file 0, so
+/// the registered files start at 1.
+pub fn file_number(position: usize) -> u32 {
+    position as u32 + 1
 }
 
 /// The position in the file table of the file called `name`, any case. Of two files with the
@@ -89,10 +102,9 @@ pub fn load(
     embedded: &[EmbeddedUnit],
 ) -> Result<(Ast, Plan), Diag> {
     let mut ast = Ast::default();
-    // Every token of System is at line 0, so its diagnostics never carry a user line.
-    let mut system_tokens = expand(0, system, &[]).map_err(|d| Diag { line: 0, ..d })?;
-    system_tokens.iter_mut().for_each(|t| t.line = 0);
-    let system_node = parse_system(&mut ast, system_tokens).map_err(|d| in_file(d, 0, system))?;
+    let system_tokens = runtime_tokens(system)?;
+    let system_node =
+        parse_system(&mut ast, system_tokens).map_err(|d| locate_in_file(d, 0, system))?;
     let program_node = parse_file(&mut ast, 0, program, files, parse_program)?;
     let Kind::Program { uses, .. } = ast.kind(program_node) else {
         unreachable!("parse_program makes a program")
@@ -170,29 +182,28 @@ impl Loader<'_> {
 
     /// Parses the source of an embedded unit. Its tokens are at line 0, as System's are.
     fn parse_embedded(&mut self, source: &[u8]) -> Result<Id, Diag> {
-        self.ast.file = 0;
-        let mut tokens = expand(0, source, &[]).map_err(|d| Diag { line: 0, ..d })?;
-        tokens.iter_mut().for_each(|t| t.line = 0);
-        parse_runtime_unit(&mut self.ast, tokens).map_err(|d| in_file(d, 0, source))
+        let tokens = runtime_tokens(source)?;
+        parse_runtime_unit(&mut self.ast, tokens).map_err(|d| locate_in_file(d, 0, source))
     }
 
     /// Finds the file of the unit `name` and parses it. Returns the unit's node and the number
     /// of its file. Not found is error 15 and a different unit name is error 69, both at the
     /// `uses` entry.
     fn load_unit(&mut self, file: u32, entry: Id, name: u32) -> Result<(Id, u32), Diag> {
-        let embedded = self.embedded.iter().find(|u| {
-            let wanted = &self.ast.names[name as usize];
-            u.name.as_bytes().eq_ignore_ascii_case(wanted)
-        });
+        let unit_name = self.ast.names[name as usize].clone();
+        let embedded = self
+            .embedded
+            .iter()
+            .find(|u| u.name.as_bytes().eq_ignore_ascii_case(&unit_name));
         if let Some(unit) = embedded {
             return Ok((self.parse_embedded(unit.source)?, 0));
         }
-        let mut wanted = self.ast.names[name as usize].clone();
+        let mut wanted = unit_name;
         wanted.extend_from_slice(b".PAS");
         let Some(position) = find_file(self.files, &wanted) else {
             return Err(self.at_entry(entry, code::FILE_NOT_FOUND, file));
         };
-        let unit_file = position as u32 + 1;
+        let unit_file = file_number(position);
         let text = &self.files[position].text;
         let node = parse_file(&mut self.ast, unit_file, text, self.files, parse_unit)?;
         let Kind::Unit { name: declared, .. } = self.ast.kind(node) else {
