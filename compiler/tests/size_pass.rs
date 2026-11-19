@@ -129,10 +129,18 @@ fn hello_world_defines_only_what_it_calls() {
 }
 
 #[test]
-fn hello_world_does_not_import_rterror() {
-    let names = import_names(&compile(HELLO));
-    assert!(!names.is_empty());
+fn a_program_that_neither_writes_nor_divides_does_not_import_rterror() {
+    // Output is followed by CheckIo, which can raise an I/O error through rterror, so only a
+    // program without output or division has no use for it.
+    let names = import_names(&compile("begin\nend.\n"));
     assert!(!names.contains(&"rterror".to_string()), "{names:?}");
+}
+
+#[test]
+fn integer_division_imports_rterror() {
+    let dividing = "var n: LongInt;\nbegin\n  n := 5;\n  n := n div 2\nend.\n";
+    let names = import_names(&compile(dividing));
+    assert!(names.contains(&"rterror".to_string()), "{names:?}");
 }
 
 #[test]

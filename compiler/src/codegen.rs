@@ -187,15 +187,20 @@ impl Indexes {
     ) -> Self {
         let write_string = import_count;
         let mut next = write_string + 1;
-        let mut number_if = |needed: bool| {
-            needed.then(|| {
-                next += 1;
-                next - 1
-            })
-        };
-        let write_integer = number_if(builtins.write_integer);
-        let quotient = number_if(builtins.quotient);
-        let real_div = number_if(builtins.real_div);
+        // Numbered in this order, each only if the program needs it.
+        let (mut write_integer, mut quotient, mut real_div) = (None, None, None);
+        if builtins.write_integer {
+            write_integer = Some(next);
+            next += 1;
+        }
+        if builtins.quotient {
+            quotient = Some(next);
+            next += 1;
+        }
+        if builtins.real_div {
+            real_div = Some(next);
+            next += 1;
+        }
         Indexes {
             host_rterror,
             text_out: next + text_out_position,
@@ -447,7 +452,10 @@ fn generate_bodies(ast: &Ast, info: &Info, root: Id, layout: &mut Layout) -> (Bo
 fn register_procedural_types(m: &mut Module, info: &Info, called: &[bool]) -> Vec<u32> {
     let mut wasm_types = vec![0; info.types.count()];
     for (i, t) in info.types.iter().enumerate() {
-        if let (true, Type::Proc { params, result }) = (called[i], t) {
+        if !called[i] {
+            continue;
+        }
+        if let Type::Proc { params, result } = t {
             let results: &[u8] = if *result == Ty::NONE { &[] } else { &[I32] };
             wasm_types[i] = m.ty(&vec![I32; params.len()], results);
         }
