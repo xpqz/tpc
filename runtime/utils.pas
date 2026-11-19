@@ -47,11 +47,9 @@ begin
 end;
 
 { The angle whose sine is X, from ArcTan; X = 1 and -1 would divide by zero, so they are
-  the two poles. For |X| > 1, TP's Sqrt fails with runtime error 207, so it is raised here. }
+  the two poles. |X| > 1 takes the root of a negative number (runtime error 207). }
 function ArcSin(X: Real): Real;
 begin
-  if Abs(X) > 1 then
-    RunError(207);
   if Abs(X) = 1 then
     ArcSin := X * Pi / 2
   else
