@@ -1,53 +1,110 @@
 //! Whole-program checker: declarations, name resolution, typing and constant folding.
+//!
+//! The checker walks the parser's tree once and rewrites it in place: a `Name` becomes a
+//! `Var`, a constant, or a call; every expression node gets its type; constant expressions
+//! are folded. It also decides where each variable lives, which is the central technique:
+//!
+//! - A variable is first a WASM local (`SymKind::Local`), or a global at a fixed address
+//!   (`Var`). A `var` parameter is a local holding an address (`Ref`).
+//! - A local that must have an address (passed as a `var` argument, `@x`, or an in-memory
+//!   type such as a record) or that a nested routine uses is marked `needs_frame_slot` by
+//!   `capture`. When the routine has been checked, `place_frame` moves those locals into the
+//!   routine's frame in linear memory (`Frame`, `FrameRef`) and lays the frame out.
+//! - A routine nested in another receives the enclosing frame pointer as a hidden first
+//!   parameter, the static link; a function returning a String receives the address of its
+//!   result as a further hidden parameter (see `Routine::hidden_params`).
+//!
+//! Several intrinsics are rewritten into an assignment of a System helper's result:
+//! `Inc(x, n)` is `x := Ord(x) + n`, `New(p)` is `p := HeapGet(size)`, `Delete(s, i, n)` is
+//! `s := StrDelete(s, i, n)`, `Str`, `Val`, `Insert`, `GetMem`, `Mark` likewise; `Concat` is
+//! a chain of `+`. Codegen then needs no knowledge of them.
 use crate::ast::{Ast, Id, Kind, List, Op, NO_NAME};
 use crate::diag::{code, Diag};
-use crate::types::{Routine, Sym, SymKind, Symbol, Tag, Ty, Type, Types};
+use crate::types::{
+    ConstValue, Field, FrameCopy, Intrinsic, ParamType, Routine, Signature, Sym, SymKind, Symbol,
+    Tag, Ty, Types,
+};
 
-/// System routines bound by handle right after System is loaded (decision 11).
-const HELPERS: [&[u8]; 18] = [
-    b"ABSLONG",
-    b"STRCAT",
-    b"STRCMP",
-    b"STRASSIGN",
-    b"STRDELETE",
-    b"STRINSERT",
-    b"HEAPGET",
-    b"HEAPPUT",
-    b"HEAPMARK",
-    b"HEAPRELEASE",
-    b"SETOP",
-    b"SETADD",
-    b"SETIN",
-    b"SETCMP",
-    b"STRINT",
-    b"VALLONG",
-    b"VALREAL",
-    b"RANGECHK",
-];
-pub const H_ABS: usize = 0;
-pub const H_CAT: usize = 1;
-pub const H_CMP: usize = 2;
-pub const H_ASSIGN: usize = 3;
-const H_DELETE: usize = 4;
-const H_INSERT: usize = 5;
-const H_GET: usize = 6;
-const H_PUT: usize = 7;
-const H_MARK: usize = 8;
-const H_RELEASE: usize = 9;
-pub const H_SETOP: usize = 10;
-pub const H_SETADD: usize = 11;
-pub const H_SETIN: usize = 12;
-pub const H_SETCMP: usize = 13;
-const H_STRINT: usize = 14;
-const H_VALLONG: usize = 15;
-const H_VALREAL: usize = 16;
-pub const H_RANGE: usize = 17;
+/// The System routines that the compiler calls on its own behalf, bound by name right after
+/// System is loaded (decision 11).
+#[derive(Clone, Copy)]
+pub enum Helper {
+    AbsLong,
+    StrCat,
+    StrCmp,
+    StrAssign,
+    StrDelete,
+    StrInsert,
+    HeapGet,
+    HeapPut,
+    HeapMark,
+    HeapRelease,
+    SetOp,
+    SetAdd,
+    SetIn,
+    SetCmp,
+    StrInt,
+    ValLong,
+    ValReal,
+    RangeChk,
+}
+
+impl Helper {
+    const ALL: [Helper; 18] = [
+        Helper::AbsLong,
+        Helper::StrCat,
+        Helper::StrCmp,
+        Helper::StrAssign,
+        Helper::StrDelete,
+        Helper::StrInsert,
+        Helper::HeapGet,
+        Helper::HeapPut,
+        Helper::HeapMark,
+        Helper::HeapRelease,
+        Helper::SetOp,
+        Helper::SetAdd,
+        Helper::SetIn,
+        Helper::SetCmp,
+        Helper::StrInt,
+        Helper::ValLong,
+        Helper::ValReal,
+        Helper::RangeChk,
+    ];
+
+    /// The routine's name in `runtime/system.pas`, upper-cased.
+    fn name(self) -> &'static [u8] {
+        match self {
+            Helper::AbsLong => b"ABSLONG",
+            Helper::StrCat => b"STRCAT",
+            Helper::StrCmp => b"STRCMP",
+            Helper::StrAssign => b"STRASSIGN",
+            Helper::StrDelete => b"STRDELETE",
+            Helper::StrInsert => b"STRINSERT",
+            Helper::HeapGet => b"HEAPGET",
+            Helper::HeapPut => b"HEAPPUT",
+            Helper::HeapMark => b"HEAPMARK",
+            Helper::HeapRelease => b"HEAPRELEASE",
+            Helper::SetOp => b"SETOP",
+            Helper::SetAdd => b"SETADD",
+            Helper::SetIn => b"SETIN",
+            Helper::SetCmp => b"SETCMP",
+            Helper::StrInt => b"STRINT",
+            Helper::ValLong => b"VALLONG",
+            Helper::ValReal => b"VALREAL",
+            Helper::RangeChk => b"RANGECHK",
+        }
+    }
+}
 
 /// The most bytes of one structure, of all globals, or of one routine's locals.
 const MAX_DATA: u32 = 65535;
 
-/// Static data: globals start here, after the codegen's fixed header.
+/// Static data: globals start here, after the code generator's fixed header (bytes 256 to
+/// 278: the characters it writes and its digit buffer), rounded up to a multiple of 8.
 pub const GLOBALS: u32 = 280;
+
+/// The first 4 bytes of a frame hold the static link of a nested routine.
+const STATIC_LINK_BYTES: u32 = 4;
 
 pub struct Info {
     pub types: Types,
@@ -55,109 +112,120 @@ pub struct Info {
     pub routines: Vec<Routine>,
     /// First address after the globals.
     pub data_end: u32,
-    /// The System routines the compiler calls implicitly, by the `H_*` indexes.
-    pub helpers: [u32; HELPERS.len()],
+    /// The routine index of each `Helper`.
+    helpers: [u32; Helper::ALL.len()],
     /// Address of System's `HeapOrg`; the next 4 bytes are `HeapPtr`.
     pub heap: u32,
 }
 
+impl Info {
+    /// The routine index of a System helper.
+    pub fn helper(&self, helper: Helper) -> u32 {
+        self.helpers[helper as usize]
+    }
+}
+
 type R<T> = Result<T, Diag>;
 
-/// The bits of `Pi`, the value of a Real constant symbol.
-const PI: i64 = std::f64::consts::PI.to_bits() as i64;
-
-const PREDEFINED: &[(&[u8], SymKind, Ty, i64)] = &[
-    (b"BYTE", SymKind::Type, Ty::BYTE, 0),
-    (b"SHORTINT", SymKind::Type, Ty::SHORTINT, 0),
-    (b"INTEGER", SymKind::Type, Ty::INTEGER, 0),
-    (b"WORD", SymKind::Type, Ty::WORD, 0),
-    (b"LONGINT", SymKind::Type, Ty::LONGINT, 0),
-    (b"BOOLEAN", SymKind::Type, Ty::BOOLEAN, 0),
-    (b"CHAR", SymKind::Type, Ty::CHAR, 0),
-    (b"REAL", SymKind::Type, Ty::REAL, 0),
-    (b"PI", SymKind::Const, Ty::REAL, PI),
-    (b"SINGLE", SymKind::Omitted, Ty::NONE, 0),
-    (b"DOUBLE", SymKind::Omitted, Ty::NONE, 0),
-    (b"EXTENDED", SymKind::Omitted, Ty::NONE, 0),
-    (b"COMP", SymKind::Omitted, Ty::NONE, 0),
-    (b"SEG", SymKind::Omitted, Ty::NONE, 0),
-    (b"OFS", SymKind::Omitted, Ty::NONE, 0),
-    (b"PTR", SymKind::Omitted, Ty::NONE, 0),
-    (b"POINTER", SymKind::Type, Ty::POINTER, 0),
-    (b"NIL", SymKind::Const, Ty::POINTER, 0),
-    (b"FALSE", SymKind::Const, Ty::BOOLEAN, 0),
-    (b"TRUE", SymKind::Const, Ty::BOOLEAN, 1),
-    (b"WRITE", SymKind::Intrinsic, Ty::NONE, 0),
-    (b"WRITELN", SymKind::Intrinsic, Ty::NONE, 1),
-    (b"ORD", SymKind::Intrinsic, Ty::NONE, 2),
-    (b"CHR", SymKind::Intrinsic, Ty::NONE, 3),
-    (b"SUCC", SymKind::Intrinsic, Ty::NONE, 4),
-    (b"PRED", SymKind::Intrinsic, Ty::NONE, 5),
-    (b"ODD", SymKind::Intrinsic, Ty::NONE, 6),
-    (b"ABS", SymKind::Intrinsic, Ty::NONE, 7),
-    (b"SQR", SymKind::Intrinsic, Ty::NONE, 8),
-    (b"EXIT", SymKind::Intrinsic, Ty::NONE, 9),
-    (b"SIZEOF", SymKind::Intrinsic, Ty::NONE, 10),
-    (b"CONCAT", SymKind::Intrinsic, Ty::NONE, 11),
-    (b"DELETE", SymKind::Intrinsic, Ty::NONE, 12),
-    (b"INSERT", SymKind::Intrinsic, Ty::NONE, 13),
-    (b"STRING", SymKind::Type, Ty::STRING, 0),
-    (b"NEW", SymKind::Intrinsic, Ty::NONE, 14),
-    (b"DISPOSE", SymKind::Intrinsic, Ty::NONE, 15),
-    (b"GETMEM", SymKind::Intrinsic, Ty::NONE, 16),
-    (b"FREEMEM", SymKind::Intrinsic, Ty::NONE, 17),
-    (b"MARK", SymKind::Intrinsic, Ty::NONE, 18),
-    (b"RELEASE", SymKind::Intrinsic, Ty::NONE, 19),
-    (b"RUNERROR", SymKind::Intrinsic, Ty::NONE, 20),
-    (b"ROUND", SymKind::Intrinsic, Ty::NONE, 21),
-    (b"TRUNC", SymKind::Intrinsic, Ty::NONE, 22),
-    (b"SQRT", SymKind::Intrinsic, Ty::NONE, 23),
-    (b"INT", SymKind::Intrinsic, Ty::NONE, 24),
-    (b"FRAC", SymKind::Intrinsic, Ty::NONE, 25),
-    (b"INC", SymKind::Intrinsic, Ty::NONE, 26),
-    (b"DEC", SymKind::Intrinsic, Ty::NONE, 27),
-    (b"STR", SymKind::Intrinsic, Ty::NONE, 28),
-    (b"VAL", SymKind::Intrinsic, Ty::NONE, 29),
+/// Predefined names: types, constants, and the intrinsics the compiler expands itself.
+const PREDEFINED: &[(&[u8], SymKind, Ty)] = &[
+    (b"BYTE", SymKind::Type, Ty::BYTE),
+    (b"SHORTINT", SymKind::Type, Ty::SHORTINT),
+    (b"INTEGER", SymKind::Type, Ty::INTEGER),
+    (b"WORD", SymKind::Type, Ty::WORD),
+    (b"LONGINT", SymKind::Type, Ty::LONGINT),
+    (b"BOOLEAN", SymKind::Type, Ty::BOOLEAN),
+    (b"CHAR", SymKind::Type, Ty::CHAR),
+    (b"REAL", SymKind::Type, Ty::REAL),
+    (
+        b"PI",
+        SymKind::Const(ConstValue::Real(std::f64::consts::PI)),
+        Ty::REAL,
+    ),
+    (b"SINGLE", SymKind::Omitted, Ty::NONE),
+    (b"DOUBLE", SymKind::Omitted, Ty::NONE),
+    (b"EXTENDED", SymKind::Omitted, Ty::NONE),
+    (b"COMP", SymKind::Omitted, Ty::NONE),
+    (b"SEG", SymKind::Omitted, Ty::NONE),
+    (b"OFS", SymKind::Omitted, Ty::NONE),
+    (b"PTR", SymKind::Omitted, Ty::NONE),
+    (b"POINTER", SymKind::Type, Ty::POINTER),
+    (b"NIL", SymKind::Const(ConstValue::Int(0)), Ty::POINTER),
+    (b"FALSE", SymKind::Const(ConstValue::Int(0)), Ty::BOOLEAN),
+    (b"TRUE", SymKind::Const(ConstValue::Int(1)), Ty::BOOLEAN),
+    (b"STRING", SymKind::Type, Ty::STRING),
+    (b"WRITE", SymKind::Intrinsic(Intrinsic::Write), Ty::NONE),
+    (b"WRITELN", SymKind::Intrinsic(Intrinsic::WriteLn), Ty::NONE),
+    (b"ORD", SymKind::Intrinsic(Intrinsic::Ord), Ty::NONE),
+    (b"CHR", SymKind::Intrinsic(Intrinsic::Chr), Ty::NONE),
+    (b"SUCC", SymKind::Intrinsic(Intrinsic::Succ), Ty::NONE),
+    (b"PRED", SymKind::Intrinsic(Intrinsic::Pred), Ty::NONE),
+    (b"ODD", SymKind::Intrinsic(Intrinsic::Odd), Ty::NONE),
+    (b"ABS", SymKind::Intrinsic(Intrinsic::Abs), Ty::NONE),
+    (b"SQR", SymKind::Intrinsic(Intrinsic::Sqr), Ty::NONE),
+    (b"EXIT", SymKind::Intrinsic(Intrinsic::Exit), Ty::NONE),
+    (b"SIZEOF", SymKind::Intrinsic(Intrinsic::SizeOf), Ty::NONE),
+    (b"CONCAT", SymKind::Intrinsic(Intrinsic::Concat), Ty::NONE),
+    (b"DELETE", SymKind::Intrinsic(Intrinsic::Delete), Ty::NONE),
+    (b"INSERT", SymKind::Intrinsic(Intrinsic::Insert), Ty::NONE),
+    (b"NEW", SymKind::Intrinsic(Intrinsic::New), Ty::NONE),
+    (b"DISPOSE", SymKind::Intrinsic(Intrinsic::Dispose), Ty::NONE),
+    (b"GETMEM", SymKind::Intrinsic(Intrinsic::GetMem), Ty::NONE),
+    (b"FREEMEM", SymKind::Intrinsic(Intrinsic::FreeMem), Ty::NONE),
+    (b"MARK", SymKind::Intrinsic(Intrinsic::Mark), Ty::NONE),
+    (b"RELEASE", SymKind::Intrinsic(Intrinsic::Release), Ty::NONE),
+    (
+        b"RUNERROR",
+        SymKind::Intrinsic(Intrinsic::RunError),
+        Ty::NONE,
+    ),
+    (b"ROUND", SymKind::Intrinsic(Intrinsic::Round), Ty::NONE),
+    (b"TRUNC", SymKind::Intrinsic(Intrinsic::Trunc), Ty::NONE),
+    (b"SQRT", SymKind::Intrinsic(Intrinsic::Sqrt), Ty::NONE),
+    (b"INT", SymKind::Intrinsic(Intrinsic::Int), Ty::NONE),
+    (b"FRAC", SymKind::Intrinsic(Intrinsic::Frac), Ty::NONE),
+    (b"INC", SymKind::Intrinsic(Intrinsic::Inc), Ty::NONE),
+    (b"DEC", SymKind::Intrinsic(Intrinsic::Dec), Ty::NONE),
+    (b"STR", SymKind::Intrinsic(Intrinsic::Str), Ty::NONE),
+    (b"VAL", SymKind::Intrinsic(Intrinsic::Val), Ty::NONE),
 ];
 
-/// The operators behind the intrinsic functions, by symbol value.
-const INTRINSIC_OPS: [(i64, Op); 12] = [
-    (2, Op::Ord),
-    (3, Op::Chr),
-    (4, Op::Succ),
-    (5, Op::Pred),
-    (6, Op::Odd),
-    (7, Op::Abs),
-    (8, Op::Sqr),
-    (21, Op::Round),
-    (22, Op::Trunc),
-    (23, Op::Sqrt),
-    (24, Op::Int),
-    (25, Op::Frac),
-];
+/// A parameter as declared, with the node that declares it.
+struct ParamDecl {
+    node: Id,
+    name: u32,
+    type_name: u32,
+    by_ref: bool,
+}
 
-fn intrinsic_op(val: i64) -> Option<Op> {
-    INTRINSIC_OPS.iter().find(|o| o.0 == val).map(|o| o.1)
+/// The checker's state that a routine body saves on entry and restores on exit.
+struct SavedScope {
+    scope_len: usize,
+    first_user_scope: usize,
+    next_local: u32,
+    local_bytes: u32,
 }
 
 struct Cx<'a> {
     ast: &'a mut Ast,
     types: Types,
     syms: Vec<Symbol>,
+    /// Visible names, innermost last.
     scope: Vec<(u32, Sym)>,
-    /// Scope entries below this index are predefined and may be redeclared.
-    user: usize,
-    end: u32,
+    /// Scope entries below this index are predefined or from System and may be redeclared.
+    first_user_scope: usize,
+    /// First address after the globals declared so far.
+    data_end: u32,
     routines: Vec<Routine>,
     /// The routines being checked, outermost first; its length is the current depth.
-    chain: Vec<usize>,
+    routine_stack: Vec<usize>,
     /// The next free local index.
-    locals: u32,
+    next_local: u32,
     /// Bytes of the current routine's local variables.
     local_bytes: u32,
     /// The record designators of the enclosing `with` statements, innermost last.
     withs: Vec<(Id, Ty)>,
-    helpers: [u32; HELPERS.len()],
+    helpers: [u32; Helper::ALL.len()],
     /// Pointer types whose target is declared later in the same type section.
     forward: Vec<(Ty, u32)>,
 }
@@ -168,57 +236,34 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
         types: Types::new(),
         syms: Vec::new(),
         scope: Vec::new(),
-        user: 0,
-        end: GLOBALS,
+        first_user_scope: 0,
+        data_end: GLOBALS,
         routines: Vec::new(),
-        chain: Vec::new(),
-        locals: 0,
+        routine_stack: Vec::new(),
+        next_local: 0,
         local_bytes: 0,
         withs: Vec::new(),
-        helpers: [0; HELPERS.len()],
+        helpers: [0; Helper::ALL.len()],
         forward: Vec::new(),
     };
-    for &(name, kind, ty, val) in PREDEFINED {
-        let name = cx.ast.intern(name);
-        cx.push(name, Symbol::new(kind, ty, val));
-    }
-    let Kind::Program(name, decls, body) = cx.ast.nodes[root as usize].kind else {
+    cx.declare_predefined();
+    let Kind::Program {
+        name,
+        declarations,
+        body,
+    } = cx.ast.kind(root)
+    else {
         unreachable!("the parser's root is a program")
     };
-    let decls = cx.ast.items(decls).to_vec();
-    let (system, program) = decls.split_at(cx.ast.system);
+    let declarations = cx.ast.items_vec(declarations);
+    let (system, program) = declarations.split_at(cx.ast.system);
     for &d in system {
         cx.decl(d)?;
     }
-    // Implicit helpers are bound here, before any program declaration can shadow them.
-    let in_system = Diag {
-        code: code::UNKNOWN_IDENTIFIER,
-        line: 0,
-        col: 0,
-    };
-    let mut helpers = [0; HELPERS.len()];
-    for (slot, name) in helpers.iter_mut().zip(HELPERS) {
-        let name = cx.ast.intern(name);
-        *slot = match cx.lookup(name).map(|s| cx.syms[s.0 as usize]) {
-            Some(s) if s.kind == SymKind::Routine => s.val as u32,
-            _ => return Err(in_system),
-        };
-    }
-    cx.helpers = helpers;
-    let org = cx.ast.intern(b"HEAPORG");
-    let heap = match cx.lookup(org).map(|s| cx.syms[s.0 as usize]) {
-        Some(s) if s.kind == SymKind::Var => s.val as u32,
-        _ => return Err(in_system),
-    };
-    if cx.routines.iter().any(|r| !r.defined) {
-        return Err(Diag {
-            code: code::UNDEFINED_FORWARD,
-            ..in_system
-        });
-    }
-    cx.user = cx.scope.len();
+    let heap = cx.bind_system_names()?;
+    cx.first_user_scope = cx.scope.len();
     if name != NO_NAME {
-        cx.declare(root, name, Symbol::new(SymKind::Prog, Ty::NONE, 0))?;
+        cx.declare(root, name, Symbol::new(SymKind::Prog, Ty::NONE))?;
     }
     for &d in program {
         cx.decl(d)?;
@@ -232,13 +277,15 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
         types: cx.types,
         syms: cx.syms,
         routines: cx.routines,
-        data_end: cx.end,
-        helpers,
+        data_end: cx.data_end,
+        helpers: cx.helpers,
         heap,
     })
 }
 
-/// Value of a constant operator, computed at LongInt precision.
+/// Value of a constant operator, computed at LongInt precision. The unary operators use only
+/// `a`; the operators that are not constant (`Slash`, `Round`, ...) fold to 0 and are never
+/// called with constants.
 fn fold(op: Op, a: i64, b: i64) -> i64 {
     let (x, y) = (a as i32, b as i32);
     let v = match op {
@@ -274,10 +321,60 @@ fn fold(op: Op, a: i64, b: i64) -> i64 {
 }
 
 impl Cx<'_> {
-    fn push(&mut self, name: u32, s: Symbol) -> Sym {
+    fn declare_predefined(&mut self) {
+        for &(name, kind, ty) in PREDEFINED {
+            let name = self.ast.intern(name);
+            self.push(name, Symbol::new(kind, ty));
+        }
+    }
+
+    /// Binds the System routines the compiler calls on its own (`Helper`) and finds `HeapOrg`,
+    /// before any program declaration can shadow them. Returns the address of `HeapOrg`.
+    fn bind_system_names(&mut self) -> R<u32> {
+        let broken_system = Diag {
+            code: code::UNKNOWN_IDENTIFIER,
+            line: 0,
+            col: 0,
+        };
+        for helper in Helper::ALL {
+            let name = self.ast.intern(helper.name());
+            let Some((
+                _,
+                Symbol {
+                    kind: SymKind::Routine(r),
+                    ..
+                },
+            )) = self.lookup_symbol(name)
+            else {
+                return Err(broken_system);
+            };
+            self.helpers[helper as usize] = r;
+        }
+        let heap_org = self.ast.intern(b"HEAPORG");
+        let Some((
+            _,
+            Symbol {
+                kind: SymKind::Var(address),
+                ..
+            },
+        )) = self.lookup_symbol(heap_org)
+        else {
+            return Err(broken_system);
+        };
+        if self.routines.iter().any(|r| !r.defined) {
+            return Err(Diag {
+                code: code::UNDEFINED_FORWARD,
+                ..broken_system
+            });
+        }
+        Ok(address)
+    }
+
+    /// Adds a symbol and makes `name` refer to it from here on.
+    fn push(&mut self, name: u32, symbol: Symbol) -> Sym {
         self.syms.push(Symbol {
-            depth: self.chain.len() as u32,
-            ..s
+            depth: self.routine_stack.len() as u32,
+            ..symbol
         });
         let sym = Sym(self.syms.len() as u32 - 1);
         self.scope.push((name, sym));
@@ -288,26 +385,44 @@ impl Cx<'_> {
         self.scope.iter().rev().find(|e| e.0 == name).map(|e| e.1)
     }
 
-    fn err(&self, id: Id, code: u16) -> Diag {
-        let n = self.ast.nodes[id as usize];
-        Diag {
-            code,
-            line: n.line,
-            col: n.col,
+    fn symbol(&self, sym: Sym) -> Symbol {
+        self.syms[sym.0 as usize]
+    }
+
+    fn lookup_symbol(&self, name: u32) -> Option<(Sym, Symbol)> {
+        let sym = self.lookup(name)?;
+        Some((sym, self.symbol(sym)))
+    }
+
+    /// The name of a `Name` node.
+    fn name_of(&self, id: Id) -> u32 {
+        match self.ast.kind(id) {
+            Kind::Name(name) => name,
+            _ => unreachable!("the parser names it"),
         }
     }
 
-    fn declare(&mut self, at: Id, name: u32, s: Symbol) -> R<Sym> {
-        if self.scope[self.user..].iter().any(|e| e.0 == name) {
+    fn err(&self, id: Id, code: u16) -> Diag {
+        let (line, col) = self.ast.position(id);
+        Diag { code, line, col }
+    }
+
+    /// Declares `name` in the current scope; a second declaration in the same scope is an
+    /// error, but a user declaration may hide a predefined or System one.
+    fn declare(&mut self, at: Id, name: u32, symbol: Symbol) -> R<Sym> {
+        if self.scope[self.first_user_scope..]
+            .iter()
+            .any(|e| e.0 == name)
+        {
             return Err(self.err(at, code::DUPLICATE_IDENTIFIER));
         }
-        Ok(self.push(name, s))
+        Ok(self.push(name, symbol))
     }
 
     /// Resolves the pointer types declared with a target not yet declared. Called where a type
     /// section ends; TP reports an undefined target at `at`, the next declaration or the body.
     fn resolve_forward(&mut self, at: Id) -> R<()> {
-        for (ty, name) in std::mem::take(&mut self.forward) {
+        for (pointer, name) in std::mem::take(&mut self.forward) {
             let to = self.type_of(at, name).map_err(|d| match d.code {
                 code::NOT_SUPPORTED => d,
                 _ => Diag {
@@ -315,187 +430,214 @@ impl Cx<'_> {
                     ..d
                 },
             })?;
-            self.types.v[ty.0 as usize] = Type::Ptr(to);
+            self.types.set_pointer_target(pointer, to);
         }
         Ok(())
     }
 
+    // ---- Declarations ----
+
     fn decl(&mut self, d: Id) -> R<()> {
-        if !matches!(self.ast.nodes[d as usize].kind, Kind::TypeDecl(..)) {
+        // A type section ends at the first declaration that is not a type.
+        if !matches!(self.ast.kind(d), Kind::TypeDecl(..)) {
             self.resolve_forward(d)?;
         }
-        match self.ast.nodes[d as usize].kind {
-            Kind::ConstDecl(name, e) => {
-                self.expr(e)?;
-                let n = self.ast.nodes[e as usize];
-                let (val, ty) = match n.kind {
-                    Kind::IntLit(v) => (v, n.ty),
-                    Kind::RealLit(v) => (v.to_bits() as i64, Ty::REAL),
-                    Kind::StrLit(i) => (i as i64, Ty::STRING),
-                    Kind::SetLit(l) if self.ast.items(l).iter().all(|&i| self.fixed(i)) => {
-                        (e as i64, n.ty)
-                    }
-                    _ => return Err(self.err(e, code::CANNOT_EVALUATE)),
-                };
-                self.declare(d, name, Symbol::new(SymKind::Const, ty, val))?;
-            }
-            Kind::VarDecl(name, type_name) => {
-                let ty = self.type_of(d, type_name)?;
-                let size = self.types.size(ty);
-                let sym = if !self.chain.is_empty() {
-                    self.locals += 1;
-                    self.local_bytes += size;
-                    if self.local_bytes > MAX_DATA {
-                        return Err(self.err(d, code::TOO_MANY_VARIABLES));
-                    }
-                    // Aggregates always live in the frame.
-                    let taken = self.types.in_memory(ty);
-                    let local = Symbol::new(SymKind::Local, ty, self.locals as i64 - 1);
-                    Symbol { taken, ..local }
-                } else {
-                    let val = self.end as i64;
-                    self.end += size;
-                    if self.end - GLOBALS > MAX_DATA {
-                        return Err(self.err(d, code::TOO_MANY_VARIABLES));
-                    }
-                    Symbol::new(SymKind::Var, ty, val)
-                };
-                self.declare(d, name, sym)?;
-            }
+        match self.ast.kind(d) {
+            Kind::ConstDecl(name, value) => self.const_decl(d, name, value),
+            Kind::VarDecl(name, type_name) => self.var_decl(d, name, type_name),
             Kind::TypeDecl(name, spec) => {
                 let ty = self.spec(spec, name)?;
-                self.declare(d, name, Symbol::new(SymKind::Type, ty, 0))?;
+                self.declare(d, name, Symbol::new(SymKind::Type, ty))?;
+                Ok(())
             }
-            Kind::Routine(..) => self.routine(d)?,
+            Kind::Routine { .. } => self.routine(d),
             _ => unreachable!("declarations only"),
         }
+    }
+
+    /// A constant must fold to an integer, Real, string or set of constants.
+    fn const_decl(&mut self, d: Id, name: u32, value: Id) -> R<()> {
+        self.expr(value)?;
+        let node = self.ast.node(value);
+        let (constant, ty) = match node.kind {
+            Kind::IntLit(v) => (ConstValue::Int(v), node.ty),
+            Kind::RealLit(v) => (ConstValue::Real(v), Ty::REAL),
+            Kind::StrLit(i) => (ConstValue::Str(i), Ty::STRING),
+            Kind::SetLit(items) if self.ast.items(items).iter().all(|&i| self.is_constant(i)) => {
+                (ConstValue::Set(value), node.ty)
+            }
+            _ => return Err(self.err(value, code::CANNOT_EVALUATE)),
+        };
+        self.declare(d, name, Symbol::new(SymKind::Const(constant), ty))?;
         Ok(())
     }
+
+    /// A set element or range whose ends are integer constants.
+    fn is_constant(&self, item: Id) -> bool {
+        let is_literal = |i: Id| matches!(self.ast.kind(i), Kind::IntLit(_));
+        match self.ast.kind(item) {
+            Kind::Range(lo, hi) => is_literal(lo) && is_literal(hi),
+            _ => is_literal(item),
+        }
+    }
+
+    fn var_decl(&mut self, d: Id, name: u32, type_name: u32) -> R<()> {
+        let ty = self.type_of(d, type_name)?;
+        let size = self.types.size(ty);
+        let symbol = if self.routine_stack.is_empty() {
+            self.global_variable(d, ty, size)?
+        } else {
+            self.local_variable(d, ty, size)?
+        };
+        self.declare(d, name, symbol)?;
+        Ok(())
+    }
+
+    /// A global lives at the next free static address.
+    fn global_variable(&mut self, d: Id, ty: Ty, size: u32) -> R<Symbol> {
+        let address = self.data_end;
+        self.data_end += size;
+        if self.data_end - GLOBALS > MAX_DATA {
+            return Err(self.err(d, code::TOO_MANY_VARIABLES));
+        }
+        Ok(Symbol::new(SymKind::Var(address), ty))
+    }
+
+    /// A local is the next WASM local; aggregates and other in-memory types always live in
+    /// the frame.
+    fn local_variable(&mut self, d: Id, ty: Ty, size: u32) -> R<Symbol> {
+        let index = self.next_local;
+        self.next_local += 1;
+        self.local_bytes += size;
+        if self.local_bytes > MAX_DATA {
+            return Err(self.err(d, code::TOO_MANY_VARIABLES));
+        }
+        Ok(Symbol {
+            needs_frame_slot: self.types.in_memory(ty),
+            ..Symbol::new(SymKind::Local(index), ty)
+        })
+    }
+
+    fn type_of(&self, at: Id, name: u32) -> R<Ty> {
+        match self.lookup_symbol(name) {
+            None => Err(self.err(at, code::UNKNOWN_IDENTIFIER)),
+            Some((_, symbol)) => match symbol.kind {
+                SymKind::Type => Ok(symbol.ty),
+                SymKind::Omitted => Err(self.err(at, code::NOT_SUPPORTED)),
+                _ => Err(self.err(at, code::TYPE_IDENTIFIER_EXPECTED)),
+            },
+        }
+    }
+
+    // ---- Type specifications ----
 
     /// The type a declaration `name = spec` defines; `type T = T` is error 21.
     fn spec(&mut self, spec: Id, name: u32) -> R<Ty> {
-        match self.ast.nodes[spec as usize].kind {
+        match self.ast.kind(spec) {
             Kind::Name(n) if n == name => Err(self.err(spec, code::ERROR_IN_TYPE)),
             Kind::Name(n) => self.type_of(spec, n),
-            Kind::Enum(names) => {
-                let ty = self.types.enumeration(self.ast.items(names).len() as i64);
-                for (i, &id) in self.ast.items(names).to_vec().iter().enumerate() {
-                    let Kind::Name(n) = self.ast.nodes[id as usize].kind else {
-                        unreachable!("the parser lists identifiers")
-                    };
-                    self.declare(id, n, Symbol::new(SymKind::Const, ty, i as i64))?;
-                }
-                Ok(ty)
-            }
-            Kind::PtrType(name) => {
-                let to = self.type_of(spec, name).unwrap_or(Ty::NONE);
-                let ty = self.types.pointer(to);
-                if to == Ty::NONE {
-                    self.forward.push((ty, name));
-                }
-                Ok(ty)
-            }
-            Kind::StrType(size) => {
-                self.expr(size)?;
-                let Kind::IntLit(n) = self.ast.nodes[size as usize].kind else {
-                    return Err(self.err(spec, code::CANNOT_EVALUATE));
-                };
-                if !(1..=255).contains(&n) {
-                    return Err(self.err(spec, code::INVALID_STRING_LENGTH));
-                }
-                Ok(self.types.string(n as u8))
-            }
-            Kind::Array(indexes, elem) => {
-                let mut index = Vec::new();
-                for ix in self.ast.items(indexes).to_vec() {
-                    let ty = self.spec(ix, NO_NAME)?;
-                    if self.types.tag(ty).is_none() {
-                        return Err(self.err(ix, code::ORDINAL_TYPE_EXPECTED));
-                    }
-                    index.push(ty);
-                }
-                let mut ty = self.spec(elem, NO_NAME)?;
-                for &ix in index.iter().rev() {
-                    ty = self.types.array(ix, ty);
-                    if self.types.size(ty) > MAX_DATA {
-                        return Err(self.err(spec, code::STRUCTURE_TOO_LARGE));
-                    }
-                }
-                Ok(ty)
-            }
-            Kind::Record(items) => {
-                let mut fields = Vec::new();
-                let size = self.fields(items, 0, &mut fields)?;
-                if size > MAX_DATA {
-                    return Err(self.err(spec, code::STRUCTURE_TOO_LARGE));
-                }
-                Ok(self.types.record(fields, size))
-            }
+            Kind::Enum(names) => self.enum_type(names),
+            Kind::PtrType(target) => Ok(self.pointer_type(spec, target)),
+            Kind::StrType(size) => self.string_type(spec, size),
+            Kind::Array(indexes, element) => self.array_type(spec, indexes, element),
+            Kind::Record(items) => self.record_type(spec, items),
             Kind::SetType(of) => {
                 let base = self.spec(of, NO_NAME)?;
                 self.types.set_of(base).map_err(|code| self.err(of, code))
             }
-            Kind::Range(lo, hi) => {
-                let mut ends = [(0, Ty::NONE); 2];
-                for (end, id) in ends.iter_mut().zip([lo, hi]) {
-                    self.expr(id)?;
-                    let n = self.ast.nodes[id as usize];
-                    let Kind::IntLit(v) = n.kind else {
-                        return Err(self.err(spec, code::CANNOT_EVALUATE));
-                    };
-                    *end = (v, n.ty);
-                }
-                let [(a, ta), (b, tb)] = ends;
-                if !self.types.compat(ta, tb) {
-                    return Err(self.err(spec, code::TYPE_MISMATCH));
-                }
-                if a > b {
-                    return Err(self.err(spec, code::LOWER_BOUND_GREATER));
-                }
-                Ok(self.types.subrange(a, b, ta))
-            }
-            Kind::ProcType(params, result, _) => {
-                let mut sig = Vec::new();
-                for p in params.map_or(Vec::new(), |l| self.ast.items(l).to_vec()) {
-                    let Kind::Param(_, t, byref) = self.ast.nodes[p as usize].kind else {
-                        unreachable!("the parser lists parameters")
-                    };
-                    sig.push((self.type_of(p, t)?, byref));
-                }
-                let result = if result == NO_NAME {
-                    Ty::NONE
-                } else {
-                    self.type_of(spec, result)?
-                };
-                if self.types.is_str(result) || result == Ty::REAL {
-                    return Err(self.err(spec, code::NOT_SUPPORTED));
-                }
-                Ok(self.types.proc(sig, result))
-            }
+            Kind::Range(lo, hi) => self.subrange_type(spec, lo, hi),
+            Kind::ProcType { params, result, .. } => self.proc_type(spec, params, result),
             _ => unreachable!("the parser builds type specs"),
         }
     }
 
+    /// Each member of an enumeration becomes a constant of the new type.
+    fn enum_type(&mut self, names: List) -> R<Ty> {
+        let members = self.ast.items_vec(names);
+        let ty = self.types.enumeration(members.len() as i64);
+        for (ordinal, id) in members.into_iter().enumerate() {
+            let name = self.name_of(id);
+            let value = SymKind::Const(ConstValue::Int(ordinal as i64));
+            self.declare(id, name, Symbol::new(value, ty))?;
+        }
+        Ok(ty)
+    }
+
+    /// `^name`; a target not declared yet is resolved where the type section ends.
+    fn pointer_type(&mut self, spec: Id, target: u32) -> Ty {
+        let to = self.type_of(spec, target).unwrap_or(Ty::NONE);
+        let pointer = self.types.pointer(to);
+        if to == Ty::NONE {
+            self.forward.push((pointer, target));
+        }
+        pointer
+    }
+
+    fn string_type(&mut self, spec: Id, size: Id) -> R<Ty> {
+        self.expr(size)?;
+        let Kind::IntLit(n) = self.ast.kind(size) else {
+            return Err(self.err(spec, code::CANNOT_EVALUATE));
+        };
+        if !(1..=255).contains(&n) {
+            return Err(self.err(spec, code::INVALID_STRING_LENGTH));
+        }
+        Ok(self.types.string(n as u8))
+    }
+
+    /// `array[i, j] of e` is an array of arrays: the innermost dimension is built first.
+    fn array_type(&mut self, spec: Id, indexes: List, element: Id) -> R<Ty> {
+        let mut index_types = Vec::new();
+        for index in self.ast.items_vec(indexes) {
+            let ty = self.spec(index, NO_NAME)?;
+            if self.types.tag(ty).is_none() {
+                return Err(self.err(index, code::ORDINAL_TYPE_EXPECTED));
+            }
+            index_types.push(ty);
+        }
+        let mut ty = self.spec(element, NO_NAME)?;
+        for &index in index_types.iter().rev() {
+            ty = self.types.array(index, ty);
+            if self.types.size(ty) > MAX_DATA {
+                return Err(self.err(spec, code::STRUCTURE_TOO_LARGE));
+            }
+        }
+        Ok(ty)
+    }
+
+    fn record_type(&mut self, spec: Id, items: List) -> R<Ty> {
+        let mut fields = Vec::new();
+        let size = self.fields(items, 0, &mut fields)?;
+        if size > MAX_DATA {
+            return Err(self.err(spec, code::STRUCTURE_TOO_LARGE));
+        }
+        Ok(self.types.record(fields, size))
+    }
+
     /// Lays out the fields `items` from offset `at`, appending them to `out`; returns the end
     /// offset. The arms of a variant part all start at the end of the fixed part.
-    fn fields(&mut self, items: List, at: u32, out: &mut Vec<(u32, Ty, u32)>) -> R<u32> {
+    fn fields(&mut self, items: List, at: u32, out: &mut Vec<Field>) -> R<u32> {
         let mut end = at;
-        for item in self.ast.items(items).to_vec() {
-            match self.ast.nodes[item as usize].kind {
+        for item in self.ast.items_vec(items) {
+            match self.ast.kind(item) {
                 Kind::FieldDecl(name, spec) => {
                     let ty = self.spec(spec, NO_NAME)?;
+                    // An untagged variant's selector type has no name and takes no space.
                     if name != NO_NAME {
-                        if out.iter().any(|f| f.0 == name) {
+                        if out.iter().any(|f| f.name == name) {
                             return Err(self.err(item, code::DUPLICATE_IDENTIFIER));
                         }
-                        out.push((name, ty, end));
+                        out.push(Field {
+                            name,
+                            ty,
+                            offset: end,
+                        });
                         end += self.types.size(ty);
                     }
                 }
                 Kind::Variant(arms) => {
                     let start = end;
-                    for arm in self.ast.items(arms).to_vec() {
-                        let Kind::Record(list) = self.ast.nodes[arm as usize].kind else {
+                    for arm in self.ast.items_vec(arms) {
+                        let Kind::Record(list) = self.ast.kind(arm) else {
                             unreachable!("the parser lists record arms")
                         };
                         end = end.max(self.fields(list, start, out)?);
@@ -507,248 +649,397 @@ impl Cx<'_> {
         Ok(end)
     }
 
-    fn type_of(&self, at: Id, name: u32) -> R<Ty> {
-        match self.lookup(name).map(|s| self.syms[s.0 as usize]) {
-            None => Err(self.err(at, code::UNKNOWN_IDENTIFIER)),
-            Some(s) if s.kind == SymKind::Type => Ok(s.ty),
-            Some(s) if s.kind == SymKind::Omitted => Err(self.err(at, code::NOT_SUPPORTED)),
-            Some(_) => Err(self.err(at, code::TYPE_IDENTIFIER_EXPECTED)),
+    /// `lo..hi` of integer, Char or Boolean constants.
+    fn subrange_type(&mut self, spec: Id, lo: Id, hi: Id) -> R<Ty> {
+        let (low, low_ty) = self.range_end(spec, lo)?;
+        let (high, high_ty) = self.range_end(spec, hi)?;
+        if !self.types.compat(low_ty, high_ty) {
+            return Err(self.err(spec, code::TYPE_MISMATCH));
+        }
+        if low > high {
+            return Err(self.err(spec, code::LOWER_BOUND_GREATER));
+        }
+        Ok(self.types.subrange(low, high, low_ty))
+    }
+
+    fn range_end(&mut self, spec: Id, end: Id) -> R<(i64, Ty)> {
+        self.expr(end)?;
+        let node = self.ast.node(end);
+        match node.kind {
+            Kind::IntLit(value) => Ok((value, node.ty)),
+            _ => Err(self.err(spec, code::CANNOT_EVALUATE)),
         }
     }
 
+    /// `procedure (params)` or `function (params): result`.
+    fn proc_type(&mut self, spec: Id, params: Option<List>, result: u32) -> R<Ty> {
+        let mut signature = Vec::new();
+        for param in self.param_decls(params) {
+            let ty = self.type_of(param.node, param.type_name)?;
+            signature.push(ParamType {
+                ty,
+                by_ref: param.by_ref,
+            });
+        }
+        let result = if result == NO_NAME {
+            Ty::NONE
+        } else {
+            self.type_of(spec, result)?
+        };
+        if self.types.is_str(result) || result == Ty::REAL {
+            return Err(self.err(spec, code::NOT_SUPPORTED));
+        }
+        Ok(self.types.proc(signature, result))
+    }
+
+    fn param_decls(&self, params: Option<List>) -> Vec<ParamDecl> {
+        let nodes = params.map_or(Vec::new(), |list| self.ast.items_vec(list));
+        let decl = |node: Id| {
+            let Kind::Param {
+                name,
+                type_name,
+                by_ref,
+            } = self.ast.kind(node)
+            else {
+                unreachable!("the parser lists parameters")
+            };
+            ParamDecl {
+                node,
+                name,
+                type_name,
+                by_ref,
+            }
+        };
+        nodes.into_iter().map(decl).collect()
+    }
+
+    // ---- Routines ----
+
     /// A procedure or function declaration, with its body when it is not `forward`.
     fn routine(&mut self, d: Id) -> R<()> {
-        let Kind::Routine(name, params, result, func, block) = self.ast.nodes[d as usize].kind
+        let Kind::Routine {
+            name,
+            params,
+            result,
+            is_function,
+            block,
+        } = self.ast.kind(d)
         else {
             unreachable!("routine declaration")
         };
-        let (mut tys, mut names, mut refs) = (Vec::new(), Vec::new(), Vec::new());
-        for p in params.map_or(Vec::new(), |l| self.ast.items(l).to_vec()) {
-            let Kind::Param(n, t, byref) = self.ast.nodes[p as usize].kind else {
-                unreachable!("the parser lists parameters")
-            };
-            tys.push(self.type_of(p, t)?);
-            names.push(n);
-            refs.push(byref);
+        let signature = self.signature_of(d, params, result, is_function)?;
+        let index = self.declare_routine(d, name, params.is_some(), signature, block)?;
+        match block {
+            Some(block) => self.routine_body(index, block),
+            None => Ok(()),
         }
-        let rty = if result == NO_NAME {
-            None
-        } else {
-            let ty = self.type_of(d, result)?;
-            if self.types.is_agg(ty) {
+    }
+
+    /// The parameters and result a declaration states, with their types resolved.
+    fn signature_of(
+        &mut self,
+        d: Id,
+        params: Option<List>,
+        result: u32,
+        is_function: bool,
+    ) -> R<Signature> {
+        let mut types = Vec::new();
+        let mut names = Vec::new();
+        for param in self.param_decls(params) {
+            let ty = self.type_of(param.node, param.type_name)?;
+            types.push(ParamType {
+                ty,
+                by_ref: param.by_ref,
+            });
+            names.push(param.name);
+        }
+        let mut result_ty = Ty::NONE;
+        if result != NO_NAME {
+            result_ty = self.type_of(d, result)?;
+            if self.types.is_agg(result_ty) {
                 return Err(self.err(d, code::INVALID_RESULT_TYPE));
             }
-            Some(ty)
-        };
-        let known = self.scope[self.user..]
+        }
+        Ok(Signature {
+            params: types,
+            names,
+            result: result_ty,
+            is_function,
+        })
+    }
+
+    /// Enters the routine in the routine table, or matches a definition with its earlier
+    /// `forward` declaration. Returns the routine's index.
+    fn declare_routine(
+        &mut self,
+        d: Id,
+        name: u32,
+        has_param_list: bool,
+        signature: Signature,
+        block: Option<Id>,
+    ) -> R<usize> {
+        let existing = self.scope[self.first_user_scope..]
             .iter()
             .find(|e| e.0 == name)
-            .map(|e| e.1);
-        let r = match known.map(|s| self.syms[s.0 as usize]) {
+            .map(|e| self.symbol(e.1));
+        match existing.map(|s| s.kind) {
             None => {
-                if func && rty.is_none() {
+                if signature.is_function && signature.result == Ty::NONE {
                     return Err(self.err(d, code::COLON_EXPECTED));
                 }
-                let (result, defined) = (rty.unwrap_or(Ty::NONE), false);
-                let (params, body, nlocals) = (tys.clone(), 0, 0);
-                self.routines.push(Routine {
-                    params,
-                    byref: refs.clone(),
-                    names,
-                    result,
-                    func,
-                    defined,
-                    body,
-                    nlocals,
-                    depth: self.chain.len() as u32 + 1,
-                    children: false,
-                    framed: false,
-                    frame: 0,
-                    result_sym: Sym(0),
-                    result_ptr: self.types.in_memory(result),
-                    builtin: self.user == 0,
-                    addressed: false,
-                    copies: Vec::new(),
-                });
-                if let Some(&parent) = self.chain.last() {
-                    self.routines[parent].children = true;
+                let depth = self.routine_stack.len() as u32 + 1;
+                let result_ptr = self.types.in_memory(signature.result);
+                let builtin = self.first_user_scope == 0;
+                self.routines
+                    .push(Routine::new(signature, depth, result_ptr, builtin));
+                if let Some(&parent) = self.routine_stack.last() {
+                    self.routines[parent].has_children = true;
                 }
-                let val = self.routines.len() as i64 - 1;
-                self.declare(d, name, Symbol::new(SymKind::Routine, Ty::NONE, val))?;
-                self.routines.len() - 1
+                let index = self.routines.len() - 1;
+                let kind = SymKind::Routine(index as u32);
+                self.declare(d, name, Symbol::new(kind, Ty::NONE))?;
+                Ok(index)
             }
-            Some(s) if s.kind == SymKind::Routine => {
-                let r = &self.routines[s.val as usize];
-                if r.defined || r.func != func {
-                    return Err(self.err(d, code::DUPLICATE_IDENTIFIER));
-                }
-                if block.is_none() {
-                    return Err(self.err(d, code::BEGIN_EXPECTED));
-                }
-                if params.is_some() && (tys != r.params || refs != r.byref)
-                    || rty.is_some_and(|t| t != r.result)
-                {
-                    return Err(self.err(d, code::HEADER_MISMATCH));
-                }
-                if params.is_some() {
-                    self.routines[s.val as usize].names = names;
-                }
-                s.val as usize
+            Some(SymKind::Routine(index)) => {
+                let index = index as usize;
+                self.match_forward(d, index, has_param_list, signature, block)?;
+                Ok(index)
             }
-            Some(_) => return Err(self.err(d, code::DUPLICATE_IDENTIFIER)),
+            Some(_) => Err(self.err(d, code::DUPLICATE_IDENTIFIER)),
+        }
+    }
+
+    /// A definition of a routine declared `forward` must come once, with a body, and repeat
+    /// the parameters and result exactly (or leave them out).
+    fn match_forward(
+        &mut self,
+        d: Id,
+        index: usize,
+        has_param_list: bool,
+        signature: Signature,
+        block: Option<Id>,
+    ) -> R<()> {
+        let routine = &self.routines[index];
+        if routine.defined || routine.is_function != signature.is_function {
+            return Err(self.err(d, code::DUPLICATE_IDENTIFIER));
+        }
+        if block.is_none() {
+            return Err(self.err(d, code::BEGIN_EXPECTED));
+        }
+        let params_differ = has_param_list && signature.params != routine.params;
+        let result_differs = signature.result != Ty::NONE && signature.result != routine.result;
+        if params_differ || result_differs {
+            return Err(self.err(d, code::HEADER_MISMATCH));
+        }
+        if has_param_list {
+            self.routines[index].names = signature.names;
+        }
+        Ok(())
+    }
+
+    fn enter_routine(&mut self, r: usize) -> SavedScope {
+        let saved = SavedScope {
+            scope_len: self.scope.len(),
+            first_user_scope: self.first_user_scope,
+            next_local: self.next_local,
+            local_bytes: std::mem::take(&mut self.local_bytes),
         };
-        let Some(block) = block else {
-            return Ok(());
-        };
-        let Kind::Block(decls, body) = self.ast.nodes[block as usize].kind else {
+        self.first_user_scope = saved.scope_len;
+        self.routine_stack.push(r);
+        saved
+    }
+
+    fn leave_routine(&mut self, saved: SavedScope) {
+        self.routine_stack.pop();
+        self.scope.truncate(saved.scope_len);
+        self.first_user_scope = saved.first_user_scope;
+        self.next_local = saved.next_local;
+        self.local_bytes = saved.local_bytes;
+    }
+
+    /// Checks the body of routine `r`: its parameters and result become locals (hidden
+    /// parameters first), then its declarations and statements are checked, and finally
+    /// `place_frame` decides which locals move to the frame.
+    fn routine_body(&mut self, r: usize, block: Id) -> R<()> {
+        let Kind::Block(declarations, body) = self.ast.kind(block) else {
             unreachable!("the parser makes a block")
         };
         self.routines[r].defined = true;
-        let (params, names, refs) = (
-            self.routines[r].params.clone(),
-            self.routines[r].names.clone(),
-            self.routines[r].byref.clone(),
-        );
-        let first = self.syms.len();
-        let (scope_len, user, outer_locals) = (self.scope.len(), self.user, self.locals);
-        let outer_bytes = std::mem::take(&mut self.local_bytes);
-        self.user = scope_len;
-        self.chain.push(r);
-        let link = self.chain.len() > 1;
-        // Hidden parameters come first: the static link, then the address of a String result.
-        let hidden = link as u32 + self.routines[r].result_ptr as u32;
-        let nparams = params.len() as u32 + hidden;
-        self.locals = nparams;
-        if func {
-            let ty = self.routines[r].result;
-            let ret = if self.routines[r].result_ptr {
-                Symbol::new(SymKind::Ref, ty, link as i64)
-            } else {
-                self.locals += 1;
-                Symbol::new(SymKind::Local, ty, nparams as i64)
-            };
-            self.routines[r].result_sym = Sym(self.syms.len() as u32);
-            self.syms.push(Symbol {
-                depth: self.chain.len() as u32,
-                ..ret
-            });
+        let first_symbol = self.syms.len();
+        let saved = self.enter_routine(r);
+        let first_param = self.routines[r].hidden_params();
+        self.next_local = first_param + self.routines[r].params.len() as u32;
+        let declared_params = self.next_local;
+        if self.routines[r].is_function {
+            self.declare_result(r);
         }
-        for (i, (&n, &ty)) in names.iter().zip(&params).enumerate() {
-            let kind = if refs[i] {
-                SymKind::Ref
-            } else {
-                SymKind::Local
-            };
-            let param = Symbol::new(kind, ty, (i as u32 + hidden) as i64);
-            let taken = !refs[i] && self.types.in_memory(ty);
-            self.declare(block, n, Symbol { taken, ..param })?;
-        }
-        for decl in self.ast.items(decls).to_vec() {
+        self.declare_params(r, block, first_param)?;
+        for decl in self.ast.items_vec(declarations) {
             self.decl(decl)?;
         }
         self.resolve_forward(body)?;
-        if self.scope[scope_len..].iter().any(|e| {
-            let s = self.syms[e.1 .0 as usize];
-            s.kind == SymKind::Routine && !self.routines[s.val as usize].defined
+        if self.scope[saved.scope_len..].iter().any(|e| {
+            let SymKind::Routine(callee) = self.symbol(e.1).kind else {
+                return false;
+            };
+            !self.routines[callee as usize].defined
         }) {
             return Err(self.err(body, code::UNDEFINED_FORWARD));
         }
         self.stmt(body)?;
         self.routines[r].body = body;
-        self.routines[r].nlocals = self.locals - nparams;
-        self.place_frame(r, first);
-        self.chain.pop();
-        self.scope.truncate(scope_len);
-        (self.user, self.locals, self.local_bytes) = (user, outer_locals, outer_bytes);
+        self.routines[r].nlocals = self.next_local - declared_params;
+        self.place_frame(r, first_symbol);
+        self.leave_routine(saved);
         Ok(())
     }
 
-    /// Moves the locals that are captured or passed by reference (symbols of this routine
-    /// from `first` on) to the frame, in declaration order with no padding. A routine with a
-    /// parent keeps the static link in the first 4 bytes. A captured `var` parameter keeps
-    /// its address in the frame.
-    fn place_frame(&mut self, r: usize, first: usize) {
-        let depth = self.chain.len() as u32;
-        let base = 4 * (depth > 1) as u32;
-        let nparams = self.routines[r].params.len() as i64
-            + (depth > 1) as i64
-            + self.routines[r].result_ptr as i64;
-        let (mut size, mut copies) = (base, Vec::new());
-        for s in &mut self.syms[first..] {
-            if s.depth != depth || !s.taken || !matches!(s.kind, SymKind::Local | SymKind::Ref) {
+    /// The function result is a hidden parameter holding its address when it lives in
+    /// memory, otherwise a local after the parameters. It has no name: assignments to the
+    /// function's own name are redirected to it.
+    fn declare_result(&mut self, r: usize) {
+        let routine = &self.routines[r];
+        let ty = routine.result;
+        let kind = if routine.result_ptr {
+            SymKind::Ref(routine.has_static_link() as u32)
+        } else {
+            let index = self.next_local;
+            self.next_local += 1;
+            SymKind::Local(index)
+        };
+        self.routines[r].result_sym = Sym(self.syms.len() as u32);
+        self.syms.push(Symbol {
+            depth: self.routine_stack.len() as u32,
+            ..Symbol::new(kind, ty)
+        });
+    }
+
+    /// Declares the parameters as locals, the first one being local `first_param`.
+    fn declare_params(&mut self, r: usize, block: Id, first_param: u32) -> R<()> {
+        let params = self.routines[r].params.clone();
+        let names = self.routines[r].names.clone();
+        for (i, (&name, param)) in names.iter().zip(&params).enumerate() {
+            let index = first_param + i as u32;
+            let kind = if param.by_ref {
+                SymKind::Ref(index)
+            } else {
+                SymKind::Local(index)
+            };
+            let symbol = Symbol {
+                needs_frame_slot: !param.by_ref && self.types.in_memory(param.ty),
+                ..Symbol::new(kind, param.ty)
+            };
+            self.declare(block, name, symbol)?;
+        }
+        Ok(())
+    }
+
+    /// Moves the locals that need a frame slot (symbols of this routine from `first_symbol`
+    /// on) to the frame, in declaration order with no padding. A routine with a static link
+    /// keeps it in the first 4 bytes. A `var` parameter keeps its address in the frame. A
+    /// parameter moved this way is copied there by the prologue (`FrameCopy`).
+    fn place_frame(&mut self, r: usize, first_symbol: usize) {
+        let depth = self.routine_stack.len() as u32;
+        let routine = &self.routines[r];
+        let parameter_locals = routine.params.len() as u32 + routine.hidden_params();
+        let mut size = if routine.has_static_link() {
+            STATIC_LINK_BYTES
+        } else {
+            0
+        };
+        let first_slot = size;
+        let mut copies = Vec::new();
+        for s in &mut self.syms[first_symbol..] {
+            if s.depth != depth || !s.needs_frame_slot {
                 continue;
             }
-            let ty = if s.kind == SymKind::Ref {
-                Ty::LONGINT
-            } else {
-                s.ty
+            let (is_ref, local) = match s.kind {
+                SymKind::Local(local) => (false, local),
+                SymKind::Ref(local) => (true, local),
+                _ => continue,
             };
-            if s.val < nparams {
-                copies.push((s.val as u32, size, ty));
+            // A `var` parameter's frame slot holds its 4-byte address.
+            let ty = if is_ref { Ty::LONGINT } else { s.ty };
+            if local < parameter_locals {
+                copies.push(FrameCopy {
+                    local,
+                    offset: size,
+                    ty,
+                });
             }
-            s.kind = if s.kind == SymKind::Ref {
-                SymKind::FrameRef
+            s.kind = if is_ref {
+                SymKind::FrameRef(size)
             } else {
-                SymKind::Frame
+                SymKind::Frame(size)
             };
-            (s.val, size) = (size as i64, size + self.types.size(ty));
+            size += self.types.size(ty);
         }
-        let r = &mut self.routines[r];
-        r.framed = size > base || r.children;
-        (r.frame, r.copies) = (size, copies);
+        let routine = &mut self.routines[r];
+        routine.framed = size > first_slot || routine.has_children;
+        routine.frame = size;
+        routine.copies = copies;
     }
 
     /// A reference to `sym` from the current routine: a `Local` or `Ref` of an enclosing
     /// routine is captured, a `Local` passed as a `var` argument is address-taken; both move
     /// it to the frame.
     fn capture(&mut self, sym: Sym, by_ref: bool) {
-        let depth = self.chain.len() as u32;
-        let s = &mut self.syms[sym.0 as usize];
-        let outer = s.depth < depth;
-        s.taken |= matches!(s.kind, SymKind::Local | SymKind::Ref) && outer
-            || by_ref && s.kind == SymKind::Local;
+        let depth = self.routine_stack.len() as u32;
+        let symbol = &mut self.syms[sym.0 as usize];
+        let is_local_or_ref = matches!(symbol.kind, SymKind::Local(_) | SymKind::Ref(_));
+        let used_by_nested_routine = is_local_or_ref && symbol.depth < depth;
+        let passed_by_reference = by_ref && matches!(symbol.kind, SymKind::Local(_));
+        symbol.needs_frame_slot |= used_by_nested_routine || passed_by_reference;
     }
 
+    // ---- Variable and procedural arguments ----
+
     /// TP's error for an argument of a `var` parameter that is not a variable, decided by its
-    /// leftmost token; 0 for a variable.
-    fn bad_var_arg(&self, e: Id) -> u16 {
-        let function =
-            |name: u32, call: bool| match self.lookup(name).map(|s| self.syms[s.0 as usize]) {
-                Some(s) if s.kind == SymKind::Routine && self.routines[s.val as usize].func => {
-                    if call || self.routines[s.val as usize].params.is_empty() {
-                        code::INVALID_VARIABLE_REFERENCE
-                    } else {
-                        code::LEFT_PAREN_EXPECTED
-                    }
-                }
-                Some(s) if s.kind == SymKind::Intrinsic && intrinsic_op(s.val).is_some() => {
-                    code::INVALID_VARIABLE_REFERENCE
-                }
-                _ => code::VARIABLE_EXPECTED,
-            };
-        match self.ast.nodes[e as usize].kind {
-            Kind::Binary(_, a, _) => match self.bad_var_arg(a) {
-                0 => code::RIGHT_PAREN_EXPECTED,
-                c => c,
-            },
-            Kind::Call(callee, args) => match self.ast.nodes[callee as usize].kind {
+    /// leftmost token; None for a variable.
+    fn var_arg_error(&self, e: Id) -> Option<u16> {
+        match self.ast.kind(e) {
+            Kind::Binary { left, .. } => Some(
+                self.var_arg_error(left)
+                    .unwrap_or(code::RIGHT_PAREN_EXPECTED),
+            ),
+            Kind::Call(callee, args) => match self.ast.kind(callee) {
                 // A type cast of a variable is a variable.
                 Kind::Name(n) if self.type_of(callee, n).is_ok() => {
-                    let first = self.ast.items(args).first();
-                    first.map_or(code::VARIABLE_EXPECTED, |&a| self.bad_var_arg(a))
+                    match self.ast.items(args).first() {
+                        Some(&arg) => self.var_arg_error(arg),
+                        None => Some(code::VARIABLE_EXPECTED),
+                    }
                 }
-                Kind::Name(name) => function(name, true),
-                _ => code::VARIABLE_EXPECTED,
+                Kind::Name(name) => Some(self.function_reference_error(name, true)),
+                _ => Some(code::VARIABLE_EXPECTED),
             },
-            Kind::Deref(_) => 0,
-            Kind::Index(base, ..) | Kind::Field(base, _) => self.bad_var_arg(base),
-            Kind::Name(name) if self.with_field(name).is_some() => 0,
-            Kind::Name(name) => match self.lookup(name).map(|s| self.syms[s.0 as usize]) {
-                None => code::UNKNOWN_IDENTIFIER,
-                Some(s) if s.kind == SymKind::Omitted => code::NOT_SUPPORTED,
-                Some(s) if matches!(s.kind, SymKind::Var | SymKind::Local | SymKind::Ref) => 0,
-                Some(_) => function(name, false),
+            Kind::Deref(_) => None,
+            Kind::Index { base, .. } | Kind::Field(base, _) => self.var_arg_error(base),
+            Kind::Name(name) if self.with_field(name).is_some() => None,
+            Kind::Name(name) => match self.lookup_symbol(name) {
+                None => Some(code::UNKNOWN_IDENTIFIER),
+                Some((_, s)) if s.kind == SymKind::Omitted => Some(code::NOT_SUPPORTED),
+                Some((_, s)) if s.kind.is_variable() => None,
+                Some(_) => Some(self.function_reference_error(name, false)),
             },
+            _ => Some(code::VARIABLE_EXPECTED),
+        }
+    }
+
+    /// The error for a function name used where a variable is wanted.
+    fn function_reference_error(&self, name: u32, is_call: bool) -> u16 {
+        match self.lookup_symbol(name).map(|(_, s)| s.kind) {
+            Some(SymKind::Routine(r)) if self.routines[r as usize].is_function => {
+                let takes_arguments = !self.routines[r as usize].params.is_empty();
+                if is_call || !takes_arguments {
+                    code::INVALID_VARIABLE_REFERENCE
+                } else {
+                    code::LEFT_PAREN_EXPECTED
+                }
+            }
+            Some(SymKind::Intrinsic(i)) if i.unary_op().is_some() => {
+                code::INVALID_VARIABLE_REFERENCE
+            }
             _ => code::VARIABLE_EXPECTED,
         }
     }
@@ -756,61 +1047,58 @@ impl Cx<'_> {
     /// An argument of a `var` parameter of type `ty`: a variable of that very type. `at` is
     /// the call.
     fn var_arg(&mut self, at: Id, arg: Id, ty: Ty) -> R<()> {
-        match self.bad_var_arg(arg) {
-            0 => {}
-            code => return Err(self.err(arg, code)),
+        if let Some(error) = self.var_arg_error(arg) {
+            return Err(self.err(arg, error));
         }
-        let named = match self.ast.nodes[arg as usize].kind {
+        let named = match self.ast.kind(arg) {
             Kind::Name(name) if self.with_field(name).is_none() => Some(name),
             _ => None,
         };
         let Some(name) = named else {
             self.expr(arg)?;
-            return match self.ast.nodes[arg as usize].ty == ty {
-                true => Ok(()),
-                false => Err(self.err(at, code::TYPE_MISMATCH)),
-            };
+            if self.ast.ty(arg) != ty {
+                return Err(self.err(at, code::TYPE_MISMATCH));
+            }
+            return Ok(());
         };
-        let (sym, s) = self.resolve(arg, name)?;
-        if s.ty != ty {
+        let (sym, symbol) = self.resolve(arg, name)?;
+        if symbol.ty != ty {
             return Err(self.err(at, code::TYPE_MISMATCH));
         }
         self.capture(sym, true);
-        self.ast.nodes[arg as usize].kind = Kind::Var(sym);
-        self.ast.nodes[arg as usize].ty = ty;
+        self.ast.resolve(arg, Kind::Var(sym), ty);
         Ok(())
     }
 
     /// The routine's signature as a procedural type.
-    fn signature(&mut self, r: usize) -> Ty {
-        let r = &self.routines[r];
-        let sig = r.params.iter().copied().zip(r.byref.iter().copied());
-        let (sig, result) = (sig.collect(), r.result);
-        self.types.proc(sig, result)
+    fn proc_type_of(&mut self, r: usize) -> Ty {
+        let params = self.routines[r].params.clone();
+        let result = self.routines[r].result;
+        self.types.proc(params, result)
     }
 
     /// `e` where a value of procedural type `want` is expected (assignment source, value
     /// argument): a global routine of that signature or a variable of that type. `at` is the
     /// statement or call.
     fn proc_value(&mut self, at: Id, want: Ty, e: Id) -> R<()> {
-        let Kind::Name(name) = self.ast.nodes[e as usize].kind else {
+        let Kind::Name(name) = self.ast.kind(e) else {
             return Err(self.err(e, code::VARIABLE_EXPECTED));
         };
-        let (sym, s) = self.resolve(e, name)?;
-        let kind = match s.kind {
-            SymKind::Routine => {
-                let r = s.val as usize;
+        let (sym, symbol) = self.resolve(e, name)?;
+        let kind = match symbol.kind {
+            SymKind::Routine(r) => {
+                let r = r as usize;
                 if self.routines[r].depth > 1 {
                     return Err(self.err(at, code::INVALID_PROCEDURE_REFERENCE));
                 }
-                if self.signature(r) != want {
+                if self.proc_type_of(r) != want {
                     return Err(self.err(at, code::TYPE_MISMATCH));
                 }
                 self.routines[r].addressed = true;
                 Kind::ProcRef(r as u32)
             }
-            SymKind::Var | SymKind::Local | SymKind::Ref => {
-                if s.ty != want {
+            kind if kind.is_variable() => {
+                if symbol.ty != want {
                     return Err(self.err(at, code::TYPE_MISMATCH));
                 }
                 self.capture(sym, false);
@@ -818,186 +1106,191 @@ impl Cx<'_> {
             }
             _ => return Err(self.err(e, code::VARIABLE_EXPECTED)),
         };
-        self.ast.nodes[e as usize].kind = kind;
-        self.ast.nodes[e as usize].ty = want;
+        self.ast.resolve(e, kind, want);
         Ok(())
     }
 
     /// The field `name` of an enclosing `with` record: its designator, type and offset.
     fn with_field(&self, name: u32) -> Option<(Id, Ty, u32)> {
-        let found = |&(d, ty): &(Id, Ty)| self.types.field(ty, name).map(|(t, off)| (d, t, off));
+        let found = |&(designator, ty): &(Id, Ty)| {
+            let (field_ty, offset) = self.types.field(ty, name)?;
+            Some((designator, field_ty, offset))
+        };
         self.withs.iter().rev().find_map(found)
     }
 
+    /// The symbol a name refers to; a predefined type this compiler omits is error 200.
     fn resolve(&self, id: Id, name: u32) -> R<(Sym, Symbol)> {
-        let s = self
-            .lookup(name)
+        let (sym, symbol) = self
+            .lookup_symbol(name)
             .ok_or(self.err(id, code::UNKNOWN_IDENTIFIER))?;
-        let sym = self.syms[s.0 as usize];
-        match sym.kind {
+        match symbol.kind {
             SymKind::Omitted => Err(self.err(id, code::NOT_SUPPORTED)),
-            _ => Ok((s, sym)),
+            _ => Ok((sym, symbol)),
         }
     }
 
+    // ---- Statements ----
+
     fn stmt(&mut self, id: Id) -> R<()> {
-        match self.ast.nodes[id as usize].kind {
-            Kind::Compound(l) => {
-                for s in self.ast.items(l).to_vec() {
-                    self.stmt(s)?;
+        match self.ast.kind(id) {
+            Kind::Compound(statements) => self.statements(statements)?,
+            Kind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                self.condition(id, condition)?;
+                self.stmt(then_branch)?;
+                if let Some(else_branch) = else_branch {
+                    self.stmt(else_branch)?;
                 }
             }
-            Kind::If(cond, then, other) => {
-                self.condition(id, cond)?;
-                self.stmt(then)?;
-                if let Some(s) = other {
-                    self.stmt(s)?;
-                }
-            }
-            Kind::While(cond, body) => {
-                self.condition(id, cond)?;
+            Kind::While(condition, body) => {
+                self.condition(id, condition)?;
                 self.stmt(body)?;
             }
-            Kind::Repeat(body, cond) => {
-                for s in self.ast.items(body).to_vec() {
-                    self.stmt(s)?;
-                }
-                self.condition(id, cond)?;
+            Kind::Repeat(body, condition) => {
+                self.statements(body)?;
+                self.condition(id, condition)?;
             }
-            Kind::Case(selector, arms, other) => {
-                self.expr(selector)?;
-                let sel = self.ast.nodes[selector as usize].ty;
-                if self.types.tag(sel).is_none() {
-                    return Err(self.err(id, code::ORDINAL_EXPRESSION_EXPECTED));
-                }
-                for arm in self.ast.items(arms).to_vec() {
-                    let Kind::Arm(labels, body) = self.ast.nodes[arm as usize].kind else {
-                        unreachable!("the parser lists arms")
-                    };
-                    for label in self.ast.items(labels).to_vec() {
-                        self.label(label, sel)?;
-                    }
-                    self.stmt(body)?;
-                }
-                for s in self.ast.items(other).to_vec() {
-                    self.stmt(s)?;
-                }
-            }
-            Kind::For(var, first, last, body, _) => {
-                let Kind::Name(name) = self.ast.nodes[var as usize].kind else {
-                    unreachable!("the parser names the control variable")
-                };
-                let (sym, s) = self.resolve(var, name)?;
-                let outer = s.depth < self.chain.len() as u32;
-                if s.kind == SymKind::Ref
-                    || s.kind == SymKind::Local && outer
-                    || self.types.sig(s.ty).is_some()
-                    || self.types.tag(s.ty).is_none()
-                {
-                    return Err(self.err(var, code::INVALID_FOR_VARIABLE));
-                }
-                if !matches!(s.kind, SymKind::Var | SymKind::Local) {
-                    return Err(self.err(var, code::VARIABLE_EXPECTED));
-                }
-                self.ast.nodes[var as usize].kind = Kind::Var(sym);
-                self.ast.nodes[var as usize].ty = s.ty;
-                for bound in [first, last] {
-                    self.expr(bound)?;
-                    self.assignable(id, s.ty, bound)?;
-                }
-                self.stmt(body)?;
-            }
-            Kind::Assign(target, value) => {
-                let name = match self.ast.nodes[target as usize].kind {
-                    Kind::Name(name) if self.with_field(name).is_none() => name,
-                    _ => {
-                        self.expr(target)?;
-                        let ty = self.ast.nodes[target as usize].ty;
-                        return self.assign_value(id, ty, value);
-                    }
-                };
-                let (sym, s) = self.resolve(target, name)?;
-                let (kind, ty) = match s.kind {
-                    SymKind::Var | SymKind::Local | SymKind::Ref => {
-                        self.capture(sym, false);
-                        (Kind::Var(sym), s.ty)
-                    }
-                    SymKind::Routine
-                        if self.chain.contains(&(s.val as usize))
-                            && self.routines[s.val as usize].func =>
-                    {
-                        let ret = self.routines[s.val as usize].result_sym;
-                        self.capture(ret, false);
-                        (Kind::Var(ret), self.routines[s.val as usize].result)
-                    }
-                    SymKind::Routine if self.routines[s.val as usize].func => {
-                        return Err(self.err(target, code::INVALID_VARIABLE_REFERENCE));
-                    }
-                    SymKind::Routine => return Err(self.err(target, code::SEMICOLON_EXPECTED)),
-                    _ => return Err(self.err(target, code::ERROR_IN_STATEMENT)),
-                };
-                self.ast.nodes[target as usize].kind = kind;
-                self.ast.nodes[target as usize].ty = ty;
-                self.assign_value(id, ty, value)?;
-            }
-            Kind::With(records, body) => {
-                let outer = self.withs.len();
-                for d in self.ast.items(records).to_vec() {
-                    self.expr(d)?;
-                    let ty = self.ast.nodes[d as usize].ty;
-                    if !self.types.is_record(ty) {
-                        return Err(self.err(d, code::RECORD_VARIABLE_EXPECTED));
-                    }
-                    self.withs.push((d, ty));
-                }
-                self.stmt(body)?;
-                self.withs.truncate(outer);
-            }
-            Kind::Call(callee, args) => {
-                let Kind::Name(name) = self.ast.nodes[callee as usize].kind else {
-                    unreachable!("the parser names the callee")
-                };
-                let (_, s) = self.resolve(callee, name)?;
-                let kind = match s.kind {
-                    SymKind::Intrinsic if s.val <= 1 => {
-                        for a in self.ast.items(args).to_vec() {
-                            self.write_arg(a)?;
-                        }
-                        Kind::Write(args, s.val == 1)
-                    }
-                    SymKind::Intrinsic if s.val == 12 || s.val == 13 => {
-                        self.edit_string(id, s.val == 13, args)?
-                    }
-                    SymKind::Intrinsic if (14..=20).contains(&s.val) => {
-                        self.heap_call(id, s.val, args)?
-                    }
-                    SymKind::Intrinsic if s.val >= 26 => self.convert(id, s.val, args)?,
-                    SymKind::Intrinsic if s.val == 9 => {
-                        if !self.ast.items(args).is_empty() {
-                            return Err(self.err(id, code::SEMICOLON_EXPECTED));
-                        }
-                        Kind::Exit
-                    }
-                    SymKind::Routine if !self.routines[s.val as usize].func => {
-                        let (params, refs) = self.routine_params(s.val as usize);
-                        let builtin = self.routines[s.val as usize].builtin;
-                        self.arguments(id, params, refs, args, false, builtin)?;
-                        Kind::Invoke(s.val as u32, args)
-                    }
-                    SymKind::Routine => return Err(self.err(id, code::INVALID_VARIABLE_REFERENCE)),
-                    SymKind::Var | SymKind::Local | SymKind::Ref => match self.types.sig(s.ty) {
-                        Some((params, refs, Ty::NONE)) => {
-                            self.indirect(id, callee, params, refs, args, false)?
-                        }
-                        _ => return Err(self.err(id, code::ASSIGN_EXPECTED)),
-                    },
-                    _ => return Err(self.err(callee, code::ERROR_IN_STATEMENT)),
-                };
-                self.ast.nodes[id as usize].kind = kind;
-            }
+            Kind::Case {
+                selector,
+                arms,
+                else_body,
+            } => self.case_statement(id, selector, arms, else_body)?,
+            Kind::For {
+                variable,
+                first,
+                last,
+                body,
+                ..
+            } => self.for_statement(id, variable, first, last, body)?,
+            Kind::Assign(target, value) => self.assign_statement(id, target, value)?,
+            Kind::With(records, body) => self.with_statement(records, body)?,
+            Kind::Call(callee, args) => self.call_statement(id, callee, args)?,
             _ => unreachable!("statements only"),
         }
         Ok(())
+    }
+
+    fn statements(&mut self, list: List) -> R<()> {
+        for statement in self.ast.items_vec(list) {
+            self.stmt(statement)?;
+        }
+        Ok(())
+    }
+
+    /// `at` is the statement owning the Boolean condition.
+    fn condition(&mut self, at: Id, condition: Id) -> R<()> {
+        self.expr(condition)?;
+        match self.ast.ty(condition) {
+            Ty::BOOLEAN => Ok(()),
+            _ => Err(self.err(at, code::BOOLEAN_EXPRESSION_EXPECTED)),
+        }
+    }
+
+    fn case_statement(&mut self, id: Id, selector: Id, arms: List, else_body: List) -> R<()> {
+        self.expr(selector)?;
+        let selector_ty = self.ast.ty(selector);
+        if self.types.tag(selector_ty).is_none() {
+            return Err(self.err(id, code::ORDINAL_EXPRESSION_EXPECTED));
+        }
+        for arm in self.ast.items_vec(arms) {
+            let Kind::Arm(labels, body) = self.ast.kind(arm) else {
+                unreachable!("the parser lists arms")
+            };
+            for label in self.ast.items_vec(labels) {
+                self.label(label, selector_ty)?;
+            }
+            self.stmt(body)?;
+        }
+        self.statements(else_body)
+    }
+
+    /// A case label range: constants of the selector's family, within Integer.
+    fn label(&mut self, label: Id, selector_ty: Ty) -> R<()> {
+        let Kind::Range(lo, hi) = self.ast.kind(label) else {
+            unreachable!("the parser lists ranges")
+        };
+        // A single label has both ends the same node.
+        let ends = if lo == hi { vec![lo] } else { vec![lo, hi] };
+        for end in ends {
+            self.expr(end)?;
+            let node = self.ast.node(end);
+            let Kind::IntLit(value) = node.kind else {
+                return Err(self.err(label, code::CANNOT_EVALUATE));
+            };
+            if !self.types.compat(selector_ty, node.ty) {
+                return Err(self.err(label, code::CASE_TYPES_MISMATCH));
+            }
+            let is_integer = self.types.tag(selector_ty) == Some(Tag::Int);
+            if is_integer && !(-32768..=32767).contains(&value) {
+                return Err(self.err(label, code::CASE_CONSTANT_OUT_OF_RANGE));
+            }
+        }
+        Ok(())
+    }
+
+    /// The control variable must be a local of this routine or a global of ordinal type.
+    fn for_statement(&mut self, id: Id, variable: Id, first: Id, last: Id, body: Id) -> R<()> {
+        let (sym, symbol) = self.resolve(variable, self.name_of(variable))?;
+        let is_outer = symbol.depth < self.routine_stack.len() as u32;
+        let is_reference = matches!(symbol.kind, SymKind::Ref(_));
+        let is_outer_local = matches!(symbol.kind, SymKind::Local(_)) && is_outer;
+        if is_reference
+            || is_outer_local
+            || self.types.sig(symbol.ty).is_some()
+            || self.types.tag(symbol.ty).is_none()
+        {
+            return Err(self.err(variable, code::INVALID_FOR_VARIABLE));
+        }
+        if !matches!(symbol.kind, SymKind::Var(_) | SymKind::Local(_)) {
+            return Err(self.err(variable, code::VARIABLE_EXPECTED));
+        }
+        self.ast.resolve(variable, Kind::Var(sym), symbol.ty);
+        for bound in [first, last] {
+            self.expr(bound)?;
+            self.assignable(id, symbol.ty, bound)?;
+        }
+        self.stmt(body)
+    }
+
+    fn assign_statement(&mut self, id: Id, target: Id, value: Id) -> R<()> {
+        let name = match self.ast.kind(target) {
+            Kind::Name(name) if self.with_field(name).is_none() => name,
+            _ => {
+                // A selector chain, or a field named through `with`.
+                self.expr(target)?;
+                let ty = self.ast.ty(target);
+                return self.assign_value(id, ty, value);
+            }
+        };
+        let (sym, symbol) = self.resolve(target, name)?;
+        let (kind, ty) = match symbol.kind {
+            kind if kind.is_variable() => {
+                self.capture(sym, false);
+                (Kind::Var(sym), symbol.ty)
+            }
+            // Assigning to the name of the function being defined sets its result.
+            SymKind::Routine(r) if self.is_enclosing_function(r) => {
+                let result = self.routines[r as usize].result_sym;
+                self.capture(result, false);
+                (Kind::Var(result), self.routines[r as usize].result)
+            }
+            SymKind::Routine(r) if self.routines[r as usize].is_function => {
+                return Err(self.err(target, code::INVALID_VARIABLE_REFERENCE));
+            }
+            SymKind::Routine(_) => return Err(self.err(target, code::SEMICOLON_EXPECTED)),
+            _ => return Err(self.err(target, code::ERROR_IN_STATEMENT)),
+        };
+        self.ast.resolve(target, kind, ty);
+        self.assign_value(id, ty, value)
+    }
+
+    /// True if routine `r` is a function being defined now (this one or one around it).
+    fn is_enclosing_function(&self, r: u32) -> bool {
+        self.routine_stack.contains(&(r as usize)) && self.routines[r as usize].is_function
     }
 
     /// `at` is the assignment of `value` to a target of type `ty`.
@@ -1009,171 +1302,157 @@ impl Cx<'_> {
         self.assignable(at, ty, value)
     }
 
-    /// Checks the arguments of a call of routine `r` against its parameters; `at` is the
-    /// call. A routine without parameters takes no parentheses.
+    fn with_statement(&mut self, records: List, body: Id) -> R<()> {
+        let outer = self.withs.len();
+        for designator in self.ast.items_vec(records) {
+            self.expr(designator)?;
+            let ty = self.ast.ty(designator);
+            if !self.types.is_record(ty) {
+                return Err(self.err(designator, code::RECORD_VARIABLE_EXPECTED));
+            }
+            self.withs.push((designator, ty));
+        }
+        self.stmt(body)?;
+        self.withs.truncate(outer);
+        Ok(())
+    }
+
+    /// A procedure call statement, or an intrinsic that is a statement. The call node is
+    /// rewritten to what codegen expects: `Invoke`, `Indirect`, `Write`, `Exit`, or the
+    /// assignment of a helper's result (see the module comment).
+    fn call_statement(&mut self, id: Id, callee: Id, args: List) -> R<()> {
+        let (_, symbol) = self.resolve(callee, self.name_of(callee))?;
+        let kind = match symbol.kind {
+            SymKind::Intrinsic(i @ (Intrinsic::Write | Intrinsic::WriteLn)) => {
+                for arg in self.ast.items_vec(args) {
+                    self.write_arg(arg)?;
+                }
+                Kind::Write(args, i == Intrinsic::WriteLn)
+            }
+            SymKind::Intrinsic(i @ (Intrinsic::Delete | Intrinsic::Insert)) => {
+                self.edit_string(id, i, args)?
+            }
+            SymKind::Intrinsic(
+                i @ (Intrinsic::New
+                | Intrinsic::Dispose
+                | Intrinsic::GetMem
+                | Intrinsic::FreeMem
+                | Intrinsic::Mark
+                | Intrinsic::Release
+                | Intrinsic::RunError),
+            ) => self.heap_call(id, i, args)?,
+            SymKind::Intrinsic(i @ (Intrinsic::Inc | Intrinsic::Dec)) => {
+                self.inc_dec(id, i, args)?
+            }
+            SymKind::Intrinsic(Intrinsic::Str) => self.str_call(id, args)?,
+            SymKind::Intrinsic(Intrinsic::Val) => self.val_call(id, args)?,
+            SymKind::Intrinsic(Intrinsic::Exit) => {
+                if !self.ast.items(args).is_empty() {
+                    return Err(self.err(id, code::SEMICOLON_EXPECTED));
+                }
+                Kind::Exit
+            }
+            SymKind::Routine(r) if !self.routines[r as usize].is_function => {
+                let params = self.routines[r as usize].params.clone();
+                let builtin = self.routines[r as usize].builtin;
+                self.arguments(id, params, args, false, builtin)?;
+                Kind::Invoke(r, args)
+            }
+            SymKind::Routine(_) => return Err(self.err(id, code::INVALID_VARIABLE_REFERENCE)),
+            kind if kind.is_variable() => match self.types.sig(symbol.ty) {
+                Some((params, Ty::NONE)) => self.indirect(id, callee, params, args, false)?,
+                _ => return Err(self.err(id, code::ASSIGN_EXPECTED)),
+            },
+            _ => return Err(self.err(callee, code::ERROR_IN_STATEMENT)),
+        };
+        self.ast.set_kind(id, kind);
+        Ok(())
+    }
+
+    // ---- Arguments ----
+
+    /// Checks the arguments of a call against the parameters; `at` is the call. A routine
+    /// without parameters takes no parentheses.
     fn arguments(
         &mut self,
         at: Id,
-        params: Vec<Ty>,
-        refs: Vec<bool>,
+        params: Vec<ParamType>,
         args: List,
         in_expr: bool,
         builtin: bool,
     ) -> R<()> {
-        let items = self.ast.items(args).to_vec();
-        let code = match (params.len(), items.len()) {
-            (0, 0) => 0,
-            (0, _) => {
-                if in_expr && !builtin {
-                    code::RIGHT_PAREN_EXPECTED
-                } else {
-                    code::SEMICOLON_EXPECTED
-                }
-            }
-            (_, 0) => code::LEFT_PAREN_EXPECTED,
-            (p, a) if a < p => code::COMMA_EXPECTED,
-            (p, a) if a > p => code::RIGHT_PAREN_EXPECTED,
-            _ => 0,
-        };
-        if code == code::LEFT_PAREN_EXPECTED {
-            let follow = self.ast.follow.iter().find(|f| f.0 == at);
-            let line = follow.map_or(self.ast.nodes[at as usize].line, |f| f.1);
-            return Err(Diag {
-                line,
-                ..self.err(at, code::LEFT_PAREN_EXPECTED)
-            });
+        let items = self.ast.items_vec(args);
+        match argument_count_error(params.len(), items.len(), in_expr, builtin) {
+            Some(code::LEFT_PAREN_EXPECTED) => return Err(self.missing_argument_list(at)),
+            Some(error) => return Err(self.err(at, error)),
+            None => {}
         }
-        if code != 0 {
-            return Err(self.err(at, code));
-        }
-        for ((&arg, &ty), &byref) in items.iter().zip(&params).zip(&refs) {
-            if matches!(self.ast.nodes[arg as usize].kind, Kind::Fmt(..)) {
+        for (&arg, param) in items.iter().zip(&params) {
+            if matches!(self.ast.kind(arg), Kind::Fmt { .. }) {
                 return Err(self.err(at, code::RIGHT_PAREN_EXPECTED));
             }
-            if byref {
-                self.var_arg(at, arg, ty)?;
-                continue;
+            if param.by_ref {
+                self.var_arg(at, arg, param.ty)?;
+            } else if self.types.sig(param.ty).is_some() {
+                self.proc_value(at, param.ty, arg)?;
+            } else {
+                self.expr(arg)?;
+                self.argument_assignable(at, param.ty, arg, builtin)?;
             }
-            if self.types.sig(ty).is_some() {
-                self.proc_value(at, ty, arg)?;
-                continue;
-            }
-            self.expr(arg)?;
-            self.argument_assignable(at, ty, arg, builtin)?;
         }
         Ok(())
+    }
+
+    /// TP reports a missing argument list at the line of the token after the name.
+    fn missing_argument_list(&self, at: Id) -> Diag {
+        let follow = self.ast.follow.iter().find(|f| f.node == at);
+        let line = follow.map_or(self.ast.node(at).line, |f| f.line);
+        Diag {
+            line,
+            ..self.err(at, code::LEFT_PAREN_EXPECTED)
+        }
     }
 
     /// `assignable` for an argument; TP names the kind of value that a System routine wants.
     fn argument_assignable(&mut self, at: Id, ty: Ty, arg: Id, builtin: bool) -> R<()> {
         self.assignable(at, ty, arg).map_err(|d| {
-            let code = match () {
-                _ if d.code != code::TYPE_MISMATCH || !builtin => d.code,
-                _ if self.types.is_str(ty) => code::STRING_EXPRESSION_EXPECTED,
-                _ if self.types.tag(ty) == Some(Tag::Char) => code::CHAR_EXPRESSION_EXPECTED,
-                _ if self.types.tag(ty) == Some(Tag::Int) => code::INTEGER_EXPRESSION_EXPECTED,
-                _ => code::TYPE_MISMATCH,
+            let code = if d.code != code::TYPE_MISMATCH || !builtin {
+                d.code
+            } else if self.types.is_str(ty) {
+                code::STRING_EXPRESSION_EXPECTED
+            } else if self.types.tag(ty) == Some(Tag::Char) {
+                code::CHAR_EXPRESSION_EXPECTED
+            } else if self.types.tag(ty) == Some(Tag::Int) {
+                code::INTEGER_EXPRESSION_EXPECTED
+            } else {
+                code::TYPE_MISMATCH
             };
             Diag { code, ..d }
         })
     }
 
-    fn routine_params(&self, r: usize) -> (Vec<Ty>, Vec<bool>) {
-        (
-            self.routines[r].params.clone(),
-            self.routines[r].byref.clone(),
-        )
-    }
-
-    /// A call through the variable named by `callee` with the signature `params`/`refs`:
-    /// the variable becomes the callee value of the call node `at`.
+    /// A call through the variable named by `callee` with the signature `params`: the
+    /// variable becomes the callee value of the call node `at`.
     fn indirect(
         &mut self,
         at: Id,
         callee: Id,
-        params: Vec<Ty>,
-        refs: Vec<bool>,
+        params: Vec<ParamType>,
         args: List,
         in_expr: bool,
     ) -> R<Kind> {
-        let Kind::Name(name) = self.ast.nodes[callee as usize].kind else {
-            unreachable!("the parser names the callee")
-        };
-        let (sym, s) = self.resolve(callee, name)?;
-        self.arguments(at, params, refs, args, in_expr, false)?;
+        let (sym, symbol) = self.resolve(callee, self.name_of(callee))?;
+        self.arguments(at, params, args, in_expr, false)?;
         self.capture(sym, false);
-        self.ast.nodes[callee as usize].kind = Kind::Var(sym);
-        self.ast.nodes[callee as usize].ty = s.ty;
+        self.ast.resolve(callee, Kind::Var(sym), symbol.ty);
         Ok(Kind::Indirect(callee, args))
-    }
-
-    /// A case label range: constants of the selector's family, within Integer.
-    fn label(&mut self, label: Id, sel: Ty) -> R<()> {
-        let Kind::Range(lo, hi) = self.ast.nodes[label as usize].kind else {
-            unreachable!("the parser lists ranges")
-        };
-        for end in if lo == hi { vec![lo] } else { vec![lo, hi] } {
-            self.expr(end)?;
-            let n = self.ast.nodes[end as usize];
-            let Kind::IntLit(v) = n.kind else {
-                return Err(self.err(label, code::CANNOT_EVALUATE));
-            };
-            if !self.types.compat(sel, n.ty) {
-                return Err(self.err(label, code::CASE_TYPES_MISMATCH));
-            }
-            if self.types.tag(sel) == Some(Tag::Int) && !(-32768..=32767).contains(&v) {
-                return Err(self.err(label, code::CASE_CONSTANT_OUT_OF_RANGE));
-            }
-        }
-        Ok(())
-    }
-
-    /// An Integer-family operand `e` used as a Real: a literal becomes a real literal, else an
-    /// `IntToReal` node over a copy of `e`.
-    fn coerce_real(&mut self, e: Id) {
-        let n = self.ast.nodes[e as usize];
-        if self.types.tag(n.ty) != Some(Tag::Int) {
-            return;
-        }
-        self.ast.nodes[e as usize].ty = Ty::REAL;
-        self.ast.nodes[e as usize].kind = if let Kind::IntLit(v) = n.kind {
-            Kind::RealLit(v as f64)
-        } else {
-            self.ast.nodes.push(n);
-            Kind::IntToReal(self.ast.nodes.len() as Id - 1)
-        };
-    }
-
-    /// A Char operand `e` used as a String: a one-character literal, else a `CharToStr` node.
-    fn coerce_str(&mut self, e: Id) {
-        let n = self.ast.nodes[e as usize];
-        if self.types.tag(n.ty) != Some(Tag::Char) {
-            return;
-        }
-        self.ast.nodes[e as usize].ty = Ty::STRING;
-        self.ast.nodes[e as usize].kind = if let Kind::IntLit(c) = n.kind {
-            self.ast.strs.push(vec![c as u8]);
-            Kind::StrLit(self.ast.strs.len() as u32 - 1)
-        } else {
-            self.ast.nodes.push(n);
-            Kind::CharToStr(self.ast.nodes.len() as Id - 1)
-        };
-    }
-
-    /// `at` is the statement owning the Boolean condition.
-    fn condition(&mut self, at: Id, cond: Id) -> R<()> {
-        self.expr(cond)?;
-        match self.ast.nodes[cond as usize].ty {
-            Ty::BOOLEAN => Ok(()),
-            _ => Err(self.err(at, code::BOOLEAN_EXPRESSION_EXPECTED)),
-        }
     }
 
     /// `at` is the assignment; a constant must also fit the destination's range.
     fn assignable(&mut self, at: Id, dest: Ty, value: Id) -> R<()> {
-        let v = self.ast.nodes[value as usize];
+        let node = self.ast.node(value);
         if self.types.is_str(dest) {
-            if !self.types.is_str(v.ty) && self.types.tag(v.ty) != Some(Tag::Char) {
+            if !self.types.is_str(node.ty) && self.types.tag(node.ty) != Some(Tag::Char) {
                 return Err(self.err(at, code::TYPE_MISMATCH));
             }
             self.coerce_str(value);
@@ -1181,578 +1460,356 @@ impl Cx<'_> {
         }
         if dest == Ty::REAL {
             self.coerce_real(value);
-            let real = self.ast.nodes[value as usize].ty == Ty::REAL;
-            return if real {
-                Ok(())
-            } else {
-                Err(self.err(at, code::TYPE_MISMATCH))
-            };
+            if self.ast.ty(value) != Ty::REAL {
+                return Err(self.err(at, code::TYPE_MISMATCH));
+            }
+            return Ok(());
         }
         if self.types.is_agg(dest) {
             // Name equivalence: only the very same type; sets need compatible bases.
-            let set = self.types.is_set(dest) && self.types.compat(dest, v.ty);
-            return if v.ty == dest || set {
-                Ok(())
-            } else {
-                Err(self.err(at, code::TYPE_MISMATCH))
-            };
-        }
-        if !self.types.compat(dest, v.ty) {
+            let compatible_sets = self.types.is_set(dest) && self.types.compat(dest, node.ty);
+            if node.ty == dest || compatible_sets {
+                return Ok(());
+            }
             return Err(self.err(at, code::TYPE_MISMATCH));
         }
-        match v.kind {
-            Kind::IntLit(c) => {
-                let (lo, hi, ..) = self.types.ord(dest);
-                if c < lo || c > hi {
-                    return Err(self.err(at, code::CONSTANT_OUT_OF_RANGE));
-                }
-                Ok(())
-            }
-            _ => Ok(()),
+        if !self.types.compat(dest, node.ty) {
+            return Err(self.err(at, code::TYPE_MISMATCH));
         }
+        if let Kind::IntLit(constant) = node.kind {
+            let range = self.types.ord(dest);
+            if constant < range.lo || constant > range.hi {
+                return Err(self.err(at, code::CONSTANT_OUT_OF_RANGE));
+            }
+        }
+        Ok(())
     }
 
-    fn write_arg(&mut self, a: Id) -> R<()> {
-        let mut value = a;
+    /// An Integer-family operand `e` used as a Real: a literal becomes a real literal, else an
+    /// `IntToReal` node over a copy of `e`. The copy takes a new slot so that `e`, which the
+    /// parent refers to, can be overwritten by the wrapper.
+    fn coerce_real(&mut self, e: Id) {
+        let node = self.ast.node(e);
+        if self.types.tag(node.ty) != Some(Tag::Int) {
+            return;
+        }
+        let kind = if let Kind::IntLit(v) = node.kind {
+            Kind::RealLit(v as f64)
+        } else {
+            self.ast.nodes.push(node);
+            Kind::IntToReal(self.ast.nodes.len() as Id - 1)
+        };
+        self.ast.resolve(e, kind, Ty::REAL);
+    }
+
+    /// A Char operand `e` used as a String: a one-character literal, else a `CharToStr` node
+    /// over a copy of `e` (see `coerce_real`).
+    fn coerce_str(&mut self, e: Id) {
+        let node = self.ast.node(e);
+        if self.types.tag(node.ty) != Some(Tag::Char) {
+            return;
+        }
+        let kind = if let Kind::IntLit(c) = node.kind {
+            self.ast.strs.push(vec![c as u8]);
+            Kind::StrLit(self.ast.strs.len() as u32 - 1)
+        } else {
+            self.ast.nodes.push(node);
+            Kind::CharToStr(self.ast.nodes.len() as Id - 1)
+        };
+        self.ast.resolve(e, kind, Ty::STRING);
+    }
+
+    /// One argument of `Write`/`WriteLn`: `value`, or `value : width [: decimals]`.
+    fn write_arg(&mut self, arg: Id) -> R<()> {
+        let mut value = arg;
         let mut decimals = None;
-        if let Kind::Fmt(v, w, d) = self.ast.nodes[a as usize].kind {
+        if let Kind::Fmt {
+            value: v,
+            width,
+            decimals: d,
+        } = self.ast.kind(arg)
+        {
             value = v;
             decimals = d;
-            for f in [Some(w), d].into_iter().flatten() {
-                self.expr(f)?;
-                if self.types.tag(self.ast.nodes[f as usize].ty) != Some(Tag::Int) {
-                    return Err(self.err(a, code::INTEGER_EXPRESSION_EXPECTED));
+            for field in [Some(width), d].into_iter().flatten() {
+                self.expr(field)?;
+                if self.types.tag(self.ast.ty(field)) != Some(Tag::Int) {
+                    return Err(self.err(arg, code::INTEGER_EXPRESSION_EXPECTED));
                 }
             }
         }
         self.expr(value)?;
-        let n = self.ast.nodes[value as usize];
-        let plain = self.types.is_str(n.ty) || n.ty == Ty::REAL;
-        if self.types.tag(n.ty) == Some(Tag::Enum) || !plain && self.types.tag(n.ty).is_none() {
+        let ty = self.ast.ty(value);
+        let is_text_or_real = self.types.is_str(ty) || ty == Ty::REAL;
+        let is_enum = self.types.tag(ty) == Some(Tag::Enum);
+        if is_enum || (!is_text_or_real && self.types.tag(ty).is_none()) {
             return Err(self.err(value, code::CANNOT_READ_OR_WRITE));
         }
-        if decimals.is_some() && n.ty != Ty::REAL {
-            return Err(self.err(a, code::RIGHT_PAREN_EXPECTED));
+        if decimals.is_some() && ty != Ty::REAL {
+            return Err(self.err(arg, code::RIGHT_PAREN_EXPECTED));
         }
         Ok(())
     }
 
+    // ---- Expressions ----
+
+    /// Checks the expression `e` and rewrites its node to the resolved kind and type.
     fn expr(&mut self, e: Id) -> R<()> {
-        let n = self.ast.nodes[e as usize];
-        let (kind, ty) = match n.kind {
-            Kind::IntLit(v) => (n.kind, self.types.const_ty(v)),
-            Kind::RealLit(_) => (n.kind, Ty::REAL),
+        let (kind, ty) = self.expr_kind(e)?;
+        self.ast.resolve(e, kind, ty);
+        Ok(())
+    }
+
+    /// The resolved kind and the type of expression `e`.
+    fn expr_kind(&mut self, e: Id) -> R<(Kind, Ty)> {
+        let node = self.ast.node(e);
+        Ok(match node.kind {
+            Kind::IntLit(v) => (node.kind, self.types.const_ty(v)),
+            Kind::RealLit(_) => (node.kind, Ty::REAL),
             Kind::StrLit(i) => match self.ast.strs[i as usize][..] {
+                // A one-character string is a Char constant until used as a String.
                 [c] => (Kind::IntLit(c as i64), Ty::CHAR),
-                _ => (n.kind, Ty::STRING),
+                _ => (node.kind, Ty::STRING),
             },
-            Kind::Name(name) if self.with_field(name).is_some() => {
-                let (record, ty, offset) = self.with_field(name).unwrap_or_default();
-                (Kind::Field(record, offset), ty)
-            }
-            Kind::Index(base, index, more) => {
-                self.expr(base)?;
-                let Some((ix, lo, hi, elem)) =
-                    self.types.array_of(self.ast.nodes[base as usize].ty)
-                else {
-                    return Err(self.err(
-                        e,
-                        if more {
-                            code::RIGHT_BRACKET_EXPECTED
-                        } else {
-                            code::INVALID_QUALIFIER
-                        },
-                    ));
-                };
-                self.expr(index)?;
-                let i = self.ast.nodes[index as usize];
-                if !self.types.compat(ix, i.ty) {
-                    return Err(self.err(e, code::TYPE_MISMATCH));
-                }
-                if matches!(i.kind, Kind::IntLit(c) if c < lo || c > hi) {
-                    return Err(self.err(e, code::CONSTANT_OUT_OF_RANGE));
-                }
-                (n.kind, elem)
-            }
-            Kind::Field(base, name) => {
-                self.expr(base)?;
-                let bt = self.ast.nodes[base as usize].ty;
-                if !self.types.is_record(bt) {
-                    return Err(self.err(e, code::INVALID_QUALIFIER));
-                }
-                let Some((ty, offset)) = self.types.field(bt, name) else {
-                    return Err(self.err(e, code::FIELD_IDENTIFIER_EXPECTED));
-                };
-                (Kind::Field(base, offset), ty)
-            }
-            Kind::Name(name) => {
-                let (sym, s) = self.resolve(e, name)?;
-                match s.kind {
-                    SymKind::Const if s.ty == Ty::STRING => (Kind::StrLit(s.val as u32), s.ty),
-                    SymKind::Const if s.ty == Ty::REAL => {
-                        (Kind::RealLit(f64::from_bits(s.val as u64)), s.ty)
-                    }
-                    SymKind::Const if self.types.is_set(s.ty) => {
-                        (self.ast.nodes[s.val as usize].kind, s.ty)
-                    }
-                    SymKind::Const => (Kind::IntLit(s.val), s.ty),
-                    SymKind::Var | SymKind::Local | SymKind::Ref => match self.types.sig(s.ty) {
-                        // A procedural variable in an expression is called.
-                        Some((_, _, Ty::NONE)) => {
-                            return Err(self.err(e, code::INVALID_PROCEDURE_REFERENCE))
-                        }
-                        Some((params, refs, result)) => {
-                            let callee = self.ast.add(Kind::Name(name), n.line, n.col);
-                            let none = self.ast.list(&[]);
-                            (self.indirect(e, callee, params, refs, none, true)?, result)
-                        }
-                        None => {
-                            self.capture(sym, false);
-                            (Kind::Var(sym), s.ty)
-                        }
-                    },
-                    SymKind::Routine => {
-                        let r = &self.routines[s.val as usize];
-                        let (func, result) = (r.func, r.result);
-                        if !func {
-                            return Err(self.err(e, code::INVALID_PROCEDURE_REFERENCE));
-                        }
-                        let none = self.ast.list(&[]);
-                        let (params, refs) = self.routine_params(s.val as usize);
-                        self.arguments(
-                            e,
-                            params,
-                            refs,
-                            none,
-                            true,
-                            self.routines[s.val as usize].builtin,
-                        )?;
-                        (Kind::Invoke(s.val as u32, none), result)
-                    }
-                    SymKind::Intrinsic if intrinsic_op(s.val).is_some() => {
-                        return Err(self.err(e, code::LEFT_PAREN_EXPECTED));
-                    }
-                    _ => return Err(self.err(e, code::ERROR_IN_EXPRESSION)),
-                }
-            }
-            Kind::Call(callee, args) => {
-                let Kind::Name(name) = self.ast.nodes[callee as usize].kind else {
-                    unreachable!("the parser names the callee")
-                };
-                let (_, s) = self.resolve(callee, name)?;
-                match s.kind {
-                    SymKind::Routine => {
-                        let r = &self.routines[s.val as usize];
-                        let (func, result) = (r.func, r.result);
-                        if !func {
-                            return Err(self.err(callee, code::INVALID_PROCEDURE_REFERENCE));
-                        }
-                        let (params, refs) = self.routine_params(s.val as usize);
-                        self.arguments(
-                            e,
-                            params,
-                            refs,
-                            args,
-                            true,
-                            self.routines[s.val as usize].builtin,
-                        )?;
-                        (Kind::Invoke(s.val as u32, args), result)
-                    }
-                    SymKind::Var | SymKind::Local | SymKind::Ref => match self.types.sig(s.ty) {
-                        Some((_, _, Ty::NONE)) => {
-                            return Err(self.err(callee, code::INVALID_PROCEDURE_REFERENCE))
-                        }
-                        Some((params, refs, result)) => {
-                            (self.indirect(e, callee, params, refs, args, true)?, result)
-                        }
-                        None => return Err(self.err(e, code::RIGHT_PAREN_EXPECTED)),
-                    },
-                    SymKind::Intrinsic if intrinsic_op(s.val).is_some() => {
-                        let items = self.ast.items(args).to_vec();
-                        if items.len() > 1 {
-                            return Err(self.err(e, code::RIGHT_PAREN_EXPECTED));
-                        }
-                        self.unary(e, intrinsic_op(s.val).unwrap_or(Op::Ord), items[0])?
-                    }
-                    SymKind::Intrinsic if s.val == 10 => self.size_of(e, args)?,
-                    SymKind::Intrinsic if s.val == 11 => self.concat(e, args)?,
-                    SymKind::Type => self.cast(e, s.ty, args)?,
-                    SymKind::Intrinsic => return Err(self.err(callee, code::ERROR_IN_EXPRESSION)),
-                    _ => return Err(self.err(e, code::RIGHT_PAREN_EXPECTED)),
-                }
-            }
-            Kind::AddrOf(a) => {
-                self.expr(a)?;
-                match self.ast.nodes[a as usize].kind {
+            Kind::Name(name) => self.name_expr(e, name)?,
+            Kind::Index {
+                base,
+                index,
+                continues,
+            } => self.index_expr(e, base, index, continues)?,
+            Kind::Field(base, name) => self.field_expr(e, base, name)?,
+            Kind::Call(callee, args) => self.call_expr(e, callee, args)?,
+            Kind::AddrOf(operand) => {
+                self.expr(operand)?;
+                match self.ast.kind(operand) {
                     Kind::Var(sym) => self.capture(sym, true),
-                    Kind::Index(..) | Kind::Field(..) | Kind::Deref(_) => {}
+                    Kind::Index { .. } | Kind::Field(..) | Kind::Deref(_) => {}
                     _ => return Err(self.err(e, code::VARIABLE_EXPECTED)),
                 }
-                (n.kind, Ty::POINTER)
+                (node.kind, Ty::POINTER)
             }
-            Kind::Deref(p) => {
-                self.expr(p)?;
-                match self.types.target(self.ast.nodes[p as usize].ty) {
-                    Some(to) => (n.kind, to),
+            Kind::Deref(pointer) => {
+                self.expr(pointer)?;
+                match self.types.target(self.ast.ty(pointer)) {
+                    Some(to) => (node.kind, to),
                     None => return Err(self.err(e, code::INVALID_QUALIFIER)),
                 }
             }
-            Kind::Paren(a) => {
-                self.expr(a)?;
-                let inner = self.ast.nodes[a as usize];
+            Kind::Paren(inner) => {
+                self.expr(inner)?;
+                let inner = self.ast.node(inner);
                 (inner.kind, inner.ty)
             }
-            Kind::Unary(op, a) => self.unary(e, op, a)?,
-            Kind::SetLit(items) => {
-                let mut base = Ty::NONE;
-                for item in self.ast.items(items).to_vec() {
-                    self.expr(item)?;
-                    let ty = self.ast.nodes[item as usize].ty;
-                    let el = self.types.element(base, ty);
-                    base = el.map_err(|code| self.err(item, code))?;
-                }
-                (n.kind, self.types.set(base))
-            }
+            Kind::Unary(op, operand) => self.unary(e, op, operand)?,
+            Kind::SetLit(items) => self.set_literal(node.kind, items)?,
             Kind::Range(lo, hi) => {
                 self.expr(lo)?;
                 self.expr(hi)?;
-                let (a, b) = (
-                    self.ast.nodes[lo as usize].ty,
-                    self.ast.nodes[hi as usize].ty,
-                );
-                if !self.types.compat(a, b) {
+                let (lo_ty, hi_ty) = (self.ast.ty(lo), self.ast.ty(hi));
+                if !self.types.compat(lo_ty, hi_ty) {
                     return Err(self.err(hi, code::TYPE_MISMATCH));
                 }
-                (n.kind, a)
+                (node.kind, lo_ty)
             }
-            Kind::Binary(op, a, b) => {
-                self.expr(a)?;
-                self.expr(b)?;
-                let (na, nb) = (self.ast.nodes[a as usize], self.ast.nodes[b as usize]);
-                let ty = self
-                    .types
-                    .binary(op, na.ty, nb.ty)
-                    .map_err(|c| self.err(e, c))?;
-                if ty == Ty::STRING || self.types.is_str(na.ty) || self.types.is_str(nb.ty) {
-                    self.coerce_str(a);
-                    self.coerce_str(b);
-                }
-                if op == Op::Slash || na.ty == Ty::REAL || nb.ty == Ty::REAL {
-                    self.coerce_real(a);
-                    self.coerce_real(b);
-                }
-                match (
-                    self.ast.nodes[a as usize].kind,
-                    self.ast.nodes[b as usize].kind,
-                ) {
-                    (Kind::IntLit(_), Kind::IntLit(0)) if matches!(op, Op::Div | Op::Mod) => {
-                        return Err(self.err(e, code::DIVISION_BY_ZERO));
-                    }
-                    (Kind::RealLit(x), Kind::RealLit(y))
-                        if ty == Ty::REAL && (op != Op::Slash || y != 0.0) =>
-                    {
-                        let v = match op {
-                            Op::Add => x + y,
-                            Op::Sub => x - y,
-                            Op::Mul => x * y,
-                            _ => x / y,
-                        };
-                        (Kind::RealLit(v), ty)
-                    }
-                    (Kind::IntLit(x), Kind::IntLit(y)) if ty != Ty::STRING => {
-                        self.constant(fold(op, x, y), ty)
-                    }
-                    (Kind::StrLit(x), Kind::StrLit(y)) if op == Op::Add => {
-                        let mut joined = self.ast.strs[x as usize].clone();
-                        joined.extend_from_slice(&self.ast.strs[y as usize]);
-                        joined.truncate(255);
-                        self.ast.strs.push(joined);
-                        (Kind::StrLit(self.ast.strs.len() as u32 - 1), ty)
-                    }
-                    _ => (n.kind, ty),
-                }
-            }
+            Kind::Binary { op, left, right } => self.binary_expr(e, op, left, right)?,
             _ => unreachable!("expressions only"),
-        };
-        self.ast.nodes[e as usize].kind = kind;
-        self.ast.nodes[e as usize].ty = ty;
-        Ok(())
-    }
-
-    /// A set element or range whose ends are constants.
-    fn fixed(&self, item: Id) -> bool {
-        let lit = |i: Id| matches!(self.ast.nodes[i as usize].kind, Kind::IntLit(_));
-        match self.ast.nodes[item as usize].kind {
-            Kind::Range(lo, hi) => lit(lo) && lit(hi),
-            _ => lit(item),
-        }
-    }
-
-    /// `T(x)`: the ordinal value of `x` as type `ty`.
-    fn cast(&mut self, at: Id, ty: Ty, args: List) -> R<(Kind, Ty)> {
-        let [arg] = self.ast.items(args)[..] else {
-            return Err(self.err(at, code::RIGHT_PAREN_EXPECTED));
-        };
-        self.expr(arg)?;
-        let a = self.ast.nodes[arg as usize];
-        let scalar = |t: Ty| self.types.tag(t).is_some() || self.types.is_ptr(t);
-        if !scalar(ty) || !scalar(a.ty) {
-            return Err(self.err(at, code::NOT_SUPPORTED));
-        }
-        Ok(match a.kind {
-            Kind::IntLit(v) => self.constant(v, ty),
-            _ => (Kind::Unary(Op::Ord, arg), ty),
         })
     }
 
-    /// `Delete(s, i, n)` is `s := StrDelete(s, i, n)`, `Insert(src, s, i)` is
-    /// `s := StrInsert(src, s, i)`: the call becomes that assignment.
-    fn edit_string(&mut self, at: Id, insert: bool, args: List) -> R<Kind> {
-        let items = self.ast.items(args).to_vec();
-        if items.len() != 3 {
-            return Err(self.err(
-                at,
-                if items.len() < 3 {
-                    code::COMMA_EXPECTED
-                } else {
-                    code::RIGHT_PAREN_EXPECTED
-                },
-            ));
-        }
-        let target = items[insert as usize];
-        let ty = self.variable(target)?;
-        if !self.types.is_str(ty) {
-            return Err(self.err(target, code::STRING_VARIABLE_EXPECTED));
-        }
-        let rest = if insert {
-            [items[0], items[2]]
-        } else {
-            [items[1], items[2]]
+    /// `base[index]`: the base is an array or a string, the index of the index type.
+    fn index_expr(&mut self, e: Id, base: Id, index: Id, continues: bool) -> R<(Kind, Ty)> {
+        self.expr(base)?;
+        let Some((index_ty, lo, hi, element)) = self.types.array_of(self.ast.ty(base)) else {
+            let error = if continues {
+                code::RIGHT_BRACKET_EXPECTED
+            } else {
+                code::INVALID_QUALIFIER
+            };
+            return Err(self.err(e, error));
         };
-        for (x, ty) in rest.into_iter().zip(if insert {
-            [Ty::STRING, Ty::INTEGER]
-        } else {
-            [Ty::INTEGER; 2]
-        }) {
-            self.expr(x)?;
-            self.argument_assignable(at, ty, x, true)?;
+        self.expr(index)?;
+        let index_node = self.ast.node(index);
+        if !self.types.compat(index_ty, index_node.ty) {
+            return Err(self.err(e, code::TYPE_MISMATCH));
         }
-        let helper = self.helpers[if insert { H_INSERT } else { H_DELETE }];
-        let (line, col) = (
-            self.ast.nodes[at as usize].line,
-            self.ast.nodes[at as usize].col,
-        );
-        let call = self.ast.add(Kind::Invoke(helper, args), line, col);
-        self.ast.nodes[call as usize].ty = Ty::STRING;
-        Ok(Kind::Assign(target, call))
+        if matches!(index_node.kind, Kind::IntLit(c) if c < lo || c > hi) {
+            return Err(self.err(e, code::CONSTANT_OUT_OF_RANGE));
+        }
+        Ok((self.ast.kind(e), element))
     }
 
-    /// A variable argument (TP's error otherwise) and its type.
-    fn variable(&mut self, e: Id) -> R<Ty> {
-        match self.bad_var_arg(e) {
-            0 => self.expr(e)?,
-            code => return Err(self.err(e, code)),
+    /// `base.name` becomes the field at its byte offset.
+    fn field_expr(&mut self, e: Id, base: Id, name: u32) -> R<(Kind, Ty)> {
+        self.expr(base)?;
+        let base_ty = self.ast.ty(base);
+        if !self.types.is_record(base_ty) {
+            return Err(self.err(e, code::INVALID_QUALIFIER));
         }
-        Ok(self.ast.nodes[e as usize].ty)
+        let Some((ty, offset)) = self.types.field(base_ty, name) else {
+            return Err(self.err(e, code::FIELD_IDENTIFIER_EXPECTED));
+        };
+        Ok((Kind::Field(base, offset), ty))
     }
 
-    /// `Inc`, `Dec`, `Str`, `Val` (26..=29): the call becomes an assignment to its variable
-    /// argument: `x := Ord(x) +/- n`, `s := StrInt(v, w, max)` or a formatted Real,
-    /// `v := ValLong(s, code)` or `ValReal(s, code)`.
-    fn convert(&mut self, at: Id, which: i64, args: List) -> R<Kind> {
-        let items = self.ast.items(args).to_vec();
-        let (n, t) = [(1, 0), (1, 0), (2, 1), (3, 1)][which as usize - 26];
-        if items.len() < n || items.len() > n + (which < 28) as usize {
-            return Err(self.err(
-                at,
-                if items.len() < n {
-                    code::COMMA_EXPECTED
-                } else {
-                    code::RIGHT_PAREN_EXPECTED
-                },
-            ));
+    /// A name used as an operand: a field of a `with` record, a constant, a variable (called
+    /// when it is a function-valued procedural variable), or a function called without
+    /// arguments.
+    fn name_expr(&mut self, e: Id, name: u32) -> R<(Kind, Ty)> {
+        if let Some((record, ty, offset)) = self.with_field(name) {
+            return Ok((Kind::Field(record, offset), ty));
         }
-        let target = items[t];
-        let ty = self.variable(target)?;
-        let fmt = match self.ast.nodes[items[0] as usize].kind {
-            Kind::Fmt(v, w, d) => Some((v, w, d)),
-            _ => None,
-        };
-        if which == 28 {
-            self.write_arg(items[0])?;
-        }
-        let vt = self.ast.nodes[fmt.map_or(items[0], |f| f.0) as usize].ty;
-        let result = self.types.convert(which, ty, vt);
-        let result = result.map_err(|c| self.err(target, c))?;
-        let value = match which {
-            26 | 27 => {
-                let step = match items.get(1) {
-                    Some(&n) => {
-                        self.expr(n)?;
-                        self.argument_assignable(at, Ty::LONGINT, n, true)?;
-                        n
-                    }
-                    None => self.ast.typed(Kind::IntLit(1), Ty::INTEGER, at),
-                };
-                let cur = self.ast.typed(Kind::Unary(Op::Ord, target), result, at);
-                let op = if which == 26 { Op::Add } else { Op::Sub };
-                // Line 0: outside every `{$R+}` region, so `Inc` and `Dec` are never checked.
-                let sum = self.ast.typed(Kind::Binary(op, cur, step), result, at);
-                self.ast.nodes[sum as usize].line = 0;
-                sum
-            }
-            28 => {
-                let none = self.ast.typed(Kind::IntLit(-1), Ty::INTEGER, at);
-                let (v, w, d) = fmt.unwrap_or((items[0], none, None));
-                if vt == Ty::REAL {
-                    self.ast.typed(Kind::Fmt(v, w, d), result, at)
-                } else {
-                    let max = self.types.size(ty) as i64 - 1;
-                    let max = self.ast.typed(Kind::IntLit(max), Ty::INTEGER, at);
-                    let call = Kind::Invoke(self.helpers[H_STRINT], self.ast.list(&[v, w, max]));
-                    self.ast.typed(call, result, at)
+        let (sym, symbol) = self.resolve(e, name)?;
+        Ok(match symbol.kind {
+            SymKind::Const(ConstValue::Int(v)) => (Kind::IntLit(v), symbol.ty),
+            SymKind::Const(ConstValue::Real(v)) => (Kind::RealLit(v), symbol.ty),
+            SymKind::Const(ConstValue::Str(i)) => (Kind::StrLit(i), symbol.ty),
+            SymKind::Const(ConstValue::Set(literal)) => (self.ast.kind(literal), symbol.ty),
+            kind if kind.is_variable() => match self.types.sig(symbol.ty) {
+                // A procedural variable in an expression is called.
+                Some((_, Ty::NONE)) => return Err(self.err(e, code::INVALID_PROCEDURE_REFERENCE)),
+                Some((params, result)) => {
+                    let (line, col) = self.ast.position(e);
+                    let callee = self.ast.add(Kind::Name(name), line, col);
+                    let no_args = self.ast.list(&[]);
+                    (self.indirect(e, callee, params, no_args, true)?, result)
                 }
-            }
-            _ => {
-                self.expr(items[0])?;
-                self.argument_assignable(at, Ty::STRING, items[0], true)?;
-                let code = |d: Diag| Diag {
-                    code: if d.code == code::TYPE_MISMATCH {
-                        code::INTEGER_VARIABLE_EXPECTED
-                    } else {
-                        d.code
-                    },
-                    ..d
-                };
-                self.var_arg(at, items[2], Ty::INTEGER).map_err(code)?;
-                let helper = self.helpers[if result == Ty::REAL {
-                    H_VALREAL
-                } else {
-                    H_VALLONG
-                }];
-                let call = Kind::Invoke(helper, self.ast.list(&[items[0], items[2]]));
-                self.ast.typed(call, result, at)
-            }
-        };
-        Ok(Kind::Assign(target, value))
-    }
-
-    /// `New`, `Dispose`, `GetMem`, `FreeMem`, `Mark`, `Release` and `RunError` (`which` is the
-    /// intrinsic number): calls of the System heap helpers, with `SizeOf(p^)` as the size of
-    /// `New` and `Dispose`. `New`, `GetMem` and `Mark` assign the helper's result to the variable.
-    fn heap_call(&mut self, at: Id, which: i64, args: List) -> R<Kind> {
-        let items = self.ast.items(args).to_vec();
-        let want = [1, 1, 2, 2, 1, 1, 1][which as usize - 14];
-        if items.len() != want {
-            return Err(self.err(
-                at,
-                if items.len() < want {
-                    code::COMMA_EXPECTED
-                } else {
-                    code::RIGHT_PAREN_EXPECTED
-                },
-            ));
-        }
-        let p = items[0];
-        if which == 20 {
-            self.expr(p)?;
-            self.argument_assignable(at, Ty::INTEGER, p, true)?;
-            return Ok(Kind::RunErr(p));
-        }
-        let ty = self.variable(p)?;
-        let to = self.types.target(ty);
-        let to = to.ok_or(self.err(p, code::POINTER_VARIABLE_EXPECTED))?;
-        let pos = self.ast.nodes[at as usize];
-        let size = items.get(1).copied().unwrap_or_else(|| {
-            let k = self
-                .ast
-                .add(Kind::IntLit(self.types.size(to) as i64), pos.line, pos.col);
-            self.ast.nodes[k as usize].ty = Ty::LONGINT;
-            k
-        });
-        if let Some(&n) = items.get(1) {
-            self.expr(n)?;
-            self.argument_assignable(at, Ty::LONGINT, n, true)?;
-        }
-        let (helper, args) = match which {
-            14 | 16 => (H_GET, vec![size]),
-            15 | 17 => (H_PUT, vec![p, size]),
-            18 => (H_MARK, vec![]),
-            _ => (H_RELEASE, vec![p]),
-        };
-        let call = Kind::Invoke(self.helpers[helper], self.ast.list(&args));
-        if matches!(which, 15 | 17 | 19) {
-            return Ok(call);
-        }
-        let call = self.ast.add(call, pos.line, pos.col);
-        self.ast.nodes[call as usize].ty = Ty::POINTER;
-        Ok(Kind::Assign(p, call))
-    }
-
-    /// `Concat(a, b, ...)`: the same as `a + b + ...`.
-    fn concat(&mut self, at: Id, args: List) -> R<(Kind, Ty)> {
-        let items = self.ast.items(args).to_vec();
-        if items.is_empty() {
-            return Err(self.err(at, code::ERROR_IN_EXPRESSION));
-        }
-        let (line, col) = (
-            self.ast.nodes[at as usize].line,
-            self.ast.nodes[at as usize].col,
-        );
-        let mut sum = items[0];
-        for (i, &x) in items.iter().enumerate() {
-            self.expr(x)?;
-            let ty = self.ast.nodes[x as usize].ty;
-            if !self.types.is_str(ty) && self.types.tag(ty) != Some(Tag::Char) {
-                return Err(self.err(at, code::STRING_EXPRESSION_EXPECTED));
-            }
-            self.coerce_str(x);
-            if i > 0 {
-                sum = self.ast.add(Kind::Binary(Op::Add, sum, x), line, col);
-                self.ast.nodes[sum as usize].ty = Ty::STRING;
-            }
-        }
-        let n = self.ast.nodes[sum as usize];
-        Ok((n.kind, n.ty))
-    }
-
-    /// `SizeOf(type name or variable)`, a constant.
-    fn size_of(&mut self, at: Id, args: List) -> R<(Kind, Ty)> {
-        let [arg] = self.ast.items(args)[..] else {
-            return Err(self.err(at, code::RIGHT_PAREN_EXPECTED));
-        };
-        let ty = match self.ast.nodes[arg as usize].kind {
-            Kind::Name(name) if self.with_field(name).is_none() => {
-                let (_, s) = self.resolve(arg, name)?;
-                if s.kind == SymKind::Const || s.kind == SymKind::Routine {
-                    return Err(self.err(arg, code::VARIABLE_EXPECTED));
+                None => {
+                    self.capture(sym, false);
+                    (Kind::Var(sym), symbol.ty)
                 }
-                s.ty
+            },
+            SymKind::Routine(r) => {
+                let no_args = self.ast.list(&[]);
+                self.function_call(e, e, r, no_args)?
             }
-            _ => {
-                self.expr(arg)?;
-                self.ast.nodes[arg as usize].ty
+            SymKind::Intrinsic(i) if i.unary_op().is_some() => {
+                return Err(self.err(e, code::LEFT_PAREN_EXPECTED));
             }
-        };
-        Ok(self.constant(self.types.size(ty) as i64, Ty::INTEGER))
+            _ => return Err(self.err(e, code::ERROR_IN_EXPRESSION)),
+        })
+    }
+
+    /// A call of routine `r` in an expression: it must be a function. `not_function_at` is
+    /// the node TP reports a procedure used as a value at.
+    fn function_call(&mut self, e: Id, not_function_at: Id, r: u32, args: List) -> R<(Kind, Ty)> {
+        let routine = &self.routines[r as usize];
+        let (is_function, result, builtin) = (routine.is_function, routine.result, routine.builtin);
+        if !is_function {
+            return Err(self.err(not_function_at, code::INVALID_PROCEDURE_REFERENCE));
+        }
+        let params = routine.params.clone();
+        self.arguments(e, params, args, true, builtin)?;
+        Ok((Kind::Invoke(r, args), result))
+    }
+
+    /// `name(args)` in an expression: a function, a procedural variable, an intrinsic, or a
+    /// type cast.
+    fn call_expr(&mut self, e: Id, callee: Id, args: List) -> R<(Kind, Ty)> {
+        let (_, symbol) = self.resolve(callee, self.name_of(callee))?;
+        Ok(match symbol.kind {
+            SymKind::Routine(r) => self.function_call(e, callee, r, args)?,
+            kind if kind.is_variable() => match self.types.sig(symbol.ty) {
+                Some((_, Ty::NONE)) => {
+                    return Err(self.err(callee, code::INVALID_PROCEDURE_REFERENCE))
+                }
+                Some((params, result)) => (self.indirect(e, callee, params, args, true)?, result),
+                None => return Err(self.err(e, code::RIGHT_PAREN_EXPECTED)),
+            },
+            SymKind::Intrinsic(i) if i.unary_op().is_some() => {
+                let items = self.ast.items_vec(args);
+                if items.len() > 1 {
+                    return Err(self.err(e, code::RIGHT_PAREN_EXPECTED));
+                }
+                self.unary(e, i.unary_op().unwrap_or(Op::Ord), items[0])?
+            }
+            SymKind::Intrinsic(Intrinsic::SizeOf) => self.size_of(e, args)?,
+            SymKind::Intrinsic(Intrinsic::Concat) => self.concat(e, args)?,
+            SymKind::Type => self.cast(e, symbol.ty, args)?,
+            SymKind::Intrinsic(_) => return Err(self.err(callee, code::ERROR_IN_EXPRESSION)),
+            _ => return Err(self.err(e, code::RIGHT_PAREN_EXPECTED)),
+        })
+    }
+
+    /// `[a, b..c]`: the base type is the type of the elements, which must agree.
+    fn set_literal(&mut self, kind: Kind, items: List) -> R<(Kind, Ty)> {
+        let mut base = Ty::NONE;
+        for item in self.ast.items_vec(items) {
+            self.expr(item)?;
+            let ty = self.ast.ty(item);
+            base = self
+                .types
+                .element(base, ty)
+                .map_err(|code| self.err(item, code))?;
+        }
+        Ok((kind, self.types.set(base)))
+    }
+
+    /// A binary operator: typed by `Types::binary`, operands converted to String or Real as
+    /// the operator needs, and folded when both operands are constants.
+    fn binary_expr(&mut self, e: Id, op: Op, left: Id, right: Id) -> R<(Kind, Ty)> {
+        self.expr(left)?;
+        self.expr(right)?;
+        let (left_ty, right_ty) = (self.ast.ty(left), self.ast.ty(right));
+        let ty = self
+            .types
+            .binary(op, left_ty, right_ty)
+            .map_err(|code| self.err(e, code))?;
+        if ty == Ty::STRING || self.types.is_str(left_ty) || self.types.is_str(right_ty) {
+            self.coerce_str(left);
+            self.coerce_str(right);
+        }
+        if op == Op::Slash || left_ty == Ty::REAL || right_ty == Ty::REAL {
+            self.coerce_real(left);
+            self.coerce_real(right);
+        }
+        match (self.ast.kind(left), self.ast.kind(right)) {
+            (Kind::IntLit(_), Kind::IntLit(0)) if matches!(op, Op::Div | Op::Mod) => {
+                Err(self.err(e, code::DIVISION_BY_ZERO))
+            }
+            (Kind::RealLit(x), Kind::RealLit(y))
+                if ty == Ty::REAL && (op != Op::Slash || y != 0.0) =>
+            {
+                let value = match op {
+                    Op::Add => x + y,
+                    Op::Sub => x - y,
+                    Op::Mul => x * y,
+                    _ => x / y,
+                };
+                Ok((Kind::RealLit(value), ty))
+            }
+            (Kind::IntLit(x), Kind::IntLit(y)) if ty != Ty::STRING => {
+                Ok(self.constant(fold(op, x, y), ty))
+            }
+            (Kind::StrLit(x), Kind::StrLit(y)) if op == Op::Add => {
+                let mut joined = self.ast.strs[x as usize].clone();
+                joined.extend_from_slice(&self.ast.strs[y as usize]);
+                joined.truncate(255);
+                self.ast.strs.push(joined);
+                Ok((Kind::StrLit(self.ast.strs.len() as u32 - 1), ty))
+            }
+            _ => Ok((self.ast.kind(e), ty)),
+        }
     }
 
     /// A unary operator or intrinsic applied to `a`, folded when `a` is constant (`Sqr` is
     /// not constant in TP).
     fn unary(&mut self, e: Id, op: Op, a: Id) -> R<(Kind, Ty)> {
         self.expr(a)?;
-        let arg = self.ast.nodes[a as usize].ty;
-        let mut ty = self.types.unary(op, arg).map_err(|c| self.err(e, c))?;
+        let arg_ty = self.ast.ty(a);
+        let mut ty = self
+            .types
+            .unary(op, arg_ty)
+            .map_err(|code| self.err(e, code))?;
         if matches!(op, Op::Round | Op::Trunc | Op::Sqrt | Op::Int | Op::Frac) {
             self.coerce_real(a);
         }
-        let na = self.ast.nodes[a as usize];
-        if op == Op::Ord && self.types.tag(na.ty) == Some(Tag::Enum) {
+        let operand = self.ast.node(a);
+        if op == Op::Ord && self.types.tag(operand.ty) == Some(Tag::Enum) {
             // TP types Ord(enum) by the enumeration's range (`Ord(c) + w` is a Word sum).
-            let (lo, hi, ..) = self.types.ord(na.ty);
-            ty = self.types.subrange(lo, hi, Ty::INTEGER);
+            let range = self.types.ord(operand.ty);
+            ty = self.types.subrange(range.lo, range.hi, Ty::INTEGER);
         }
-        Ok(match na.kind {
+        Ok(match operand.kind {
             Kind::RealLit(v) if op == Op::Neg => (Kind::RealLit(-v), ty),
             Kind::IntLit(v) if op == Op::Not && ty == Ty::BOOLEAN => self.constant(v ^ 1, ty),
             Kind::IntLit(v) if op != Op::Sqr => self.constant(fold(op, v, 0), ty),
@@ -1768,5 +1825,304 @@ impl Cx<'_> {
             ty
         };
         (Kind::IntLit(v), ty)
+    }
+
+    /// `T(x)`: the ordinal value of `x` as type `ty`.
+    fn cast(&mut self, at: Id, ty: Ty, args: List) -> R<(Kind, Ty)> {
+        let [arg] = self.ast.items(args)[..] else {
+            return Err(self.err(at, code::RIGHT_PAREN_EXPECTED));
+        };
+        self.expr(arg)?;
+        let arg_node = self.ast.node(arg);
+        let is_scalar = |t: Ty| self.types.tag(t).is_some() || self.types.is_ptr(t);
+        if !is_scalar(ty) || !is_scalar(arg_node.ty) {
+            return Err(self.err(at, code::NOT_SUPPORTED));
+        }
+        Ok(match arg_node.kind {
+            Kind::IntLit(v) => self.constant(v, ty),
+            _ => (Kind::Unary(Op::Ord, arg), ty),
+        })
+    }
+
+    /// `Concat(a, b, ...)`: the same as `a + b + ...`.
+    fn concat(&mut self, at: Id, args: List) -> R<(Kind, Ty)> {
+        let items = self.ast.items_vec(args);
+        if items.is_empty() {
+            return Err(self.err(at, code::ERROR_IN_EXPRESSION));
+        }
+        let (line, col) = self.ast.position(at);
+        let mut sum = items[0];
+        for (i, &item) in items.iter().enumerate() {
+            self.expr(item)?;
+            let ty = self.ast.ty(item);
+            if !self.types.is_str(ty) && self.types.tag(ty) != Some(Tag::Char) {
+                return Err(self.err(at, code::STRING_EXPRESSION_EXPECTED));
+            }
+            self.coerce_str(item);
+            if i > 0 {
+                let add = Kind::Binary {
+                    op: Op::Add,
+                    left: sum,
+                    right: item,
+                };
+                sum = self.ast.add(add, line, col);
+                self.ast.set_ty(sum, Ty::STRING);
+            }
+        }
+        let node = self.ast.node(sum);
+        Ok((node.kind, node.ty))
+    }
+
+    /// `SizeOf(type name or variable)`, a constant.
+    fn size_of(&mut self, at: Id, args: List) -> R<(Kind, Ty)> {
+        let [arg] = self.ast.items(args)[..] else {
+            return Err(self.err(at, code::RIGHT_PAREN_EXPECTED));
+        };
+        let ty = match self.ast.kind(arg) {
+            Kind::Name(name) if self.with_field(name).is_none() => {
+                let (_, symbol) = self.resolve(arg, name)?;
+                if matches!(symbol.kind, SymKind::Const(_) | SymKind::Routine(_)) {
+                    return Err(self.err(arg, code::VARIABLE_EXPECTED));
+                }
+                symbol.ty
+            }
+            _ => {
+                self.expr(arg)?;
+                self.ast.ty(arg)
+            }
+        };
+        Ok(self.constant(self.types.size(ty) as i64, Ty::INTEGER))
+    }
+
+    // ---- Intrinsics rewritten into assignments of helper results ----
+
+    /// Error 87 (too few) or 89 (too many) at `at` unless `min..=max` arguments were given.
+    fn expect_arg_count(&self, at: Id, count: usize, min: usize, max: usize) -> R<()> {
+        if count < min {
+            return Err(self.err(at, code::COMMA_EXPECTED));
+        }
+        if count > max {
+            return Err(self.err(at, code::RIGHT_PAREN_EXPECTED));
+        }
+        Ok(())
+    }
+
+    /// A variable argument (TP's error otherwise) and its type.
+    fn variable(&mut self, e: Id) -> R<Ty> {
+        if let Some(error) = self.var_arg_error(e) {
+            return Err(self.err(e, error));
+        }
+        self.expr(e)?;
+        Ok(self.ast.ty(e))
+    }
+
+    /// A call of System helper `helper` with `args`, as a node of type `ty` at `at`.
+    fn helper_call(&mut self, at: Id, helper: Helper, args: &[Id], ty: Ty) -> Id {
+        let list = self.ast.list(args);
+        let call = Kind::Invoke(self.helpers[helper as usize], list);
+        self.ast.typed(call, ty, at)
+    }
+
+    /// `Delete(s, i, n)` is `s := StrDelete(s, i, n)`, `Insert(src, s, i)` is
+    /// `s := StrInsert(src, s, i)`: the call becomes that assignment.
+    fn edit_string(&mut self, at: Id, which: Intrinsic, args: List) -> R<Kind> {
+        let items = self.ast.items_vec(args);
+        self.expect_arg_count(at, items.len(), 3, 3)?;
+        let is_insert = which == Intrinsic::Insert;
+        let target = if is_insert { items[1] } else { items[0] };
+        let ty = self.variable(target)?;
+        if !self.types.is_str(ty) {
+            return Err(self.err(target, code::STRING_VARIABLE_EXPECTED));
+        }
+        // The other two arguments: the string to insert and a position, or two counts.
+        let others = if is_insert {
+            [(items[0], Ty::STRING), (items[2], Ty::INTEGER)]
+        } else {
+            [(items[1], Ty::INTEGER), (items[2], Ty::INTEGER)]
+        };
+        for (arg, wanted) in others {
+            self.expr(arg)?;
+            self.argument_assignable(at, wanted, arg, true)?;
+        }
+        let helper = if is_insert {
+            Helper::StrInsert
+        } else {
+            Helper::StrDelete
+        };
+        let list = self.ast.list(&items);
+        let call = Kind::Invoke(self.helpers[helper as usize], list);
+        let call = self.ast.typed(call, Ty::STRING, at);
+        Ok(Kind::Assign(target, call))
+    }
+
+    /// `Inc(x [, n])` is `x := Ord(x) + n`, `Dec` subtracts; `n` defaults to 1.
+    fn inc_dec(&mut self, at: Id, which: Intrinsic, args: List) -> R<Kind> {
+        let items = self.ast.items_vec(args);
+        self.expect_arg_count(at, items.len(), 1, 2)?;
+        let target = items[0];
+        let ty = self.variable(target)?;
+        let result = self
+            .types
+            .step_type(ty)
+            .map_err(|code| self.err(target, code))?;
+        let step = match items.get(1) {
+            Some(&n) => {
+                self.expr(n)?;
+                self.argument_assignable(at, Ty::LONGINT, n, true)?;
+                n
+            }
+            None => self.ast.typed(Kind::IntLit(1), Ty::INTEGER, at),
+        };
+        let current = self.ast.typed(Kind::Unary(Op::Ord, target), result, at);
+        let op = if which == Intrinsic::Inc {
+            Op::Add
+        } else {
+            Op::Sub
+        };
+        let sum = Kind::Binary {
+            op,
+            left: current,
+            right: step,
+        };
+        let sum = self.ast.typed(sum, result, at);
+        // Line 0: outside every `{$R+}` region, so `Inc` and `Dec` are never range checked.
+        self.ast.nodes[sum as usize].line = 0;
+        Ok(Kind::Assign(target, sum))
+    }
+
+    /// `Str(v [: w [: d]], s)` is `s := StrInt(v, w, max)` for an integer and a formatted
+    /// Real otherwise, `max` being the capacity of `s`.
+    fn str_call(&mut self, at: Id, args: List) -> R<Kind> {
+        let items = self.ast.items_vec(args);
+        self.expect_arg_count(at, items.len(), 2, 2)?;
+        let target = items[1];
+        let ty = self.variable(target)?;
+        self.write_arg(items[0])?;
+        let (value, width, decimals) = match self.ast.kind(items[0]) {
+            Kind::Fmt {
+                value,
+                width,
+                decimals,
+            } => (value, Some(width), decimals),
+            _ => (items[0], None, None),
+        };
+        let value_ty = self.ast.ty(value);
+        let result = self
+            .types
+            .str_type(ty, value_ty)
+            .map_err(|code| self.err(target, code))?;
+        let width = match width {
+            Some(width) => width,
+            None => self.ast.typed(Kind::IntLit(-1), Ty::INTEGER, at),
+        };
+        let converted = if value_ty == Ty::REAL {
+            let format = Kind::Fmt {
+                value,
+                width,
+                decimals,
+            };
+            self.ast.typed(format, result, at)
+        } else {
+            let max = self.types.size(ty) as i64 - 1;
+            let max = self.ast.typed(Kind::IntLit(max), Ty::INTEGER, at);
+            self.helper_call(at, Helper::StrInt, &[value, width, max], result)
+        };
+        Ok(Kind::Assign(target, converted))
+    }
+
+    /// `Val(s, v, code)` is `v := ValLong(s, code)`, or `ValReal` for a Real `v`.
+    fn val_call(&mut self, at: Id, args: List) -> R<Kind> {
+        let items = self.ast.items_vec(args);
+        self.expect_arg_count(at, items.len(), 3, 3)?;
+        let (source, target, error_code) = (items[0], items[1], items[2]);
+        let ty = self.variable(target)?;
+        let result = self
+            .types
+            .val_type(ty)
+            .map_err(|code| self.err(target, code))?;
+        self.expr(source)?;
+        self.argument_assignable(at, Ty::STRING, source, true)?;
+        self.var_arg(at, error_code, Ty::INTEGER)
+            .map_err(|d| Diag {
+                code: if d.code == code::TYPE_MISMATCH {
+                    code::INTEGER_VARIABLE_EXPECTED
+                } else {
+                    d.code
+                },
+                ..d
+            })?;
+        let helper = if result == Ty::REAL {
+            Helper::ValReal
+        } else {
+            Helper::ValLong
+        };
+        let call = self.helper_call(at, helper, &[source, error_code], result);
+        Ok(Kind::Assign(target, call))
+    }
+
+    /// `New`, `Dispose`, `GetMem`, `FreeMem`, `Mark`, `Release` and `RunError`: calls of the
+    /// System heap helpers, with `SizeOf(p^)` as the size of `New` and `Dispose`. `New`,
+    /// `GetMem` and `Mark` assign the helper's result to the variable.
+    fn heap_call(&mut self, at: Id, which: Intrinsic, args: List) -> R<Kind> {
+        let items = self.ast.items_vec(args);
+        let count = if matches!(which, Intrinsic::GetMem | Intrinsic::FreeMem) {
+            2
+        } else {
+            1
+        };
+        self.expect_arg_count(at, items.len(), count, count)?;
+        let p = items[0];
+        if which == Intrinsic::RunError {
+            self.expr(p)?;
+            self.argument_assignable(at, Ty::INTEGER, p, true)?;
+            return Ok(Kind::RunErr(p));
+        }
+        let ty = self.variable(p)?;
+        let to = self
+            .types
+            .target(ty)
+            .ok_or(self.err(p, code::POINTER_VARIABLE_EXPECTED))?;
+        let size = match items.get(1) {
+            Some(&size) => {
+                self.expr(size)?;
+                self.argument_assignable(at, Ty::LONGINT, size, true)?;
+                size
+            }
+            None => {
+                let size_of_target = Kind::IntLit(self.types.size(to) as i64);
+                self.ast.typed(size_of_target, Ty::LONGINT, at)
+            }
+        };
+        let (helper, helper_args) = match which {
+            Intrinsic::New | Intrinsic::GetMem => (Helper::HeapGet, vec![size]),
+            Intrinsic::Dispose | Intrinsic::FreeMem => (Helper::HeapPut, vec![p, size]),
+            Intrinsic::Mark => (Helper::HeapMark, vec![]),
+            _ => (Helper::HeapRelease, vec![p]),
+        };
+        let list = self.ast.list(&helper_args);
+        let call = Kind::Invoke(self.helpers[helper as usize], list);
+        let returns_nothing = matches!(
+            which,
+            Intrinsic::Dispose | Intrinsic::FreeMem | Intrinsic::Release
+        );
+        if returns_nothing {
+            return Ok(call);
+        }
+        let call = self.ast.typed(call, Ty::POINTER, at);
+        Ok(Kind::Assign(p, call))
+    }
+}
+
+/// TP's error for the number of arguments in a call, or None if it matches. A routine with
+/// no parameters takes no parentheses: error 85, or 89 inside an expression.
+fn argument_count_error(params: usize, args: usize, in_expr: bool, builtin: bool) -> Option<u16> {
+    match (params, args) {
+        (0, 0) => None,
+        (0, _) if in_expr && !builtin => Some(code::RIGHT_PAREN_EXPECTED),
+        (0, _) => Some(code::SEMICOLON_EXPECTED),
+        (_, 0) => Some(code::LEFT_PAREN_EXPECTED),
+        (p, a) if a < p => Some(code::COMMA_EXPECTED),
+        (p, a) if a > p => Some(code::RIGHT_PAREN_EXPECTED),
+        _ => None,
     }
 }

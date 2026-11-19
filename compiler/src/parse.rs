@@ -1,85 +1,170 @@
-//! Recursive-descent parser: `[program header;] begin statements end .`
-use crate::ast::{Ast, Id, Kind, List, Op, NO_NAME};
+//! Recursive-descent parser: `[program header;] declarations begin statements end .`
+//!
+//! One method per grammar rule, reading tokens through the lookahead `self.tok()`. Operator
+//! precedence is the chain `expr` (relations), `simple` (add, or), `term` (multiply, and),
+//! `factor`. Every node is stamped with the position where Turbo Pascal reports its errors,
+//! which is not always where the node starts (see `ast::Kind`): operators, assignments and
+//! `:` are stamped with the token after their last operand. A node stamped with a token not
+//! yet read is reserved first (`reserve_node`) and filled in (`fill_node`) when its children
+//! are parsed.
+//!
+//! The parser runs twice, over System's declaration part and then over the user's program,
+//! into one `Ast`; the program's declaration list starts with System's.
+use crate::ast::{Ast, FollowLine, Id, Kind, List, Op, RangeSwitch, NO_NAME};
 use crate::diag::{code, Diag};
 use crate::lex::{Tk, Tok};
 
 /// Keywords that may follow an empty statement in the enclosing construct.
-const END: u8 = 1;
-const UNTIL: u8 = 2;
-const ELSE: u8 = 4;
+#[derive(Clone, Copy, Default)]
+struct StopWords {
+    end: bool,
+    until: bool,
+    else_: bool,
+}
+
+impl StopWords {
+    const END: StopWords = StopWords {
+        end: true,
+        until: false,
+        else_: false,
+    };
+    const UNTIL: StopWords = StopWords {
+        end: false,
+        until: true,
+        else_: false,
+    };
+
+    fn with_else(self) -> StopWords {
+        StopWords {
+            else_: true,
+            ..self
+        }
+    }
+
+    fn contains(self, keyword: &[u8]) -> bool {
+        match keyword {
+            b"END" => self.end,
+            b"UNTIL" => self.until,
+            b"ELSE" => self.else_,
+            _ => false,
+        }
+    }
+}
+
+/// An identifier with the position of its first character.
+struct IdentAt {
+    name: u32,
+    line: u32,
+    col: u32,
+}
+
+/// A compiler switch `{$X+}` or `{$X-}`.
+enum Switch {
+    /// A switch this compiler accepts and ignores.
+    Ignored,
+    /// `{$R+}` (true) or `{$R-}`.
+    RangeChecks(bool),
+}
 
 struct Parser {
-    toks: Vec<Tok>,
-    at: usize,
+    tokens: Vec<Tok>,
+    pos: usize,
     ast: Ast,
-    stops: u8,
+    stops: StopWords,
 }
 
 type R<T> = Result<T, Diag>;
 
+/// One item of a comma separated directive: `F+`, `R-`, ... Anything else is error 17, and a
+/// well-formed switch this compiler does not know is error 200.
+fn parse_switch(item: &[u8]) -> Result<Switch, u16> {
+    match item.to_ascii_uppercase().as_slice() {
+        b"F+" | b"F-" => Ok(Switch::Ignored),
+        b"R+" | b"R-" => Ok(Switch::RangeChecks(item[1] == b'+')),
+        [letter, b'+' | b'-'] if letter.is_ascii_alphabetic() => Err(code::NOT_SUPPORTED),
+        _ => Err(code::INVALID_DIRECTIVE),
+    }
+}
+
 impl Parser {
-    /// Removes the directive tokens. `F+`/`F-` are ignored, `R+`/`R-` are recorded with their
-    /// position, a malformed item is 17 and any other switch is 200.
-    fn drop_directives(&mut self, toks: Vec<Tok>) -> R<Vec<Tok>> {
-        for t in toks.iter().filter(|t| t.kind == Tk::Directive) {
-            for item in t.text.split(|&c| c == b',') {
-                let code = match item.to_ascii_uppercase().as_slice() {
-                    b"F+" | b"F-" => continue,
-                    b"R+" | b"R-" => {
-                        self.ast.range.push((t.line, t.col, item[1] == b'+'));
-                        continue;
+    /// Removes the directive tokens, recording the range-check switches with their position.
+    fn drop_directives(&mut self, tokens: Vec<Tok>) -> R<Vec<Tok>> {
+        for directive in tokens.iter().filter(|t| t.kind == Tk::Directive) {
+            for item in directive.text.split(|&c| c == b',') {
+                match parse_switch(item) {
+                    Ok(Switch::Ignored) => {}
+                    Ok(Switch::RangeChecks(on)) => self.ast.range.push(RangeSwitch {
+                        line: directive.line,
+                        col: directive.col,
+                        on,
+                    }),
+                    Err(code) => {
+                        return Err(Diag {
+                            code,
+                            line: directive.line,
+                            col: directive.col,
+                        })
                     }
-                    [c, b'+' | b'-'] if c.is_ascii_alphabetic() => code::NOT_SUPPORTED,
-                    _ => code::INVALID_DIRECTIVE,
-                };
-                let (line, col) = (t.line, t.col);
-                return Err(Diag { code, line, col });
+                }
             }
         }
-        Ok(toks
+        Ok(tokens
             .into_iter()
             .filter(|t| t.kind != Tk::Directive)
             .collect())
+    }
+
+    /// System's declaration part; returns its declarations.
+    fn system_declarations(&mut self, system: Vec<Tok>) -> R<Vec<Id>> {
+        self.tokens = self.drop_directives(system)?;
+        let declarations = self.declarations()?;
+        if self.tok().kind != Tk::Eof {
+            return Err(self.err(code::BEGIN_EXPECTED));
+        }
+        self.ast.system = declarations.len();
+        Ok(declarations)
+    }
+
+    /// `[program Name [(files)];]`; returns the name, `NO_NAME` when there is no header.
+    fn program_header(&mut self) -> R<u32> {
+        if !self.kw(b"PROGRAM") {
+            return Ok(NO_NAME);
+        }
+        let name = self.ident()?;
+        if self.sym(b"(") {
+            self.identifier_list()?;
+            self.expect_sym(b")", code::RIGHT_PAREN_EXPECTED)?;
+        }
+        self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
+        Ok(name)
     }
 }
 
 /// The System declaration part `system`, then the program `toks`; the program's declaration list
 /// starts with System's (`Ast::system` of them).
 pub fn parse(system: Vec<Tok>, toks: Vec<Tok>) -> R<(Ast, Id)> {
-    let mut p = Parser {
-        toks: Vec::new(),
-        at: 0,
+    let mut parser = Parser {
+        tokens: Vec::new(),
+        pos: 0,
         ast: Ast::default(),
-        stops: 0,
+        stops: StopWords::default(),
     };
-    p.toks = p.drop_directives(system)?;
-    let mut sys = p.declarations()?;
-    if p.tok().kind != Tk::Eof {
-        return Err(p.err(code::BEGIN_EXPECTED));
-    }
-    p.ast.system = sys.len();
-    (p.toks, p.at) = (p.drop_directives(toks)?, 0);
-    let mut name = NO_NAME;
-    if p.kw(b"PROGRAM") {
-        name = p.ident()?;
-        if p.sym(b"(") {
-            loop {
-                p.ident()?;
-                if !p.sym(b",") {
-                    break;
-                }
-            }
-            p.expect_sym(b")", code::RIGHT_PAREN_EXPECTED)?;
-        }
-        p.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
-    }
-    sys.extend(p.declarations()?);
-    let (line, col) = p.pos();
-    let body = p.begin()?;
-    p.expect_sym(b".", code::PERIOD_EXPECTED)?;
-    let decls = p.ast.list(&sys);
-    let root = p.ast.add(Kind::Program(name, decls, body), line, col);
-    Ok((p.ast, root))
+    let mut declarations = parser.system_declarations(system)?;
+    parser.tokens = parser.drop_directives(toks)?;
+    parser.pos = 0;
+    let name = parser.program_header()?;
+    declarations.extend(parser.declarations()?);
+    let (line, col) = parser.pos();
+    let body = parser.begin()?;
+    parser.expect_sym(b".", code::PERIOD_EXPECTED)?;
+    let declarations = parser.ast.list(&declarations);
+    let program = Kind::Program {
+        name,
+        declarations,
+        body,
+    };
+    let root = parser.ast.add(program, line, col);
+    Ok((parser.ast, root))
 }
 
 const ADD: &[(&[u8], Op)] = &[
@@ -109,7 +194,26 @@ const REL: &[(&[u8], Op)] = &[
 
 impl Parser {
     fn tok(&self) -> &Tok {
-        &self.toks[self.at]
+        &self.tokens[self.pos]
+    }
+
+    /// The token `ahead` places after the lookahead. The final Eof token is never passed, so
+    /// callers only look ahead after seeing a token that is not Eof.
+    fn peek(&self, ahead: usize) -> &Tok {
+        &self.tokens[self.pos + ahead]
+    }
+
+    /// The token just consumed.
+    fn previous(&self) -> &Tok {
+        &self.tokens[self.pos - 1]
+    }
+
+    fn advance(&mut self) {
+        self.pos += 1;
+    }
+
+    fn pos(&self) -> (u32, u32) {
+        (self.tok().line, self.tok().col)
     }
 
     /// An error at the lookahead token; at end of file it is always 10.
@@ -131,15 +235,21 @@ impl Parser {
         self.tok().kind == kind && self.tok().text == text
     }
 
+    /// Consumes the lookahead if it is the keyword `text`.
     fn kw(&mut self, text: &[u8]) -> bool {
         let hit = self.is(Tk::Kw, text);
-        self.at += hit as usize;
+        if hit {
+            self.advance();
+        }
         hit
     }
 
+    /// Consumes the lookahead if it is the symbol `text`.
     fn sym(&mut self, text: &[u8]) -> bool {
         let hit = self.is(Tk::Sym, text);
-        self.at += hit as usize;
+        if hit {
+            self.advance();
+        }
         hit
     }
 
@@ -151,17 +261,66 @@ impl Parser {
         }
     }
 
+    fn expect_kw(&mut self, text: &[u8], code: u16) -> R<()> {
+        if self.kw(text) {
+            Ok(())
+        } else {
+            Err(self.err(code))
+        }
+    }
+
     fn ident(&mut self) -> R<u32> {
         if self.tok().kind != Tk::Ident {
             return Err(self.err(code::IDENTIFIER_EXPECTED));
         }
-        let name = self.ast.intern(&self.toks[self.at].text);
-        self.at += 1;
+        let name = self.ast.intern(&self.tokens[self.pos].text);
+        self.advance();
         Ok(name)
     }
 
+    /// `ident {, ident}` with the position of each.
+    fn identifier_list(&mut self) -> R<Vec<IdentAt>> {
+        let mut identifiers = Vec::new();
+        loop {
+            let (line, col) = self.pos();
+            let name = self.ident()?;
+            identifiers.push(IdentAt { name, line, col });
+            if !self.sym(b",") {
+                return Ok(identifiers);
+            }
+        }
+    }
+
+    /// A node stamped with the lookahead position (see `Kind`).
+    fn after(&mut self, kind: Kind) -> Id {
+        let (line, col) = self.pos();
+        self.ast.add(kind, line, col)
+    }
+
+    /// Takes the handle of a node that is stamped with the lookahead now but whose children are
+    /// parsed later; `fill_node` gives it its real kind.
+    fn reserve_node(&mut self) -> Id {
+        let nothing = self.ast.list(&[]);
+        self.after(Kind::Compound(nothing))
+    }
+
+    fn fill_node(&mut self, id: Id, kind: Kind) {
+        self.ast.set_kind(id, kind);
+    }
+
+    /// Error 200 at the lookahead if it is one of the omitted keywords `words`.
+    fn unsupported(&self, words: &[&[u8]]) -> R<()> {
+        let t = self.tok();
+        if t.kind == Tk::Kw && words.contains(&&t.text[..]) {
+            return Err(self.err(code::NOT_SUPPORTED));
+        }
+        Ok(())
+    }
+
+    // ---- Statements ----
+
     /// Statements separated by `;`, up to (not including) the keyword `closer`.
-    fn statements(&mut self, stops: u8, closer: &[u8]) -> R<Vec<Id>> {
+    fn statements(&mut self, stops: StopWords, closer: &[u8]) -> R<Vec<Id>> {
         let outer = std::mem::replace(&mut self.stops, stops);
         let mut items = Vec::new();
         loop {
@@ -185,163 +344,224 @@ impl Parser {
 
     /// After `BEGIN`; the node is stamped at the `BEGIN`.
     fn compound(&mut self) -> R<Id> {
-        let (line, col) = (self.toks[self.at - 1].line, self.toks[self.at - 1].col);
-        let items = self.statements(END, b"END")?;
-        self.at += 1;
+        let (line, col) = (self.previous().line, self.previous().col);
+        let items = self.statements(StopWords::END, b"END")?;
+        self.advance();
         let list = self.ast.list(&items);
         Ok(self.ast.add(Kind::Compound(list), line, col))
     }
 
     /// A statement used as a branch or body; an empty one becomes an empty compound.
-    fn sub(&mut self, stops: u8) -> R<Id> {
+    fn sub(&mut self, stops: StopWords) -> R<Id> {
         let outer = std::mem::replace(&mut self.stops, stops);
-        let s = self.statement()?;
+        let statement = self.statement()?;
         self.stops = outer;
-        Ok(match s {
-            Some(s) => s,
-            None => {
-                let list = self.ast.list(&[]);
-                self.after(Kind::Compound(list))
-            }
-        })
+        match statement {
+            Some(statement) => Ok(statement),
+            None => Ok(self.reserve_node()),
+        }
     }
 
-    fn expect_kw(&mut self, text: &[u8], code: u16) -> R<()> {
-        if self.kw(text) {
-            Ok(())
-        } else {
-            Err(self.err(code))
+    /// A statement, or None for an empty one (before `;`, `end`, `until` or `else`).
+    fn statement(&mut self) -> R<Option<Id>> {
+        if self.tok().kind == Tk::Ident {
+            return self.assignment_or_call().map(Some);
         }
+        if self.kw(b"BEGIN") {
+            return self.compound().map(Some);
+        }
+        if let Some(statement) = self.control_statement()? {
+            return Ok(Some(statement));
+        }
+        let t = self.tok();
+        let stops_here = t.kind == Tk::Kw && self.stops.contains(&t.text);
+        if stops_here || self.is(Tk::Sym, b";") {
+            return Ok(None);
+        }
+        self.unsupported(&[b"GOTO", b"ASM", b"INLINE"])?;
+        Err(self.err(code::ERROR_IN_STATEMENT))
+    }
+
+    /// A statement that starts with an identifier: an assignment `v[i].f := e`, a procedure
+    /// call `p(args)`, or an assignment to a typecast `T(x)^ := e`.
+    fn assignment_or_call(&mut self) -> R<Id> {
+        let target = self.designator()?;
+        if self.sym(b":=") {
+            let value = self.expr()?;
+            return Ok(self.after(Kind::Assign(target, value)));
+        }
+        if !matches!(self.ast.kind(target), Kind::Name(_)) {
+            return Err(self.err(code::ERROR_IN_STATEMENT));
+        }
+        let (mut args, mut call_at) = (Vec::new(), self.pos());
+        if self.sym(b"(") {
+            (args, call_at) = self.arguments()?;
+        } else if self.is(Tk::Sym, b"=") {
+            // TP takes the identifier for a variable and wants `:=`.
+            return Err(self.err(code::ASSIGN_EXPECTED));
+        }
+        let list = self.ast.list(&args);
+        let call = self.ast.add(Kind::Call(target, list), call_at.0, call_at.1);
+        if self.is(Tk::Sym, b"^") {
+            // A typecast designator: `T(x)^ := v`.
+            let target = self.selectors(call)?;
+            self.expect_sym(b":=", code::ERROR_IN_STATEMENT)?;
+            let value = self.expr()?;
+            return Ok(self.after(Kind::Assign(target, value)));
+        }
+        Ok(call)
+    }
+
+    /// `if`, `while`, `repeat`, `case`, `with` and `for` statements; None if the lookahead
+    /// starts none of them.
+    fn control_statement(&mut self) -> R<Option<Id>> {
+        let statement = if self.kw(b"IF") {
+            self.if_statement()?
+        } else if self.kw(b"WHILE") {
+            self.while_statement()?
+        } else if self.kw(b"REPEAT") {
+            self.repeat_statement()?
+        } else if self.kw(b"CASE") {
+            self.case_statement()?
+        } else if self.kw(b"WITH") {
+            self.with_statement()?
+        } else if self.kw(b"FOR") {
+            self.for_statement()?
+        } else {
+            return Ok(None);
+        };
+        Ok(Some(statement))
+    }
+
+    fn if_statement(&mut self) -> R<Id> {
+        let condition = self.expr()?;
+        let id = self.reserve_node();
+        self.expect_kw(b"THEN", code::THEN_EXPECTED)?;
+        let then_branch = self.sub(self.stops.with_else())?;
+        let else_branch = if self.kw(b"ELSE") {
+            Some(self.sub(self.stops)?)
+        } else {
+            None
+        };
+        let kind = Kind::If {
+            condition,
+            then_branch,
+            else_branch,
+        };
+        self.fill_node(id, kind);
+        Ok(id)
+    }
+
+    fn while_statement(&mut self) -> R<Id> {
+        let condition = self.expr()?;
+        let id = self.reserve_node();
+        self.expect_kw(b"DO", code::DO_EXPECTED)?;
+        let body = self.sub(self.stops)?;
+        self.fill_node(id, Kind::While(condition, body));
+        Ok(id)
+    }
+
+    fn repeat_statement(&mut self) -> R<Id> {
+        let items = self.statements(StopWords::UNTIL, b"UNTIL")?;
+        self.advance();
+        let condition = self.expr()?;
+        let body = self.ast.list(&items);
+        Ok(self.after(Kind::Repeat(body, condition)))
     }
 
     /// After `CASE`: `expr of arm {; arm} [; else statements] [;] end`.
-    fn case(&mut self) -> R<Id> {
+    fn case_statement(&mut self) -> R<Id> {
         let selector = self.expr()?;
-        let placeholder = Kind::Compound(self.ast.list(&[]));
-        let id = self.after(placeholder);
+        let id = self.reserve_node();
         self.expect_kw(b"OF", code::OF_EXPECTED)?;
         let mut arms = Vec::new();
         loop {
-            let (line, col) = self.pos();
-            let mut labels = Vec::new();
-            loop {
-                let (lo_line, lo_col) = self.pos();
-                let lo = self.expr()?;
-                let hi = if self.sym(b"..") { self.expr()? } else { lo };
-                labels.push(self.ast.add(Kind::Range(lo, hi), lo_line, lo_col));
-                if !self.sym(b",") {
-                    break;
-                }
-            }
-            self.expect_sym(b":", code::COLON_EXPECTED)?;
-            let body = self.sub(END | ELSE)?;
-            let labels = self.ast.list(&labels);
-            arms.push(self.ast.add(Kind::Arm(labels, body), line, col));
-            if !self.sym(b";") || self.is(Tk::Kw, b"ELSE") || self.is(Tk::Kw, b"END") {
+            arms.push(self.case_arm()?);
+            let more = self.sym(b";") && !self.is(Tk::Kw, b"ELSE") && !self.is(Tk::Kw, b"END");
+            if !more {
                 break;
             }
         }
-        let other = if self.kw(b"ELSE") {
-            self.statements(END, b"END")?
+        let else_statements = if self.kw(b"ELSE") {
+            self.statements(StopWords::END, b"END")?
         } else {
             Vec::new()
         };
         self.expect_kw(b"END", code::SEMICOLON_EXPECTED)?;
-        let (arms, other) = (self.ast.list(&arms), self.ast.list(&other));
-        self.ast.nodes[id as usize].kind = Kind::Case(selector, arms, other);
+        let kind = Kind::Case {
+            selector,
+            arms: self.ast.list(&arms),
+            else_body: self.ast.list(&else_statements),
+        };
+        self.fill_node(id, kind);
         Ok(id)
     }
 
-    fn control(&mut self) -> R<Option<Id>> {
-        let placeholder = Kind::Compound(self.ast.list(&[]));
-        if self.kw(b"IF") {
-            let cond = self.expr()?;
-            let id = self.after(placeholder);
-            self.expect_kw(b"THEN", code::THEN_EXPECTED)?;
-            let then = self.sub(self.stops | ELSE)?;
-            let other = if self.kw(b"ELSE") {
-                Some(self.sub(self.stops)?)
-            } else {
-                None
-            };
-            self.ast.nodes[id as usize].kind = Kind::If(cond, then, other);
-            return Ok(Some(id));
-        }
-        if self.kw(b"WHILE") {
-            let cond = self.expr()?;
-            let id = self.after(placeholder);
-            self.expect_kw(b"DO", code::DO_EXPECTED)?;
-            let body = self.sub(self.stops)?;
-            self.ast.nodes[id as usize].kind = Kind::While(cond, body);
-            return Ok(Some(id));
-        }
-        if self.kw(b"REPEAT") {
-            let items = self.statements(UNTIL, b"UNTIL")?;
-            self.at += 1;
-            let cond = self.expr()?;
-            let list = self.ast.list(&items);
-            return Ok(Some(self.after(Kind::Repeat(list, cond))));
-        }
-        if self.kw(b"CASE") {
-            return self.case().map(Some);
-        }
-        if self.kw(b"WITH") {
-            let mut records = Vec::new();
-            loop {
-                records.push(self.designator()?);
-                if !self.sym(b",") {
-                    break;
-                }
-            }
-            let id = self.after(placeholder);
-            self.expect_kw(b"DO", code::DO_EXPECTED)?;
-            let body = self.sub(self.stops)?;
-            let list = self.ast.list(&records);
-            self.ast.nodes[id as usize].kind = Kind::With(list, body);
-            return Ok(Some(id));
-        }
-        if self.kw(b"FOR") {
-            let (line, col) = self.pos();
-            if self.tok().kind != Tk::Ident {
-                return Err(self.err(code::VARIABLE_EXPECTED));
-            }
-            let name = self.ident()?;
-            let var = self.ast.add(Kind::Name(name), line, col);
-            self.expect_sym(b":=", code::ASSIGN_EXPECTED)?;
-            let first = self.expr()?;
-            let down = self.is(Tk::Kw, b"DOWNTO");
-            if !down && !self.is(Tk::Kw, b"TO") {
-                return Err(self.err(code::TO_OR_DOWNTO_EXPECTED));
-            }
-            self.at += 1;
-            let last = self.expr()?;
-            let id = self.after(placeholder);
-            self.expect_kw(b"DO", code::DO_EXPECTED)?;
-            let body = self.sub(self.stops)?;
-            self.ast.nodes[id as usize].kind = Kind::For(var, first, last, body, down);
-            return Ok(Some(id));
-        }
-        Ok(None)
-    }
-
-    fn pos(&self) -> (u32, u32) {
-        (self.tok().line, self.tok().col)
-    }
-
-    /// A node stamped with the lookahead position (see `Kind`).
-    fn after(&mut self, kind: Kind) -> Id {
+    /// `label {, label}: statement`, a label being a constant or a range `lo..hi`.
+    fn case_arm(&mut self) -> R<Id> {
         let (line, col) = self.pos();
-        self.ast.add(kind, line, col)
+        let mut labels = Vec::new();
+        loop {
+            let (lo_line, lo_col) = self.pos();
+            let lo = self.expr()?;
+            let hi = if self.sym(b"..") { self.expr()? } else { lo };
+            labels.push(self.ast.add(Kind::Range(lo, hi), lo_line, lo_col));
+            if !self.sym(b",") {
+                break;
+            }
+        }
+        self.expect_sym(b":", code::COLON_EXPECTED)?;
+        let body = self.sub(StopWords::END.with_else())?;
+        let labels = self.ast.list(&labels);
+        Ok(self.ast.add(Kind::Arm(labels, body), line, col))
     }
 
-    /// Error 200 at the lookahead if it is one of the omitted keywords `words`.
-    fn unsupported(&self, words: &[&[u8]]) -> R<()> {
-        let t = self.tok();
-        if t.kind == Tk::Kw && words.contains(&&t.text[..]) {
-            return Err(self.err(code::NOT_SUPPORTED));
+    fn with_statement(&mut self) -> R<Id> {
+        let mut records = Vec::new();
+        loop {
+            records.push(self.designator()?);
+            if !self.sym(b",") {
+                break;
+            }
         }
-        Ok(())
+        let id = self.reserve_node();
+        self.expect_kw(b"DO", code::DO_EXPECTED)?;
+        let body = self.sub(self.stops)?;
+        let records = self.ast.list(&records);
+        self.fill_node(id, Kind::With(records, body));
+        Ok(id)
     }
+
+    fn for_statement(&mut self) -> R<Id> {
+        let (line, col) = self.pos();
+        if self.tok().kind != Tk::Ident {
+            return Err(self.err(code::VARIABLE_EXPECTED));
+        }
+        let name = self.ident()?;
+        let variable = self.ast.add(Kind::Name(name), line, col);
+        self.expect_sym(b":=", code::ASSIGN_EXPECTED)?;
+        let first = self.expr()?;
+        let downto = self.is(Tk::Kw, b"DOWNTO");
+        if !downto && !self.is(Tk::Kw, b"TO") {
+            return Err(self.err(code::TO_OR_DOWNTO_EXPECTED));
+        }
+        self.advance();
+        let last = self.expr()?;
+        let id = self.reserve_node();
+        self.expect_kw(b"DO", code::DO_EXPECTED)?;
+        let body = self.sub(self.stops)?;
+        let kind = Kind::For {
+            variable,
+            first,
+            last,
+            body,
+            downto,
+        };
+        self.fill_node(id, kind);
+        Ok(id)
+    }
+
+    // ---- Types ----
 
     /// A type name; `String` is the keyword.
     fn type_name(&mut self) -> R<u32> {
@@ -362,22 +582,20 @@ impl Parser {
         }
         let mut list = Vec::new();
         loop {
-            let byref = self.kw(b"VAR");
-            let mut names = Vec::new();
-            loop {
-                let (line, col) = self.pos();
-                names.push((self.ident()?, line, col));
-                if !self.sym(b",") {
-                    break;
-                }
-            }
-            if byref && !self.is(Tk::Sym, b":") {
+            let by_ref = self.kw(b"VAR");
+            let names = self.identifier_list()?;
+            if by_ref && !self.is(Tk::Sym, b":") {
                 return Err(self.err(code::NOT_SUPPORTED));
             }
             self.expect_sym(b":", code::COLON_EXPECTED)?;
-            let ty = self.type_name()?;
-            for (name, line, col) in names {
-                list.push(self.ast.add(Kind::Param(name, ty, byref), line, col));
+            let type_name = self.type_name()?;
+            for IdentAt { name, line, col } in names {
+                let param = Kind::Param {
+                    name,
+                    type_name,
+                    by_ref,
+                };
+                list.push(self.ast.add(param, line, col));
             }
             if !self.sym(b";") {
                 break;
@@ -387,100 +605,128 @@ impl Parser {
         Ok(Some(self.ast.list(&list)))
     }
 
-    /// A type: a type name, an enumeration `(a, b)`, a subrange `lo..hi` of constants, or
-    /// `procedure [(params)]` / `function [(params)]: name`.
+    /// A type: a type name, a pointer `^T`, an enumeration `(a, b)`, a set, array, record or
+    /// string type, a subrange `lo..hi` of constants, or `procedure [(params)]` /
+    /// `function [(params)]: name`.
     fn type_spec(&mut self) -> R<Id> {
         let (line, col) = self.pos();
-        let func = self.is(Tk::Kw, b"FUNCTION");
         // `^T` with a one-letter name is lexed as a control character.
-        let ctrl = self.tok().kind == Tk::Ctrl && self.tok().text[0].is_ascii_alphabetic();
-        if ctrl || self.sym(b"^") {
-            let name = match ctrl {
-                true => self.ast.intern(&self.toks[self.at].text),
-                false => self.type_name()?,
-            };
-            self.at += ctrl as usize;
+        let control_letter =
+            self.tok().kind == Tk::Ctrl && self.tok().text[0].is_ascii_alphabetic();
+        if control_letter {
+            let name = self.ast.intern(&self.tokens[self.pos].text);
+            self.advance();
+            return Ok(self.ast.add(Kind::PtrType(name), line, col));
+        }
+        if self.sym(b"^") {
+            let name = self.type_name()?;
             return Ok(self.ast.add(Kind::PtrType(name), line, col));
         }
         if self.sym(b"(") {
-            let mut names = Vec::new();
-            loop {
-                let (line, col) = self.pos();
-                let name = self.ident()?;
-                names.push(self.ast.add(Kind::Name(name), line, col));
-                if !self.sym(b",") {
-                    break;
-                }
-            }
-            self.expect_sym(b")", code::RIGHT_PAREN_EXPECTED)?;
-            let list = self.ast.list(&names);
-            return Ok(self.ast.add(Kind::Enum(list), line, col));
+            return self.enumeration(line, col);
         }
         if self.kw(b"SET") {
             self.expect_kw(b"OF", code::OF_EXPECTED)?;
             let base = self.type_spec()?;
             return Ok(self.ast.add(Kind::SetType(base), line, col));
         }
+        // `packed` is accepted only in front of `array` or `record`, and then ignored.
         if self.kw(b"PACKED") && !self.is(Tk::Kw, b"ARRAY") && !self.is(Tk::Kw, b"RECORD") {
             return Err(self.err(code::SYNTAX_ERROR));
         }
         if self.kw(b"ARRAY") {
-            self.expect_sym(b"[", code::RIGHT_BRACKET_EXPECTED)?;
-            let mut index = vec![self.type_spec()?];
-            while self.sym(b",") {
-                index.push(self.type_spec()?);
-            }
-            self.expect_sym(b"]", code::RIGHT_BRACKET_EXPECTED)?;
-            self.expect_kw(b"OF", code::OF_EXPECTED)?;
-            let (index, elem) = (self.ast.list(&index), self.type_spec()?);
-            return Ok(self.ast.add(Kind::Array(index, elem), line, col));
+            return self.array_type(line, col);
         }
         if self.kw(b"RECORD") {
-            let fields = self.fields()?;
-            if !self.kw(b"END") {
-                return Err(self.err(code::IDENTIFIER_EXPECTED));
-            }
-            let list = self.ast.list(&fields);
-            return Ok(self.ast.add(Kind::Record(list), line, col));
+            return self.record_type(line, col);
         }
-        if self.is(Tk::Kw, b"STRING") && self.toks[self.at + 1].text == b"[" {
-            self.at += 2;
+        if self.is(Tk::Kw, b"STRING") && self.peek(1).text == b"[" {
+            self.pos += 2;
             let size = self.expr()?;
             self.expect_sym(b"]", code::RIGHT_BRACKET_EXPECTED)?;
             return Ok(self.ast.add(Kind::StrType(size), line, col));
         }
-        if !self.kw(b"PROCEDURE") && !self.kw(b"FUNCTION") {
-            self.unsupported(&[b"FILE"])?;
-            if self.is(Tk::Kw, b"STRING") {
-                let name = self.type_name()?;
-                return Ok(self.ast.add(Kind::Name(name), line, col));
-            }
-            let t = self.tok();
-            let starts = matches!(t.kind, Tk::Ident | Tk::IntLit | Tk::StrLit | Tk::Ctrl)
-                || self.is(Tk::Sym, b"-")
-                || self.is(Tk::Sym, b"+");
-            if !starts {
-                return Err(self.err(code::IDENTIFIER_EXPECTED));
-            }
-            let lo = self.expr()?;
-            if !self.sym(b"..") {
-                return match self.ast.nodes[lo as usize].kind {
-                    Kind::Name(_) => Ok(lo),
-                    _ => Err(self.err(code::SYNTAX_ERROR)),
-                };
-            }
-            let hi = self.expr()?;
-            return Ok(self.ast.add(Kind::Range(lo, hi), line, col));
+        let is_function = self.is(Tk::Kw, b"FUNCTION");
+        if self.kw(b"PROCEDURE") || self.kw(b"FUNCTION") {
+            return self.procedure_type(is_function, line, col);
         }
+        self.subrange_or_type_name(line, col)
+    }
+
+    /// After `(`: the identifiers of an enumeration.
+    fn enumeration(&mut self, line: u32, col: u32) -> R<Id> {
+        let mut names = Vec::new();
+        for IdentAt { name, line, col } in self.identifier_list()? {
+            names.push(self.ast.add(Kind::Name(name), line, col));
+        }
+        self.expect_sym(b")", code::RIGHT_PAREN_EXPECTED)?;
+        let list = self.ast.list(&names);
+        Ok(self.ast.add(Kind::Enum(list), line, col))
+    }
+
+    /// After `array`: `[index types] of element type`.
+    fn array_type(&mut self, line: u32, col: u32) -> R<Id> {
+        self.expect_sym(b"[", code::RIGHT_BRACKET_EXPECTED)?;
+        let mut index = vec![self.type_spec()?];
+        while self.sym(b",") {
+            index.push(self.type_spec()?);
+        }
+        self.expect_sym(b"]", code::RIGHT_BRACKET_EXPECTED)?;
+        self.expect_kw(b"OF", code::OF_EXPECTED)?;
+        let (index, element) = (self.ast.list(&index), self.type_spec()?);
+        Ok(self.ast.add(Kind::Array(index, element), line, col))
+    }
+
+    /// After `record`: the fields up to `end`.
+    fn record_type(&mut self, line: u32, col: u32) -> R<Id> {
+        let fields = self.fields()?;
+        if !self.kw(b"END") {
+            return Err(self.err(code::IDENTIFIER_EXPECTED));
+        }
+        let list = self.ast.list(&fields);
+        Ok(self.ast.add(Kind::Record(list), line, col))
+    }
+
+    /// After `procedure` or `function`: the parameters and, for a function, `: result`.
+    fn procedure_type(&mut self, is_function: bool, line: u32, col: u32) -> R<Id> {
         let params = self.params()?;
         let mut result = NO_NAME;
-        if func {
+        if is_function {
             self.expect_sym(b":", code::COLON_EXPECTED)?;
             result = self.type_name()?;
         }
-        Ok(self
-            .ast
-            .add(Kind::ProcType(params, result, func), line, col))
+        let kind = Kind::ProcType {
+            params,
+            result,
+            is_function,
+        };
+        Ok(self.ast.add(kind, line, col))
+    }
+
+    /// A type name (including `String`) or a subrange `lo..hi` whose bounds are constants.
+    fn subrange_or_type_name(&mut self, line: u32, col: u32) -> R<Id> {
+        self.unsupported(&[b"FILE"])?;
+        if self.is(Tk::Kw, b"STRING") {
+            let name = self.type_name()?;
+            return Ok(self.ast.add(Kind::Name(name), line, col));
+        }
+        let t = self.tok();
+        let starts_constant = matches!(t.kind, Tk::Ident | Tk::IntLit | Tk::StrLit | Tk::Ctrl)
+            || self.is(Tk::Sym, b"-")
+            || self.is(Tk::Sym, b"+");
+        if !starts_constant {
+            return Err(self.err(code::IDENTIFIER_EXPECTED));
+        }
+        let lo = self.expr()?;
+        if !self.sym(b"..") {
+            // Not a range: the expression must have been a lone type name.
+            return match self.ast.kind(lo) {
+                Kind::Name(_) => Ok(lo),
+                _ => Err(self.err(code::SYNTAX_ERROR)),
+            };
+        }
+        let hi = self.expr()?;
+        Ok(self.ast.add(Kind::Range(lo, hi), line, col))
     }
 
     /// A record's field list up to (not including) `END` or `)`: fixed fields, then an optional
@@ -488,158 +734,180 @@ impl Parser {
     fn fields(&mut self) -> R<Vec<Id>> {
         let mut out = Vec::new();
         while self.tok().kind == Tk::Ident {
-            let mut names = Vec::new();
-            loop {
-                let (line, col) = self.pos();
-                names.push((self.ident()?, line, col));
-                if !self.sym(b",") {
-                    break;
-                }
-            }
+            let names = self.identifier_list()?;
             self.expect_sym(b":", code::COLON_EXPECTED)?;
             let spec = self.type_spec()?;
-            for (name, line, col) in names {
+            for IdentAt { name, line, col } in names {
                 out.push(self.ast.add(Kind::FieldDecl(name, spec), line, col));
             }
             if !self.sym(b";") {
                 return Ok(out);
             }
         }
-        if !self.is(Tk::Kw, b"CASE") {
-            return Ok(out);
+        if self.is(Tk::Kw, b"CASE") {
+            self.variant_part(&mut out)?;
         }
+        Ok(out)
+    }
+
+    /// `case [tag:] type of labels: (fields); ...`, appended to `out` as the selector's
+    /// `FieldDecl` and a `Variant` node holding one `Record` per arm.
+    fn variant_part(&mut self, out: &mut Vec<Id>) -> R<()> {
         let (line, col) = self.pos();
-        self.at += 1;
-        let tagged = self.toks[self.at + 1].text == b":";
-        let name = if tagged { self.ident()? } else { NO_NAME };
-        if tagged {
-            self.at += 1;
+        self.advance();
+        let has_tag = self.peek(1).text == b":";
+        let tag_name = if has_tag { self.ident()? } else { NO_NAME };
+        if has_tag {
+            self.advance();
         }
-        let spec = self.type_spec()?;
-        out.push(self.ast.add(Kind::FieldDecl(name, spec), line, col));
+        let selector_type = self.type_spec()?;
+        out.push(
+            self.ast
+                .add(Kind::FieldDecl(tag_name, selector_type), line, col),
+        );
         self.expect_kw(b"OF", code::OF_EXPECTED)?;
         let mut arms = Vec::new();
         loop {
-            let (line, col) = self.pos();
-            while {
+            let (arm_line, arm_col) = self.pos();
+            // The labels are parsed and dropped: arms are told apart only by position.
+            loop {
                 self.expr()?;
-                self.sym(b",")
-            } {}
+                if !self.sym(b",") {
+                    break;
+                }
+            }
             self.expect_sym(b":", code::COLON_EXPECTED)?;
             self.expect_sym(b"(", code::LEFT_PAREN_EXPECTED)?;
             let inner = self.fields()?;
             self.expect_sym(b")", code::RIGHT_PAREN_EXPECTED)?;
             let list = self.ast.list(&inner);
-            arms.push(self.ast.add(Kind::Record(list), line, col));
-            if !self.sym(b";") || self.is(Tk::Kw, b"END") || self.is(Tk::Sym, b")") {
+            arms.push(self.ast.add(Kind::Record(list), arm_line, arm_col));
+            let more = self.sym(b";") && !self.is(Tk::Kw, b"END") && !self.is(Tk::Sym, b")");
+            if !more {
                 break;
             }
         }
         let list = self.ast.list(&arms);
         out.push(self.ast.add(Kind::Variant(list), line, col));
-        Ok(out)
+        Ok(())
     }
 
+    // ---- Declarations ----
+
     /// After `PROCEDURE` or `FUNCTION`.
-    fn routine(&mut self, func: bool) -> R<Id> {
+    fn routine(&mut self, is_function: bool) -> R<Id> {
         let name = self.ident()?;
         let params = self.params()?;
         let mut result = NO_NAME;
-        if func && self.sym(b":") {
+        if is_function && self.sym(b":") {
             result = self.type_name()?;
-        } else if func && !self.is(Tk::Sym, b";") {
+        } else if is_function && !self.is(Tk::Sym, b";") {
             return Err(self.err(code::COLON_EXPECTED));
         }
-        let placeholder = Kind::Compound(self.ast.list(&[]));
-        let id = self.after(placeholder);
+        let id = self.reserve_node();
         self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
         self.unsupported(&[b"INLINE", b"INTERRUPT"])?;
         let block = if self.kw(b"FORWARD") {
             None
         } else {
             let (line, col) = self.pos();
-            let decls = self.declarations()?;
+            let declarations = self.declarations()?;
             let body = self.begin()?;
-            let decls = self.ast.list(&decls);
-            Some(self.ast.add(Kind::Block(decls, body), line, col))
+            let declarations = self.ast.list(&declarations);
+            Some(self.ast.add(Kind::Block(declarations, body), line, col))
         };
         self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
-        self.ast.nodes[id as usize].kind = Kind::Routine(name, params, result, func, block);
+        let kind = Kind::Routine {
+            name,
+            params,
+            result,
+            is_function,
+            block,
+        };
+        self.fill_node(id, kind);
         Ok(id)
     }
 
-    /// `CONST`, `VAR`, `PROCEDURE` and `FUNCTION` sections, in any order and number.
+    /// `CONST`, `TYPE`, `VAR`, `PROCEDURE` and `FUNCTION` sections, in any order and number.
     fn declarations(&mut self) -> R<Vec<Id>> {
         let mut out = Vec::new();
         loop {
             if self.kw(b"CONST") {
-                loop {
-                    let (line, col) = self.pos();
-                    let name = self.ident()?;
-                    self.expect_sym(b"=", code::EQUALS_EXPECTED)?;
-                    let e = self.expr()?;
-                    self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
-                    out.push(self.ast.add(Kind::ConstDecl(name, e), line, col));
-                    if self.tok().kind != Tk::Ident {
-                        break;
-                    }
-                }
+                self.const_section(&mut out)?;
             } else if self.kw(b"TYPE") {
-                loop {
-                    let (line, col) = self.pos();
-                    let name = self.ident()?;
-                    self.expect_sym(b"=", code::EQUALS_EXPECTED)?;
-                    let spec = self.type_spec()?;
-                    self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
-                    out.push(self.ast.add(Kind::TypeDecl(name, spec), line, col));
-                    if self.tok().kind != Tk::Ident {
-                        break;
-                    }
-                }
+                self.type_section(&mut out)?;
             } else if self.kw(b"VAR") {
-                loop {
-                    let mut names = Vec::new();
-                    loop {
-                        let (line, col) = self.pos();
-                        names.push((self.ident()?, line, col));
-                        if !self.sym(b",") {
-                            break;
-                        }
-                    }
-                    self.expect_sym(b":", code::COLON_EXPECTED)?;
-                    let named = self.tok().kind == Tk::Ident
-                        && self.toks[self.at + 1].kind == Tk::Sym
-                        && self.toks[self.at + 1].text == b";";
-                    let ty = if !named {
-                        // A hidden type name no identifier can have.
-                        let n = self.ast.names.len() as u32;
-                        let key = [b' ', 0x80 | (n & 0x7F) as u8, 0x80 | (n >> 7) as u8];
-                        let (line, col) = self.pos();
-                        let name = self.ast.intern(&key);
-                        let spec = self.type_spec()?;
-                        out.push(self.ast.add(Kind::TypeDecl(name, spec), line, col));
-                        name
-                    } else {
-                        self.type_name()?
-                    };
-                    self.unsupported(&[b"ABSOLUTE"])?;
-                    self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
-                    for (name, line, col) in names {
-                        out.push(self.ast.add(Kind::VarDecl(name, ty), line, col));
-                    }
-                    if self.tok().kind != Tk::Ident {
-                        break;
-                    }
-                }
+                self.var_section(&mut out)?;
             } else if self.kw(b"PROCEDURE") || self.kw(b"FUNCTION") {
-                let func = self.toks[self.at - 1].text == b"FUNCTION";
-                out.push(self.routine(func)?);
+                let is_function = self.previous().text == b"FUNCTION";
+                out.push(self.routine(is_function)?);
             } else {
                 self.unsupported(&[b"LABEL"])?;
                 return Ok(out);
             }
         }
     }
+
+    /// After `CONST`: `name = expr;` entries while an identifier follows.
+    fn const_section(&mut self, out: &mut Vec<Id>) -> R<()> {
+        loop {
+            let (line, col) = self.pos();
+            let name = self.ident()?;
+            self.expect_sym(b"=", code::EQUALS_EXPECTED)?;
+            let value = self.expr()?;
+            self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
+            out.push(self.ast.add(Kind::ConstDecl(name, value), line, col));
+            if self.tok().kind != Tk::Ident {
+                return Ok(());
+            }
+        }
+    }
+
+    /// After `TYPE`: `name = type;` entries while an identifier follows.
+    fn type_section(&mut self, out: &mut Vec<Id>) -> R<()> {
+        loop {
+            let (line, col) = self.pos();
+            let name = self.ident()?;
+            self.expect_sym(b"=", code::EQUALS_EXPECTED)?;
+            let spec = self.type_spec()?;
+            self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
+            out.push(self.ast.add(Kind::TypeDecl(name, spec), line, col));
+            if self.tok().kind != Tk::Ident {
+                return Ok(());
+            }
+        }
+    }
+
+    /// After `VAR`: `names: type;` entries while an identifier follows. A type that is not a
+    /// plain name is declared first under an anonymous name.
+    fn var_section(&mut self, out: &mut Vec<Id>) -> R<()> {
+        loop {
+            let names = self.identifier_list()?;
+            self.expect_sym(b":", code::COLON_EXPECTED)?;
+            let names_a_type = self.tok().kind == Tk::Ident
+                && self.peek(1).kind == Tk::Sym
+                && self.peek(1).text == b";";
+            let type_name = if names_a_type {
+                self.type_name()?
+            } else {
+                let name = self.ast.anonymous_name();
+                let (line, col) = self.pos();
+                let spec = self.type_spec()?;
+                out.push(self.ast.add(Kind::TypeDecl(name, spec), line, col));
+                name
+            };
+            self.unsupported(&[b"ABSOLUTE"])?;
+            self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
+            for IdentAt { name, line, col } in names {
+                out.push(self.ast.add(Kind::VarDecl(name, type_name), line, col));
+            }
+            if self.tok().kind != Tk::Ident {
+                return Ok(());
+            }
+        }
+    }
+
+    // ---- Expressions ----
 
     /// Arguments after `(`, up to and including `)`; also the position of the `)`, where TP
     /// reports argument errors.
@@ -656,19 +924,36 @@ impl Parser {
         Ok((args, close))
     }
 
-    /// Index and field selectors after the designator `e` that starts at `(line, col)`.
+    /// `expr [: width [: decimals]]`, the form of a write argument.
+    fn argument(&mut self) -> R<Id> {
+        let value = self.expr()?;
+        if !self.sym(b":") {
+            return Ok(value);
+        }
+        let width = self.expr()?;
+        let decimals = self.sym(b":").then(|| self.expr()).transpose()?;
+        Ok(self.after(Kind::Fmt {
+            value,
+            width,
+            decimals,
+        }))
+    }
+
+    /// Index and field selectors after the designator `e`, all stamped with `e`'s position.
     fn selectors(&mut self, mut e: Id) -> R<Id> {
-        let (line, col) = (
-            self.ast.nodes[e as usize].line,
-            self.ast.nodes[e as usize].col,
-        );
+        let (line, col) = self.ast.position(e);
         loop {
             if self.sym(b"[") {
-                let mut more = false;
+                let mut continues = false;
                 loop {
                     let index = self.expr()?;
-                    e = self.ast.add(Kind::Index(e, index, more), line, col);
-                    more = true;
+                    let node = Kind::Index {
+                        base: e,
+                        index,
+                        continues,
+                    };
+                    e = self.ast.add(node, line, col);
+                    continues = true;
                     if !self.sym(b",") {
                         break;
                     }
@@ -696,211 +981,166 @@ impl Parser {
         self.selectors(base)
     }
 
-    fn statement(&mut self) -> R<Option<Id>> {
-        let (line, col) = self.pos();
-        if self.tok().kind == Tk::Ident {
-            let name = self.ident()?;
-            let mut target = self.ast.add(Kind::Name(name), line, col);
-            target = self.selectors(target)?;
-            if self.sym(b":=") {
-                let value = self.expr()?;
-                return Ok(Some(self.after(Kind::Assign(target, value))));
-            }
-            if !matches!(self.ast.nodes[target as usize].kind, Kind::Name(_)) {
-                return Err(self.err(code::ERROR_IN_STATEMENT));
-            }
-            let (mut args, mut at) = (Vec::new(), self.pos());
-            if self.sym(b"(") {
-                (args, at) = self.arguments()?;
-            } else if self.is(Tk::Sym, b"=") {
-                // TP takes the identifier for a variable and wants `:=`.
-                return Err(self.err(code::ASSIGN_EXPECTED));
-            }
-            let list = self.ast.list(&args);
-            let call = self.ast.add(Kind::Call(target, list), at.0, at.1);
-            if self.is(Tk::Sym, b"^") {
-                // A typecast designator: `T(x)^ := v`.
-                let target = self.selectors(call)?;
-                self.expect_sym(b":=", code::ERROR_IN_STATEMENT)?;
-                let value = self.expr()?;
-                return Ok(Some(self.after(Kind::Assign(target, value))));
-            }
-            return Ok(Some(call));
-        }
-        if self.kw(b"BEGIN") {
-            return self.compound().map(Some);
-        }
-        if let Some(s) = self.control()? {
-            return Ok(Some(s));
-        }
-        let t = self.tok();
-        let stop = [(END, &b"END"[..]), (UNTIL, b"UNTIL"), (ELSE, b"ELSE")];
-        let stops = stop
-            .iter()
-            .any(|&(bit, k)| self.stops & bit != 0 && t.text == k);
-        if t.kind == Tk::Kw && stops || self.is(Tk::Sym, b";") {
-            return Ok(None);
-        }
-        self.unsupported(&[b"GOTO", b"ASM", b"INLINE"])?;
-        Err(self.err(code::ERROR_IN_STATEMENT))
-    }
-
-    /// `expr [: width]`.
-    fn argument(&mut self) -> R<Id> {
-        let e = self.expr()?;
-        if !self.sym(b":") {
-            return Ok(e);
-        }
-        let w = self.expr()?;
-        let d = self.sym(b":").then(|| self.expr()).transpose()?;
-        Ok(self.after(Kind::Fmt(e, w, d)))
-    }
-
     /// Consumes the lookahead if it is a keyword or symbol listed in `ops`.
     fn operator(&mut self, ops: &[(&[u8], Op)]) -> Option<Op> {
         let t = self.tok();
-        let op = ops
-            .iter()
-            .find(|o| o.0 == t.text && matches!(t.kind, Tk::Kw | Tk::Sym));
-        let op = op.map(|o| o.1);
-        self.at += op.is_some() as usize;
-        op
+        if !matches!(t.kind, Tk::Kw | Tk::Sym) {
+            return None;
+        }
+        let (_, op) = ops.iter().find(|(text, _)| *text == t.text)?;
+        let op = *op;
+        self.advance();
+        Some(op)
     }
 
+    /// `simple [relation simple]`.
     fn expr(&mut self) -> R<Id> {
         let left = self.simple()?;
         let Some(op) = self.operator(REL) else {
             return Ok(left);
         };
         let right = self.simple()?;
-        Ok(self.after(Kind::Binary(op, left, right)))
+        Ok(self.after(Kind::Binary { op, left, right }))
     }
 
-    /// `[sign] term {addop term}`; the sign applies to the first term.
+    /// `[sign] term {addop term}`; a leading sign applies to the whole first term (`-a * b`
+    /// is `-(a * b)`). `factor` accepts a sign in front of any later operand.
     fn simple(&mut self) -> R<Id> {
-        let neg = self.sym(b"-");
+        let negate = self.sym(b"-");
         self.sym(b"+");
         let mut left = self.term()?;
-        if neg {
+        if negate {
             left = self.after(Kind::Unary(Op::Neg, left));
         }
         while let Some(op) = self.operator(ADD) {
             let right = self.term()?;
-            left = self.after(Kind::Binary(op, left, right));
+            left = self.after(Kind::Binary { op, left, right });
         }
         Ok(left)
     }
 
+    /// `factor {mulop factor}`.
     fn term(&mut self) -> R<Id> {
         let mut left = self.factor()?;
         while let Some(op) = self.operator(MUL) {
             let right = self.factor()?;
-            left = self.after(Kind::Binary(op, left, right));
+            left = self.after(Kind::Binary { op, left, right });
         }
         Ok(left)
     }
 
     fn factor(&mut self) -> R<Id> {
         // TP accepts a sign before any operand, not only the first term.
-        let neg = self.sym(b"-");
+        let negate = self.sym(b"-");
         self.sym(b"+");
-        if neg {
-            let e = self.factor()?;
-            return Ok(self.after(Kind::Unary(Op::Neg, e)));
+        if negate {
+            let operand = self.factor()?;
+            return Ok(self.after(Kind::Unary(Op::Neg, operand)));
         }
         let (line, col) = self.pos();
         let t = self.tok();
-        let kind = match t.kind {
-            Tk::Ident => {
-                let name = self.ident()?;
-                let callee = self.ast.add(Kind::Name(name), line, col);
-                if !self.sym(b"(") {
-                    self.ast.follow.push((callee, self.tok().line));
-                    return self.selectors(callee);
-                }
-                let (args, at) = self.arguments()?;
-                let list = self.ast.list(&args);
-                let call = self.ast.add(Kind::Call(callee, list), at.0, at.1);
-                return if self.is(Tk::Sym, b"^") {
-                    self.selectors(call)
-                } else {
-                    Ok(call)
-                };
-            }
-            Tk::IntLit if t.int > i32::MAX as i64 => {
-                return Err(self.err(code::INTEGER_CONSTANT_ERROR))
-            }
+        match t.kind {
+            Tk::Ident => self.identifier_factor(line, col),
+            Tk::IntLit if t.int > i32::MAX as i64 => Err(self.err(code::INTEGER_CONSTANT_ERROR)),
             Tk::IntLit => {
-                let v = t.int;
-                self.at += 1;
-                Kind::IntLit(v)
+                let value = t.int;
+                self.advance();
+                Ok(self.ast.add(Kind::IntLit(value), line, col))
+            }
+            Tk::RealLit => {
+                let value = t.real;
+                self.advance();
+                Ok(self.ast.add(Kind::RealLit(value), line, col))
             }
             Tk::StrLit | Tk::Ctrl => {
-                let bytes = if t.kind == Tk::Ctrl {
-                    vec![t.text[0].to_ascii_uppercase() ^ 64]
+                let text = if t.kind == Tk::Ctrl {
+                    vec![t.text[0].to_ascii_uppercase() - b'@']
                 } else {
                     t.text.clone()
                 };
-                self.at += 1;
-                self.ast.strs.push(bytes);
-                Kind::StrLit(self.ast.strs.len() as u32 - 1)
+                self.advance();
+                self.ast.strs.push(text);
+                let index = self.ast.strs.len() as u32 - 1;
+                Ok(self.ast.add(Kind::StrLit(index), line, col))
             }
-            Tk::Sym if t.text == b"[" => {
-                self.at += 1;
-                let mut items = Vec::new();
-                while !self.is(Tk::Sym, b"]") {
-                    let lo = self.expr()?;
-                    items.push(match self.sym(b"..") {
-                        true => {
-                            let hi = self.expr()?;
-                            self.ast.add(Kind::Range(lo, hi), line, col)
-                        }
-                        false => lo,
-                    });
-                    if !self.sym(b",") {
-                        break;
-                    }
-                }
-                self.expect_sym(b"]", code::RIGHT_BRACKET_EXPECTED)?;
-                let list = self.ast.list(&items);
-                return Ok(self.ast.add(Kind::SetLit(list), line, col));
-            }
-            Tk::Sym if t.text == b"(" => {
-                self.at += 1;
-                let e = self.expr()?;
-                self.expect_sym(b")", code::RIGHT_PAREN_EXPECTED)?;
-                if matches!(self.ast.nodes[e as usize].kind, Kind::Name(_)) {
-                    return Ok(self.ast.add(Kind::Paren(e), line, col));
-                }
-                return Ok(e);
+            Tk::Sym if t.text == b"[" => self.set_constructor(line, col),
+            Tk::Sym if t.text == b"(" => self.parenthesised(line, col),
+            Tk::Sym if t.text == b"@" => {
+                self.advance();
+                let operand = self.factor()?;
+                Ok(self.ast.add(Kind::AddrOf(operand), line, col))
             }
             Tk::Kw if t.text == b"STRING" => {
                 let name = self.type_name()?;
-                return Ok(self.ast.add(Kind::Name(name), line, col));
-            }
-            Tk::Sym if t.text == b"@" => {
-                self.at += 1;
-                let e = self.factor()?;
-                return Ok(self.ast.add(Kind::AddrOf(e), line, col));
+                Ok(self.ast.add(Kind::Name(name), line, col))
             }
             Tk::Kw if t.text == b"NIL" => {
-                self.at += 1;
+                self.advance();
                 let nil = self.ast.intern(b"NIL");
                 let e = self.ast.add(Kind::Name(nil), line, col);
-                return self.selectors(e);
+                self.selectors(e)
             }
             Tk::Kw if t.text == b"NOT" => {
-                self.at += 1;
-                let e = self.factor()?;
-                return Ok(self.after(Kind::Unary(Op::Not, e)));
+                self.advance();
+                let operand = self.factor()?;
+                Ok(self.after(Kind::Unary(Op::Not, operand)))
             }
-            Tk::RealLit => {
-                let v = t.real;
-                self.at += 1;
-                Kind::RealLit(v)
+            _ => Err(self.err(code::ERROR_IN_EXPRESSION)),
+        }
+    }
+
+    /// A variable, a constant, or a call `f(args)`, with selectors.
+    fn identifier_factor(&mut self, line: u32, col: u32) -> R<Id> {
+        let name = self.ident()?;
+        let callee = self.ast.add(Kind::Name(name), line, col);
+        if !self.sym(b"(") {
+            let follow = FollowLine {
+                node: callee,
+                line: self.tok().line,
+            };
+            self.ast.follow.push(follow);
+            return self.selectors(callee);
+        }
+        let (args, call_at) = self.arguments()?;
+        let list = self.ast.list(&args);
+        let call = self.ast.add(Kind::Call(callee, list), call_at.0, call_at.1);
+        if self.is(Tk::Sym, b"^") {
+            self.selectors(call)
+        } else {
+            Ok(call)
+        }
+    }
+
+    /// `[a, b..c]`: a set constructor.
+    fn set_constructor(&mut self, line: u32, col: u32) -> R<Id> {
+        self.advance();
+        let mut items = Vec::new();
+        while !self.is(Tk::Sym, b"]") {
+            let lo = self.expr()?;
+            if self.sym(b"..") {
+                let hi = self.expr()?;
+                items.push(self.ast.add(Kind::Range(lo, hi), line, col));
+            } else {
+                items.push(lo);
             }
-            _ => return Err(self.err(code::ERROR_IN_EXPRESSION)),
-        };
-        Ok(self.ast.add(kind, line, col))
+            if !self.sym(b",") {
+                break;
+            }
+        }
+        self.expect_sym(b"]", code::RIGHT_BRACKET_EXPECTED)?;
+        let list = self.ast.list(&items);
+        Ok(self.ast.add(Kind::SetLit(list), line, col))
+    }
+
+    /// `( expr )`; a parenthesised name is marked so that it is not taken for a variable
+    /// reference when passed as a `var` argument.
+    fn parenthesised(&mut self, line: u32, col: u32) -> R<Id> {
+        self.advance();
+        let e = self.expr()?;
+        self.expect_sym(b")", code::RIGHT_PAREN_EXPECTED)?;
+        if matches!(self.ast.kind(e), Kind::Name(_)) {
+            return Ok(self.ast.add(Kind::Paren(e), line, col));
+        }
+        Ok(e)
     }
 }

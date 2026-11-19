@@ -41,7 +41,11 @@ pub mod op {
     pub const END: u8 = 0x0B;
     pub const BR: u8 = 0x0C;
     pub const BR_IF: u8 = 0x0D;
+    pub const CALL: u8 = 0x10;
     pub const CALL_INDIRECT: u8 = 0x11;
+    pub const LOCAL_GET: u8 = 0x20;
+    pub const LOCAL_SET: u8 = 0x21;
+    pub const LOCAL_TEE: u8 = 0x22;
     pub const I32_CONST: u8 = 0x41;
     pub const F64_CONST: u8 = 0x44;
     pub const PREFIX_FC: u8 = 0xFC;
@@ -118,6 +122,22 @@ impl Code {
         self.buf.push(opcode);
         uleb(&mut self.buf, n as u64);
         self
+    }
+
+    pub fn call(&mut self, function: u32) -> &mut Self {
+        self.idx(op::CALL, function)
+    }
+
+    pub fn local_get(&mut self, local: u32) -> &mut Self {
+        self.idx(op::LOCAL_GET, local)
+    }
+
+    pub fn local_set(&mut self, local: u32) -> &mut Self {
+        self.idx(op::LOCAL_SET, local)
+    }
+
+    pub fn local_tee(&mut self, local: u32) -> &mut Self {
+        self.idx(op::LOCAL_TEE, local)
     }
 
     pub fn i32_const(&mut self, v: i32) -> &mut Self {
