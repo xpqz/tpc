@@ -103,3 +103,5 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | D32 | Crt names left out | `TextMode`, `LastMode`, `AssignCrt` and the mode constants `BW40` to `Font8x8` exist | They are error 3 (Unknown identifier) | No text modes: the screen is always 80x25 colour. `CheckBreak`, `CheckEof`, `CheckSnow`, `DirectVideo` exist as variables and change nothing |
 | D33 | Sound and ReadLn length | `Sound` makes a tone; a `ReadLn` line is at most 127 characters | `Sound` and `NoSound` do nothing; the line editor takes up to 254 characters (as D29) | |
 | D34 | A parameterless function called with arguments inside `if`, `[]`, `for` bounds or `case` | Error 40, 93, 58 or 54 (the next token the construct expects) | Error 85 | Matching needs an expected-token context through `expr` (#81); assignment and argument positions match TP |
+| D35 | DOS device names in Assign (COM1, LPT1, PRN, AUX, CON, NUL) | Devices | Ordinary file names | Decision 50 |
+| D36 | Reading a variable never assigned | Memory contents (garbage) | Zero (memory starts zeroed) | Decision 50; tests never depend on it |
