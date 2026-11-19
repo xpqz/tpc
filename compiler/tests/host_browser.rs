@@ -54,3 +54,15 @@ fn console_readln_without_crt_reads_typed_lines() {
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(o.status.success(), "console_readln.mjs: {out}{err}");
 }
+
+#[test]
+fn console_newline_without_crt_starts_in_column_one() {
+    let o = std::process::Command::new("node")
+        .arg(root().join("tests/host/console_newline.mjs"))
+        .env("TP5C", env!("CARGO_BIN_EXE_tp5c"))
+        .output()
+        .expect("node must be installed");
+    let out = String::from_utf8_lossy(&o.stdout);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "console_newline.mjs: {out}{err}");
+}
