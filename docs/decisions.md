@@ -353,3 +353,11 @@ the move took 314, including the predefined-name table and System helper binding
 are symbol-table work (checker 1,989 to 1,675; types+symbols 659 to 1,059).
 Checker allowances for #52-#54 are set at each RED verdict at ~1.5x the implementer's
 estimate, with negatives pruned there.
+
+## 35. The `time` host import
+
+`time(what) -> i32`: `time(0)` takes a clock reading and returns days since 1970-01-01
+(local); `time(1)` and `time(2)` return seconds since midnight and hundredths of that same
+reading. Supersedes plan §4.9's `time() -> i32` (an i32 of seconds overflows in 2038, of
+milliseconds within weeks; separate readings could straddle a second). The runner's clock
+is fixed by `TP5_NOW_MS` for tests. Crt's `Delay` gets its own contract in Phase 6.
