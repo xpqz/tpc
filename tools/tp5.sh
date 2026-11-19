@@ -80,6 +80,8 @@ printf '@echo off\r\ncls\r\n%s\r\n' "$run" > "$w/RUN.BAT"
 dosbox-x -silent -nogui -nomenu -exit -set "dosbox quit warning=false" -c "mount c $w" -c "c:" -c "tpc /M P.PAS > TPC.TXT" \
   -c "if exist P.EXE RUN" >/dev/null 2>&1 &
 pid=$!
+# If this script is interrupted, take DOSBox-X down with it (SIGKILL: no quit dialog).
+trap 'kill -9 $pid 2>/dev/null; rm -rf "$w"' EXIT INT TERM HUP
 n=0
 while kill -0 $pid 2>/dev/null; do
   n=$((n + 1))
