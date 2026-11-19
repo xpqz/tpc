@@ -1,0 +1,76 @@
+empty: lines 1 pos(1,1) 0 pos(5,9) 0
+lines 4 length 20
+pos -1: line 1 col 1 start 0 end 3
+pos 0: line 1 col 1 start 0 end 3
+pos 1: line 1 col 2 start 0 end 3
+pos 2: line 1 col 3 start 0 end 3
+pos 3: line 1 col 4 start 0 end 3
+pos 4: line 2 col 1 start 4 end 13
+pos 5: line 2 col 2 start 4 end 13
+pos 6: line 2 col 3 start 4 end 13
+pos 7: line 2 col 4 start 4 end 13
+pos 8: line 2 col 5 start 4 end 13
+pos 9: line 2 col 6 start 4 end 13
+pos 10: line 2 col 7 start 4 end 13
+pos 11: line 2 col 8 start 4 end 13
+pos 12: line 2 col 9 start 4 end 13
+pos 13: line 2 col 10 start 4 end 13
+pos 14: line 3 col 1 start 14 end 15
+pos 15: line 3 col 2 start 14 end 15
+pos 16: line 4 col 1 start 16 end 20
+pos 17: line 4 col 2 start 16 end 20
+pos 18: line 4 col 3 start 16 end 20
+pos 19: line 4 col 4 start 16 end 20
+pos 20: line 4 col 5 start 16 end 20
+pos 21: line 4 col 5 start 16 end 20
+posof 0,0 = 0
+posof 0,6 = 3
+posof 0,12 = 3
+posof 1,0 = 0
+posof 1,6 = 3
+posof 1,12 = 3
+posof 2,0 = 4
+posof 2,6 = 9
+posof 2,12 = 13
+posof 3,0 = 14
+posof 3,6 = 15
+posof 3,12 = 15
+posof 4,0 = 16
+posof 4,6 = 20
+posof 4,12 = 20
+posof 5,0 = 16
+posof 5,6 = 20
+posof 5,12 = 20
+posof 6,0 = 16
+posof 6,6 = 20
+posof 6,12 = 20
+start on 2:10: pos 13 line 2 col 10
+down to the blank line: pos 15 line 3 col 2
+down to last: pos 20 line 4 col 5
+down at the last line: pos 20 line 4 col 5
+up to blank: pos 15 line 3 col 2
+up to line 2: pos 13 line 2 col 10
+up to line 1: pos 3 line 1 col 4
+up at the first line: pos 3 line 1 col 4
+line end: pos 3 line 1 col 4
+down keeps the end column: pos 7 line 2 col 4
+line start: pos 4 line 2 col 1
+up from column 1: pos 0 line 1 col 1
+right 2: pos 2 line 1 col 3
+down: pos 6 line 2 col 3
+left resets the wanted column: pos 5 line 2 col 2
+down: pos 15 line 3 col 2
+right across a break: pos 18 line 4 col 3
+end of last line: pos 20 line 4 col 5
+end again: pos 20 line 4 col 5
+up after typing in column 9: pos 3 line 1 col 4
+up after backspace: pos 3 line 1 col 4
+down to the short line: pos 9 line 2 col 3
+down keeps column 6: pos 15 line 3 col 6
+down after typing: pos 14 line 3 col 4
+down after backspace: pos 12 line 3 col 3
+down after delete: pos 9 line 3 col 1
+trailing break: lines 3 last line starts at 4 line of end 3 col 1
+down to the empty last line: pos 4 line 3 col 1
+and no further: pos 4 line 3 col 1
+four empty lines: 4 pos(3,5) 2 pos(9,1) 3
