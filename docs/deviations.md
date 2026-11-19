@@ -105,3 +105,9 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | D34 | A parameterless function called with arguments inside `if`, `[]`, `for` bounds or `case` | Error 40, 93, 58 or 54 (the next token the construct expects) | Error 85 | Matching needs an expected-token context through `expr` (#81); assignment and argument positions match TP |
 | D35 | DOS device names in Assign (COM1, LPT1, PRN, AUX, CON, NUL) | Devices | Ordinary file names | Decision 50 |
 | D36 | Reading a variable never assigned | Memory contents (garbage) | Zero (memory starts zeroed) | Decision 50; tests never depend on it |
+
+## Compiler switches (SWAG sweep)
+
+| # | Deviation | TP5 | This compiler | Notes |
+|---|---|---|---|---|
+| D37 | `{$A B D F L O S V}` switches and `{$M stack,heapmin,heapmax}` | Change code generation, the stack and the heap | Checked as TP checks them (stack 1024 to 65520, heap sizes 0 to 655360) and ignored | `{$N}` and `{$E}`, which TP accepts, stay error 200 (8087 code is omitted); other letters are error 17 as in TP. Odd forms TP tolerates (`{$A++}`, `{$A+B-}`, a `;` between the `$M` numbers) are error 17 here |

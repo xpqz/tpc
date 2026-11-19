@@ -30,6 +30,7 @@ pub mod code {
     pub const STRING_EXCEEDS_LINE: u16 = 8;
     pub const TOO_MANY_NESTED_FILES: u16 = 9;
     pub const UNEXPECTED_END_OF_FILE: u16 = 10;
+    pub const LINE_TOO_LONG: u16 = 11;
     pub const TYPE_IDENTIFIER_EXPECTED: u16 = 12;
     pub const FILE_NOT_FOUND: u16 = 15;
     pub const INVALID_DIRECTIVE: u16 = 17;

@@ -15,8 +15,10 @@
 //!   so the expander follows the nesting of `begin`/`end` to know when it is inside a
 //!   statement part (error 118).
 //! - `{$R+/-}` and `{$I+/-}` are state that flows with the text, also out of an include. `{$I}`
-//!   is on by default. Other switches are not implemented (error 200); a malformed directive
-//!   is error 17.
+//!   is on by default. `{$A B D F L O S V}` and `{$M stack,heapmin,heapmax}` are checked and
+//!   then ignored: there is no code generator to tune, no overlay, no 8087 and no DOS memory
+//!   layout. `{$N}` and `{$E}` are error 200 (8087 code is omitted); any other letter and a
+//!   malformed directive are error 17, as in TP.
 use crate::diag::{code, Diag};
 use crate::lex::{is_ident_byte, is_ident_start, Lexer, Tk, Tok};
 use crate::units::{file_number, find_file, SourceFile};
@@ -37,7 +39,8 @@ enum Directive {
     EndIf,
     /// The new `{$R}` and `{$I}` states, each `None` when the directive does not set it.
     Switches(Option<bool>, Option<bool>),
-    /// A directive in malformed skipped text, which is not an error there.
+    /// A directive with no effect: `{$M}`, or a malformed directive in skipped text, where it is
+    /// not an error.
     Ignored,
 }
 
@@ -127,24 +130,73 @@ fn symbol(text: &[u8]) -> Result<Vec<u8>, u16> {
     Ok(word[..length].to_ascii_uppercase())
 }
 
+/// Switch letters TP accepts that change nothing here.
+const IGNORED_SWITCHES: &[u8] = b"ABDFLOSV";
+
+/// Switch letters TP accepts that need an 8087 or its emulator, which are omitted.
+const NUMERIC_SWITCHES: &[u8] = b"NE";
+
 /// A comma separated list of switches `R+`, `F-`, ... Anything else is error 17, and a
-/// well-formed switch this compiler does not know is error 200. `I` followed by a blank is
-/// an include, not a switch.
+/// switch that needs the omitted 8087 is error 200. `I` followed by a blank is an include,
+/// not a switch.
 fn switches(text: &[u8]) -> Result<Directive, u16> {
     let mut range_checks = None;
     let mut io_checks = None;
     for item in text.split(|&c| c == b',') {
-        match item.to_ascii_uppercase().as_slice() {
-            b"F+" | b"F-" => {}
+        let item = item.to_ascii_uppercase();
+        match item.as_slice() {
             b"R+" | b"R-" => range_checks = Some(item[1] == b'+'),
             b"I+" | b"I-" => io_checks = Some(item[1] == b'+'),
-            [letter, b'+' | b'-'] if letter.is_ascii_alphabetic() => {
+            [letter, b'+' | b'-'] if IGNORED_SWITCHES.contains(letter) => {}
+            [letter, b'+' | b'-'] if NUMERIC_SWITCHES.contains(letter) => {
                 return Err(code::NOT_SUPPORTED)
             }
             _ => return Err(code::INVALID_DIRECTIVE),
         }
     }
     Ok(Directive::Switches(range_checks, io_checks))
+}
+
+/// The value of a decimal or `$` hexadecimal number at the start of `text`, after blanks.
+/// None when there is no digit; a value too large for the limits below saturates.
+fn memory_number(text: &[u8]) -> Option<u32> {
+    let text = text.trim_ascii_start();
+    let (base, digits) = match text.strip_prefix(b"$") {
+        Some(hex) => (16, hex),
+        None => (10, text),
+    };
+    let mut value: Option<u32> = None;
+    for &c in digits {
+        let Some(digit) = (c as char).to_digit(base) else {
+            break;
+        };
+        value = Some(
+            value
+                .unwrap_or(0)
+                .saturating_mul(base)
+                .saturating_add(digit),
+        );
+    }
+    value
+}
+
+/// `{$M stack,heapmin,heapmax}`: three numbers, the stack size in 1024 to 65520 and the heap
+/// sizes in 0 to 655360 (the one megabyte DOS can address less its upper 384 KB). It is checked
+/// and ignored: memory is the host's. Text after the third number is ignored, as in TP.
+fn memory_sizes(rest: &[u8]) -> Result<Directive, u16> {
+    const STACK: std::ops::RangeInclusive<u32> = 1024..=65520;
+    const HEAP: std::ops::RangeInclusive<u32> = 0..=655360;
+    let mut fields = rest.split(|&c| c == b',');
+    let mut next_field = |limits: std::ops::RangeInclusive<u32>| {
+        let value = memory_number(fields.next().unwrap_or_default());
+        value
+            .filter(|v| limits.contains(v))
+            .ok_or(code::INVALID_DIRECTIVE)
+    };
+    next_field(STACK)?;
+    next_field(HEAP)?;
+    next_field(HEAP)?;
+    Ok(Directive::Ignored)
 }
 
 /// Reads the directive whose text is `text` (the comment body after the `$`).
@@ -161,6 +213,7 @@ fn parse_directive(text: &[u8]) -> Result<Directive, u16> {
         b"I" if rest.first().is_none_or(|c| c.is_ascii_whitespace()) => {
             Ok(Directive::Include(first_word(rest).to_vec()))
         }
+        b"M" if rest.first().is_some_and(|c| c.is_ascii_whitespace()) => memory_sizes(rest),
         _ => switches(text),
     }
 }
@@ -208,10 +261,9 @@ impl Expander<'_> {
             let token = if skipping {
                 lexer.next_skipped()
             } else {
-                lexer
-                    .next_token()
-                    .map_err(|d| locate_in_file(d, file, text))?
+                lexer.next_token()
             };
+            let token = token.map_err(|d| locate_in_file(d, file, text))?;
             match token.kind {
                 Tk::Directive => {
                     let position = Diag {

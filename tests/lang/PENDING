@@ -4,9 +4,6 @@ swag_dos_types
 swag_exp_sin_cos_ln_arctan
 swag_fillchar_and_move
 swag_hex_literal_above_longint
-swag_ignored_compiler_switches
-swag_m_directive_comment_form
-swag_m_directive
 swag_maxint
 swag_random_seeded
 swag_val_into_word_variables

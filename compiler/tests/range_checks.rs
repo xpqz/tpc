@@ -155,7 +155,7 @@ fn range_directive_is_accepted_in_every_form() {
 
 #[test]
 fn other_directives_in_a_list_are_still_unsupported() {
-    for dir in ["{$R+,F+,L+}", "{$R+,L-}"] {
+    for dir in ["{$R+,F+,N+}", "{$R+,E-}"] {
         assert_eq!(
             rejected(&format!("program P;\n{dir}\n{BODY}")),
             (200, 2),
@@ -204,5 +204,5 @@ fn checks_that_can_never_fail_are_not_emitted() {
 #[test]
 fn directive_errors_keep_their_position() {
     assert_eq!(rejected("program P;\nbegin\n{$R}\nend."), (17, 3));
-    assert_eq!(rejected("program P;\nbegin\n  {$Z+}\nend."), (200, 3));
+    assert_eq!(rejected("program P;\nbegin\n  {$Z+}\nend."), (17, 3));
 }
