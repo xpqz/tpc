@@ -23,7 +23,7 @@ fn dir() -> std::path::PathBuf {
     d
 }
 
-const USAGE: &str = "usage: tp5c in.pas -o out.wasm\n";
+const USAGE: &str = "usage: tp5c in.pas -o out.wasm [--dir AUXDIR]\n";
 
 #[test]
 fn bad_argument_lists_print_usage_and_exit_2() {
@@ -34,6 +34,8 @@ fn bad_argument_lists_print_usage_and_exit_2() {
         &["t.pas", "-o"],
         &["t.pas", "out.wasm"],
         &["t.pas", "-o", "a.wasm", "b.wasm"],
+        &["t.pas", "-o", "a.wasm", "--dir"],
+        &["t.pas", "-o", "a.wasm", "--dir", "x", "y"],
         &["-o", "a.wasm", "t.pas"],
         &["-x", "t.pas", "-o", "a.wasm"],
     ];
