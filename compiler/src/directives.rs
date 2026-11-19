@@ -17,8 +17,8 @@
 //! - `{$R+/-}` and `{$I+/-}` are state that flows with the text, also out of an include. `{$I}`
 //!   is on by default. `{$A B D F L O S V}` and `{$M stack,heapmin,heapmax}` are checked and
 //!   then ignored: there is no code generator to tune, no overlay, no 8087 and no DOS memory
-//!   layout. `{$N}` and `{$E}` are error 200 (8087 code is omitted); any other letter and a
-//!   malformed directive are error 17, as in TP.
+//!   layout. `{$N+}` and `{$E+}` are error 200 (8087 code is omitted), their `-` forms change
+//!   nothing; any other letter and a malformed directive are error 17, as in TP.
 use crate::diag::{code, Diag};
 use crate::lex::{is_ident_byte, is_ident_start, Lexer, Tk, Tok};
 use crate::units::{file_number, find_file, SourceFile};
@@ -137,22 +137,26 @@ const IGNORED_SWITCHES: &[u8] = b"ABDFLOSV";
 const NUMERIC_SWITCHES: &[u8] = b"NE";
 
 /// A comma separated list of switches `R+`, `F-`, ... Anything else is error 17, and a
-/// switch that needs the omitted 8087 is error 200. `I` followed by a blank is an include,
-/// not a switch.
+/// switch that needs the omitted 8087 (`N+`, `E+`) is error 200. The whole list is read first
+/// because an invalid item is 17 wherever it stands: TP has no 8087 mode to leave out, so it
+/// reads `E+` and goes on to the next item. `I` followed by a blank is an include, not a switch.
 fn switches(text: &[u8]) -> Result<Directive, u16> {
     let mut range_checks = None;
     let mut io_checks = None;
+    let mut needs_8087 = false;
     for item in text.split(|&c| c == b',') {
         let item = item.to_ascii_uppercase();
         match item.as_slice() {
             b"R+" | b"R-" => range_checks = Some(item[1] == b'+'),
             b"I+" | b"I-" => io_checks = Some(item[1] == b'+'),
             [letter, b'+' | b'-'] if IGNORED_SWITCHES.contains(letter) => {}
-            [letter, b'+' | b'-'] if NUMERIC_SWITCHES.contains(letter) => {
-                return Err(code::NOT_SUPPORTED)
-            }
+            [letter, b'-'] if NUMERIC_SWITCHES.contains(letter) => {}
+            [letter, b'+'] if NUMERIC_SWITCHES.contains(letter) => needs_8087 = true,
             _ => return Err(code::INVALID_DIRECTIVE),
         }
+    }
+    if needs_8087 {
+        return Err(code::NOT_SUPPORTED);
     }
     Ok(Directive::Switches(range_checks, io_checks))
 }
@@ -228,8 +232,10 @@ struct Expander<'a> {
 }
 
 /// The tokens of the source file number `file` with text `text`, includes spliced in, ending
-/// with `Eof`. `files` is the registered file table that includes are read from.
-pub fn expand(file: u32, text: &[u8], files: &[SourceFile]) -> Result<Vec<Tok>, Diag> {
+/// with `Eof`. `files` is the registered file table that includes are read from. The first
+/// error of the text ends the stream with an `Error` token before the `Eof`: the parser reports
+/// it only if it gets that far, as TP, which scans one token at a time, does.
+pub fn expand(file: u32, text: &[u8], files: &[SourceFile]) -> Vec<Tok> {
     let mut expander = Expander {
         files,
         symbols: PREDEFINED_SYMBOLS.iter().map(|s| s.to_vec()).collect(),
@@ -238,9 +244,19 @@ pub fn expand(file: u32, text: &[u8], files: &[SourceFile]) -> Result<Vec<Tok>, 
         statement_part: StatementPart::default(),
         tokens: Vec::new(),
     };
-    let end = expander.read(file, text, 0)?;
-    expander.push(end, file);
-    Ok(expander.tokens)
+    match expander.read(file, text, 0) {
+        Ok(end) => expander.push(end, file),
+        Err(d) => {
+            let error = Tok::error(d);
+            let eof = Tok {
+                kind: Tk::Eof,
+                ..error.clone()
+            };
+            expander.tokens.push(error);
+            expander.tokens.push(eof);
+        }
+    }
+    expander.tokens
 }
 
 impl Expander<'_> {
@@ -368,12 +384,23 @@ impl Expander<'_> {
             wanted.extend_from_slice(b".PAS");
         }
         let Some(position) = find_file(self.files, &wanted) else {
-            return Err(position.with_code(code::FILE_NOT_FOUND));
+            return Err(position.with_code(missing_include_code(&wanted)));
         };
         let file = file_number(position);
         let text = &self.files[position].text;
         self.read(file, text, depth + 1)?;
         Ok(())
+    }
+}
+
+/// TP reports a name whose directory does not exist as an invalid file name (14) and a missing
+/// file in an existing directory as 15. The file table has no directories, so a name that
+/// has a directory part is taken to name a directory that is not there.
+fn missing_include_code(name: &[u8]) -> u16 {
+    let has_directory = name.iter().any(|c| matches!(c, b'\\' | b'/' | b':'));
+    match has_directory {
+        true => code::INVALID_FILENAME,
+        false => code::FILE_NOT_FOUND,
     }
 }
 

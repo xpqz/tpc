@@ -20,7 +20,7 @@ type
   end;
 
 const
-  EntryCount = 76;
+  EntryCount = 78;
   Entries: array[1..EntryCount] of ErrorEntry = (
     (Code: 2; Text: 'Identifier expected'),
     (Code: 3; Text: 'Unknown identifier'),
@@ -33,6 +33,7 @@ const
     (Code: 10; Text: 'Unexpected end of file'),
     (Code: 11; Text: 'Line too long'),
     (Code: 12; Text: 'Type identifier expected'),
+    (Code: 14; Text: 'Invalid file name'),
     (Code: 15; Text: 'File not found'),
     (Code: 17; Text: 'Invalid compiler directive'),
     (Code: 19; Text: 'Undefined type in pointer definition'),
@@ -93,6 +94,7 @@ const
     (Code: 113; Text: 'Error in statement'),
     (Code: 118; Text: 'Include files are not allowed here'),
     (Code: 121; Text: 'Invalid qualifier'),
+    (Code: 122; Text: 'Invalid variable reference'),
     (Code: 126; Text: 'Files must be var parameters'),
     (Code: 128; Text: 'Misplaced conditional directive'),
     (Code: 129; Text: 'ENDIF directive missing'),
