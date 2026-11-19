@@ -8,6 +8,7 @@
 // whose compile runs and whose run is a nested run of the compiled program on the same screen
 // and keyboard (decision 42), or `canned`, the canned compiler of the oracle tests
 // (tests/ide/canned.mjs). Without C, the imports ide_compile and ide_run are unknown.
+// TP5_OUTPUT_LIMIT sets the output limit in bytes (default 64 MiB).
 // Exit: program code on match or print mode, 1 on output mismatch, 2 on runner error.
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -36,6 +37,11 @@ function virtualClock() {
 }
 
 export const CANNED = "canned";
+
+// A program that writes forever (a retry loop on a failing read, say) would fill node's memory
+// with the output it collects; the run ends with an error at this many bytes instead. The
+// program's own heap is fixed and never grows (decision 18).
+const OUTPUT_LIMIT = Number(process.env.TP5_OUTPUT_LIMIT ?? 64 * 1024 * 1024);
 
 // Compiles and instantiates synchronously. The asynchronous WebAssembly.compile and
 // instantiate hand the work to V8's background threads, and under load (parallel test
@@ -97,10 +103,18 @@ export async function run(
     throw new RunnerError(`invalid wasm: ${e.message}`);
   }
   const out = [];
+  let collected = 0;
   const stdout = () => Buffer.concat(out);
   const sink = (fd, bytes) => {
-    if (fd === 1) out.push(Buffer.from(bytes));
-    else process.stderr.write(bytes);
+    if (fd !== 1) {
+      process.stderr.write(bytes);
+      return;
+    }
+    out.push(Buffer.from(bytes));
+    collected += bytes.length;
+    if (collected > OUTPUT_LIMIT) {
+      throw new RunnerError(`output limit of ${OUTPUT_LIMIT} bytes exceeded`, stdout());
+    }
   };
   const host = new Host({
     write: sink,
