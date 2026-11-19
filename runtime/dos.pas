@@ -50,6 +50,7 @@ var
   days, y, m: LongInt;
 begin
   days := HostTime(0);
+  { 1970-01-01 was a Thursday, 4 when Sunday is 0 as in Turbo Pascal. }
   DayOfWeek := (days + 4) mod 7;
   { Peel whole years, then whole months, off the day count. }
   y := 1970;

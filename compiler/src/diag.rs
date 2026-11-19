@@ -1,6 +1,6 @@
 //! Diagnostics: the error type, TP error numbers with their messages, and rendering.
 //! There is no `format!`: messages come from a static table and numbers are printed by
-//! `push_dec`.
+//! `push_dec`. The numbers appear only in `code`, which is kept in ascending order.
 
 /// A compile error: TP error number and the source position TP reports it at. `file` is 0 for
 /// the main program (and System), n for the n-th registered file.
@@ -10,6 +10,13 @@ pub struct Diag {
     pub line: u32,
     pub col: u32,
     pub file: u32,
+}
+
+impl Diag {
+    /// The same position and file with another error number.
+    pub fn with_code(self, code: u16) -> Diag {
+        Diag { code, ..self }
+    }
 }
 
 /// Names for the TP error numbers the compiler reports (see `docs/tp-errors.md`).
@@ -36,7 +43,6 @@ pub mod code {
     pub const LOWER_BOUND_GREATER: u16 = 28;
     pub const ORDINAL_TYPE_EXPECTED: u16 = 29;
     pub const INVALID_RESULT_TYPE: u16 = 34;
-    pub const ILLEGAL_ASSIGNMENT: u16 = 43;
     pub const BEGIN_EXPECTED: u16 = 36;
     pub const END_EXPECTED: u16 = 37;
     pub const INTEGER_EXPRESSION_EXPECTED: u16 = 38;
@@ -44,9 +50,11 @@ pub mod code {
     pub const BOOLEAN_EXPRESSION_EXPECTED: u16 = 40;
     pub const OPERAND_TYPES_MISMATCH: u16 = 41;
     pub const ERROR_IN_EXPRESSION: u16 = 42;
+    pub const ILLEGAL_ASSIGNMENT: u16 = 43;
     pub const FIELD_IDENTIFIER_EXPECTED: u16 = 44;
     pub const DO_EXPECTED: u16 = 50;
     pub const OF_EXPECTED: u16 = 54;
+    pub const INTERFACE_EXPECTED: u16 = 55;
     pub const THEN_EXPECTED: u16 = 57;
     pub const TO_OR_DOWNTO_EXPECTED: u16 = 58;
     pub const UNDEFINED_FORWARD: u16 = 59;
@@ -55,9 +63,9 @@ pub mod code {
     pub const POINTER_VARIABLE_EXPECTED: u16 = 65;
     pub const STRING_VARIABLE_EXPECTED: u16 = 66;
     pub const STRING_EXPRESSION_EXPECTED: u16 = 67;
-    pub const INTERFACE_EXPECTED: u16 = 55;
     pub const CIRCULAR_UNIT_REFERENCE: u16 = 68;
     pub const UNIT_NAME_MISMATCH: u16 = 69;
+    pub const IMPLEMENTATION_EXPECTED: u16 = 73;
     pub const CASE_TYPES_MISMATCH: u16 = 74;
     pub const RECORD_VARIABLE_EXPECTED: u16 = 75;
     pub const CONSTANT_OUT_OF_RANGE: u16 = 76;
@@ -76,6 +84,9 @@ pub mod code {
     pub const TOO_MANY_VARIABLES: u16 = 96;
     pub const INVALID_FOR_VARIABLE: u16 = 97;
     pub const INTEGER_VARIABLE_EXPECTED: u16 = 98;
+    pub const PROCEDURE_TYPE_NOT_ALLOWED: u16 = 99;
+    pub const STRING_LENGTH_MISMATCH: u16 = 100;
+    pub const INVALID_FIELD_ORDER: u16 = 101;
     pub const NUMERIC_VARIABLE_EXPECTED: u16 = 103;
     pub const ORDINAL_VARIABLE_EXPECTED: u16 = 104;
     pub const CHAR_EXPRESSION_EXPECTED: u16 = 106;
@@ -83,15 +94,11 @@ pub mod code {
     pub const ERROR_IN_STATEMENT: u16 = 113;
     pub const INCLUDE_NOT_ALLOWED: u16 = 118;
     pub const INVALID_QUALIFIER: u16 = 121;
+    pub const INVALID_VARIABLE_REFERENCE: u16 = 122;
     pub const FILE_MUST_BE_VAR: u16 = 126;
     pub const MISPLACED_CONDITIONAL: u16 = 128;
     pub const ENDIF_MISSING: u16 = 129;
-    pub const INVALID_VARIABLE_REFERENCE: u16 = 122;
-    pub const IMPLEMENTATION_EXPECTED: u16 = 73;
     pub const HEADER_MISMATCH: u16 = 131;
-    pub const PROCEDURE_TYPE_NOT_ALLOWED: u16 = 99;
-    pub const STRING_LENGTH_MISMATCH: u16 = 100;
-    pub const INVALID_FIELD_ORDER: u16 = 101;
     pub const CANNOT_EVALUATE: u16 = 133;
     pub const INVALID_PROCEDURE_REFERENCE: u16 = 143;
     pub const NOT_SUPPORTED: u16 = 200;

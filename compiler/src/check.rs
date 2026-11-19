@@ -2,17 +2,24 @@
 //!
 //! The checker walks the parser's tree once and rewrites it in place: a `Name` becomes a
 //! `Var`, a constant, or a call; every expression node gets its type; constant expressions
-//! are folded. It also decides where each variable lives, which is the central technique:
+//! are folded.
 //!
-//! - A variable is first a WASM local (`SymKind::Local`), or a global at a fixed address
-//!   (`Var`). A `var` parameter is a local holding an address (`Ref`).
-//! - A local that must have an address (passed as a `var` argument, `@x`, or an in-memory
-//!   type such as a record) or that a nested routine uses is marked `needs_frame_slot` by
-//!   `capture`. When the routine has been checked, `place_frame` moves those locals into the
-//!   routine's frame in linear memory (`Frame`, `FrameRef`) and lays the frame out.
-//! - A routine nested in another receives the enclosing frame pointer as a hidden first
-//!   parameter, the static link; a function returning a String receives the address of its
-//!   result as a further hidden parameter (see `Routine::hidden_params`).
+//! Where each variable lives is decided by `symbols.rs`, which the checker asks: a variable is
+//! first a WASM local, or a global at a fixed address; `capture` marks a local that needs an
+//! address, and `place_frame` moves those into the routine's frame in linear memory once its
+//! body is checked. A routine nested in another receives the enclosing frame pointer as a
+//! hidden first parameter, the static link; a function returning a String receives the address
+//! of its result as a further hidden parameter (see `Routine::hidden_params`).
+//!
+//! Units are checked in two phases: System, then every unit's interface in `Plan` order, then
+//! every implementation, then the program. A unit's initialisation part becomes an `InitPart`,
+//! and the program body is rewritten to run those first.
+//!
+//! A typed constant is a static variable. Its initialiser is checked here (`initial_value`);
+//! codegen lays out its bytes (`static_image`). A routine declared `external` (runtime
+//! sources only) is a host import: it has no body. `Write` and `Read` get an explicit file
+//! argument (the console when none is given) and `Read` becomes one helper call per item
+//! (`ReadChar`, `ReadLong`, ...).
 //!
 //! Several intrinsics are rewritten into an assignment of a System helper's result:
 //! `Inc(x, n)` is `x := Ord(x) + n`, `New(p)` is `p := HeapGet(size)`, `Delete(s, i, n)` is
@@ -20,7 +27,7 @@
 //! a chain of `+`. Codegen then needs no knowledge of them.
 use crate::ast::{Ast, Id, Kind, List, Op, Plan, NO_NAME};
 use crate::diag::{code, Diag};
-use crate::symbols::{name_of, Helper, SymbolError, Symbols, MAX_DATA};
+use crate::symbols::{Helper, SymbolError, Symbols, HELPERS, MAX_DATA};
 use crate::types::{
     ConstValue, Field, Intrinsic, ParamType, Routine, Signature, Sym, SymKind, Symbol, Tag, Ty,
     TypedConst, Types,
@@ -35,7 +42,7 @@ pub struct Info {
     /// The typed constants in address order.
     pub typed_consts: Vec<TypedConst>,
     /// The routine index of each `Helper`.
-    helpers: [u32; Helper::ALL.len()],
+    helpers: [u32; HELPERS.len()],
     /// Address of System's `HeapOrg`; the next 4 bytes are `HeapPtr`.
     pub heap: u32,
 }
@@ -56,6 +63,24 @@ impl Info {
 
 type R<T> = Result<T, Diag>;
 
+/// The file of a `Read` or `Write` and where its items begin.
+struct FileArg {
+    file: Id,
+    /// Index of the first item that is not the file itself.
+    first_item: usize,
+    /// The item at index 0 has already been checked as an expression (it was a variable that
+    /// turned out not to be a file).
+    first_item_checked: bool,
+}
+
+/// A record field reached by its bare name inside a `with`: the record's designator, and the
+/// field's type and byte offset.
+struct WithField {
+    record: Id,
+    ty: Ty,
+    offset: u32,
+}
+
 /// A parameter as declared, with the node that declares it.
 struct ParamDecl {
     node: Id,
@@ -72,7 +97,7 @@ struct Cx<'a> {
     routines: Vec<Routine>,
     /// The record designators of the enclosing `with` statements, innermost last.
     withs: Vec<(Id, Ty)>,
-    helpers: [u32; Helper::ALL.len()],
+    helpers: [u32; HELPERS.len()],
     /// System's console input file, the file of `Read` and `Eof` without one.
     input: Sym,
     /// Pointer types whose target is declared later in the same type section.
@@ -96,7 +121,7 @@ pub fn check(ast: &mut Ast, plan: &Plan) -> R<Info> {
         typed_consts: Vec::new(),
         routines: Vec::new(),
         withs: Vec::new(),
-        helpers: [0; Helper::ALL.len()],
+        helpers: [0; HELPERS.len()],
         input: Sym(0),
         forward: Vec::new(),
         init_parts: Vec::new(),
@@ -172,10 +197,7 @@ impl Cx<'_> {
             .bind_system_names(self.ast)
             .map_err(|_| broken_system)?;
         if self.routines.iter().any(|r| !r.defined) {
-            return Err(Diag {
-                code: code::UNDEFINED_FORWARD,
-                ..broken_system
-            });
+            return Err(broken_system.with_code(code::UNDEFINED_FORWARD));
         }
         self.helpers = names.helpers;
         self.types.text = names.text;
@@ -214,7 +236,7 @@ impl Cx<'_> {
     /// Makes the exports of each unit in a `uses` list visible.
     fn import_uses(&mut self, uses: List) {
         for &entry in self.ast.items(uses) {
-            self.symbols.import(name_of(self.ast, entry));
+            self.symbols.import(self.ast.name_of(entry));
         }
     }
 
@@ -230,6 +252,7 @@ impl Cx<'_> {
         else {
             unreachable!("a unit")
         };
+        // Nodes made while checking this file carry its number.
         self.ast.file = self.ast.node(unit).file;
         self.symbols.begin_unit(name);
         self.import_uses(interface_uses);
@@ -261,9 +284,7 @@ impl Cx<'_> {
             self.decl(d)?;
         }
         self.resolve_forward(unit)?;
-        let undefined =
-            |s: Symbol| matches!(s.kind, SymKind::Routine(r) if !self.routines[r as usize].defined);
-        if self.symbols.own_symbols().any(undefined) {
+        if self.symbols.own_symbols().any(|s| self.is_undefined(s)) {
             return Err(self.err(unit, code::UNDEFINED_FORWARD));
         }
         self.stmt(body)?;
@@ -314,6 +335,11 @@ impl Cx<'_> {
         Ok(())
     }
 
+    /// A routine declared `forward` (or in a unit's interface) that has no body yet.
+    fn is_undefined(&self, symbol: Symbol) -> bool {
+        matches!(symbol.kind, SymKind::Routine(r) if !self.routines[r as usize].defined)
+    }
+
     /// Declares `name` in the current region; a second declaration in the same region is an
     /// error, but a user declaration may hide a predefined or System one.
     fn declare(&mut self, at: Id, name: u32, symbol: Symbol) -> R<Sym> {
@@ -335,10 +361,7 @@ impl Cx<'_> {
         for (pointer, name) in std::mem::take(&mut self.forward) {
             let to = self.type_of(at, name).map_err(|d| match d.code {
                 code::NOT_SUPPORTED => d,
-                _ => Diag {
-                    code: code::UNDEFINED_POINTER_TARGET,
-                    ..d
-                },
+                _ => d.with_code(code::UNDEFINED_POINTER_TARGET),
             })?;
             self.types.set_pointer_target(pointer, to);
         }
@@ -354,9 +377,11 @@ impl Cx<'_> {
         }
         match self.ast.kind(d) {
             Kind::ConstDecl(name, value) => self.const_decl(d, name, value),
-            Kind::TypedConst(name, type_name, init) => {
-                self.typed_const_decl(d, name, type_name, init)
-            }
+            Kind::TypedConst {
+                name,
+                type_name,
+                init,
+            } => self.typed_const_decl(d, name, type_name, init),
             Kind::VarDecl(name, type_name) => self.var_decl(d, name, type_name),
             Kind::TypeDecl(name, spec) => {
                 let ty = self.spec(spec, name)?;
@@ -376,9 +401,7 @@ impl Cx<'_> {
             Kind::IntLit(v) => (ConstValue::Int(v), node.ty),
             Kind::RealLit(v) => (ConstValue::Real(v), Ty::REAL),
             Kind::StrLit(i) => (ConstValue::Str(i), Ty::STRING),
-            Kind::SetLit(items) if self.ast.items(items).iter().all(|&i| self.is_constant(i)) => {
-                (ConstValue::Set(value), node.ty)
-            }
+            Kind::SetLit(_) if self.is_constant_literal(value) => (ConstValue::Set(value), node.ty),
             _ => return Err(self.err(value, code::CANNOT_EVALUATE)),
         };
         self.declare(d, name, Symbol::new(SymKind::Const(constant), ty))?;
@@ -405,6 +428,8 @@ impl Cx<'_> {
 
     /// Checks that `init` is a constant of type `ty`, following the shape of the type.
     fn initial_value(&mut self, ty: Ty, init: Id) -> R<()> {
+        // A record initialiser for another type is rejected here: the array and scalar paths
+        // below would read it as an expression.
         if matches!(self.ast.kind(init), Kind::RecordInit(_)) && !self.types.is_record(ty) {
             return Err(self.err(init, code::TYPE_MISMATCH));
         }
@@ -412,8 +437,9 @@ impl Cx<'_> {
             return self.record_initialiser(ty, init);
         }
         match self.types.array_of(ty) {
-            Some((_, lo, hi, elem)) if !self.types.is_str(ty) => {
-                self.array_initialiser(init, (hi - lo + 1) as usize, elem)
+            // `array_of` also describes a String; a String initialiser is a scalar one.
+            Some(array) if !self.types.is_str(ty) => {
+                self.array_initialiser(init, (array.hi - array.lo + 1) as usize, array.elem)
             }
             _ => self.scalar_initialiser(ty, init),
         }
@@ -491,19 +517,27 @@ impl Cx<'_> {
         }
         self.expr(init)?;
         self.assignable(init, ty, init)?;
-        let is_constant = match self.ast.kind(init) {
-            Kind::IntLit(_) | Kind::RealLit(_) | Kind::StrLit(_) => true,
-            Kind::SetLit(items) => self.ast.items(items).iter().all(|&i| self.is_constant(i)),
-            _ => false,
-        };
-        if !is_constant {
+        if !self.is_constant_literal(init) {
             return Err(self.err(init, code::CANNOT_EVALUATE));
         }
         Ok(())
     }
 
+    /// An integer, Real or string literal, or a set literal whose elements are all constant.
+    fn is_constant_literal(&self, value: Id) -> bool {
+        match self.ast.kind(value) {
+            Kind::IntLit(_) | Kind::RealLit(_) | Kind::StrLit(_) => true,
+            Kind::SetLit(items) => self
+                .ast
+                .items(items)
+                .iter()
+                .all(|&i| self.is_constant_element(i)),
+            _ => false,
+        }
+    }
+
     /// A set element or range whose ends are integer constants.
-    fn is_constant(&self, item: Id) -> bool {
+    fn is_constant_element(&self, item: Id) -> bool {
         let is_literal = |i: Id| matches!(self.ast.kind(i), Kind::IntLit(_));
         match self.ast.kind(item) {
             Kind::Range(lo, hi) => is_literal(lo) && is_literal(hi),
@@ -562,7 +596,7 @@ impl Cx<'_> {
         let members = self.ast.items_vec(names);
         let ty = self.types.enumeration(members.len() as i64);
         for (ordinal, id) in members.into_iter().enumerate() {
-            let name = name_of(self.ast, id);
+            let name = self.ast.name_of(id);
             let value = SymKind::Const(ConstValue::Int(ordinal as i64));
             self.declare(id, name, Symbol::new(value, ty))?;
         }
@@ -884,13 +918,11 @@ impl Cx<'_> {
             self.decl(decl)?;
         }
         self.resolve_forward(body)?;
-        let left_undefined = self.symbols.declared_since(&saved).any(|s| {
-            let SymKind::Routine(callee) = s.kind else {
-                return false;
-            };
-            !self.routines[callee as usize].defined
-        });
-        if left_undefined {
+        if self
+            .symbols
+            .declared_since(&saved)
+            .any(|s| self.is_undefined(s))
+        {
             return Err(self.err(body, code::UNDEFINED_FORWARD));
         }
         self.stmt(body)?;
@@ -972,26 +1004,26 @@ impl Cx<'_> {
         if let Some(error) = self.var_arg_error(arg) {
             return Err(self.err(arg, error));
         }
-        let named = match self.ast.kind(arg) {
-            Kind::Name(name) if self.with_field(name).is_none() => Some(name),
-            _ => None,
-        };
-        let Some(name) = named else {
-            // An argument the checker made itself (`Input`) is already resolved.
-            if !matches!(self.ast.kind(arg), Kind::Var(_)) {
-                self.expr(arg)?;
+        match self.ast.kind(arg) {
+            Kind::Name(name) if self.with_field(name).is_none() => {
+                let (sym, symbol) = self.resolve(arg, name)?;
+                if symbol.ty != ty {
+                    return Err(self.var_mismatch(at, ty));
+                }
+                self.symbols.capture(sym, true);
+                self.ast.resolve(arg, Kind::Var(sym), ty);
             }
-            if self.ast.ty(arg) != ty {
-                return Err(self.var_mismatch(at, ty));
+            kind => {
+                // A field, element or dereference is checked as an expression. An argument the
+                // checker made itself (`Input`) is already resolved.
+                if !matches!(kind, Kind::Var(_)) {
+                    self.expr(arg)?;
+                }
+                if self.ast.ty(arg) != ty {
+                    return Err(self.var_mismatch(at, ty));
+                }
             }
-            return Ok(());
-        };
-        let (sym, symbol) = self.resolve(arg, name)?;
-        if symbol.ty != ty {
-            return Err(self.var_mismatch(at, ty));
         }
-        self.symbols.capture(sym, true);
-        self.ast.resolve(arg, Kind::Var(sym), ty);
         Ok(())
     }
 
@@ -1035,11 +1067,11 @@ impl Cx<'_> {
         Ok(())
     }
 
-    /// The field `name` of an enclosing `with` record: its designator, type and offset.
-    fn with_field(&self, name: u32) -> Option<(Id, Ty, u32)> {
-        let found = |&(designator, ty): &(Id, Ty)| {
-            let (field_ty, offset) = self.types.field(ty, name)?;
-            Some((designator, field_ty, offset))
+    /// The field `name` of the innermost enclosing `with` record that has one.
+    fn with_field(&self, name: u32) -> Option<WithField> {
+        let found = |&(record, record_ty): &(Id, Ty)| {
+            let (ty, offset) = self.types.field(record_ty, name)?;
+            Some(WithField { record, ty, offset })
         };
         self.withs.iter().rev().find_map(found)
     }
@@ -1160,7 +1192,7 @@ impl Cx<'_> {
 
     /// The control variable must be a local of this routine or a global of ordinal type.
     fn for_statement(&mut self, id: Id, variable: Id, first: Id, last: Id, body: Id) -> R<()> {
-        let (sym, symbol) = self.resolve(variable, name_of(self.ast, variable))?;
+        let (sym, symbol) = self.resolve(variable, self.ast.name_of(variable))?;
         let is_outer = symbol.depth < self.symbols.depth();
         let is_reference = matches!(symbol.kind, SymKind::Ref(_));
         let is_outer_local = matches!(symbol.kind, SymKind::Local(_)) && is_outer;
@@ -1247,17 +1279,10 @@ impl Cx<'_> {
     /// rewritten to what codegen expects: `Invoke`, `Indirect`, `Write`, `Exit`, or the
     /// assignment of a helper's result (see the module comment).
     fn call_statement(&mut self, id: Id, callee: Id, args: List) -> R<()> {
-        let (_, symbol) = self.resolve(callee, name_of(self.ast, callee))?;
+        let (_, symbol) = self.resolve(callee, self.ast.name_of(callee))?;
         let kind = match symbol.kind {
             SymKind::Intrinsic(i @ (Intrinsic::Write | Intrinsic::WriteLn)) => {
-                let items = self.ast.items_vec(args);
-                let (file, start, checked) = self.console_or_file(id, &items, false)?;
-                for (n, &arg) in items.iter().enumerate().skip(start) {
-                    self.write_arg(arg, checked && n == 0)?;
-                }
-                let mut parts = vec![file];
-                parts.extend(&items[start..]);
-                Kind::Write(self.ast.list(&parts), i == Intrinsic::WriteLn)
+                self.write_call(id, args, i == Intrinsic::WriteLn)?
             }
             SymKind::Intrinsic(i @ (Intrinsic::Read | Intrinsic::ReadLn)) => {
                 self.read_call(id, args, i == Intrinsic::ReadLn)?
@@ -1360,7 +1385,7 @@ impl Cx<'_> {
             } else {
                 code::TYPE_MISMATCH
             };
-            Diag { code, ..d }
+            d.with_code(code)
         })
     }
 
@@ -1374,7 +1399,7 @@ impl Cx<'_> {
         args: List,
         in_expr: bool,
     ) -> R<Kind> {
-        let (sym, symbol) = self.resolve(callee, name_of(self.ast, callee))?;
+        let (sym, symbol) = self.resolve(callee, self.ast.name_of(callee))?;
         self.arguments(at, params, args, in_expr, false)?;
         self.symbols.capture(sym, false);
         self.ast.resolve(callee, Kind::Var(sym), symbol.ty);
@@ -1399,11 +1424,11 @@ impl Cx<'_> {
             return Ok(());
         }
         if self.types.is_agg(dest) {
-            // Name equivalence: only the very same type; sets need compatible bases.
-            let compatible_sets = self.types.is_set(dest) && self.types.compat(dest, node.ty);
             if self.types.is_file(dest) {
                 return Err(self.err(at, code::ILLEGAL_ASSIGNMENT));
             }
+            // Name equivalence: only the very same type; sets need compatible bases.
+            let compatible_sets = self.types.is_set(dest) && self.types.compat(dest, node.ty);
             if node.ty == dest || compatible_sets {
                 return Ok(());
             }
@@ -1455,6 +1480,15 @@ impl Cx<'_> {
         self.ast.resolve(e, kind, Ty::STRING);
     }
 
+    /// The types `Write` accepts: integers, Char, Boolean, Real, String and array of Char; not
+    /// enumerations, sets, records or pointers.
+    fn is_writable(&self, ty: Ty) -> bool {
+        let is_text_or_real =
+            self.types.is_str(ty) || self.types.is_char_array(ty) || ty == Ty::REAL;
+        let is_enum = self.types.tag(ty) == Some(Tag::Enum);
+        !is_enum && (is_text_or_real || self.types.tag(ty).is_some())
+    }
+
     /// One argument of `Write`/`WriteLn`: `value`, or `value : width [: decimals]`. `checked`
     /// says that `console_or_file` already checked the expression.
     fn write_arg(&mut self, arg: Id, checked: bool) -> R<()> {
@@ -1479,10 +1513,7 @@ impl Cx<'_> {
             self.expr(value)?;
         }
         let ty = self.ast.ty(value);
-        let is_text_or_real =
-            self.types.is_str(ty) || self.types.is_char_array(ty) || ty == Ty::REAL;
-        let is_enum = self.types.tag(ty) == Some(Tag::Enum);
-        if is_enum || (!is_text_or_real && self.types.tag(ty).is_none()) {
+        if !self.is_writable(ty) {
             return Err(self.err(value, code::CANNOT_READ_OR_WRITE));
         }
         if decimals.is_some() && ty != Ty::REAL {
@@ -1559,7 +1590,7 @@ impl Cx<'_> {
     /// `base[index]`: the base is an array or a string, the index of the index type.
     fn index_expr(&mut self, e: Id, base: Id, index: Id, continues: bool) -> R<(Kind, Ty)> {
         self.expr(base)?;
-        let Some((index_ty, lo, hi, element)) = self.types.array_of(self.ast.ty(base)) else {
+        let Some(array) = self.types.array_of(self.ast.ty(base)) else {
             let error = if continues {
                 code::RIGHT_BRACKET_EXPECTED
             } else {
@@ -1569,13 +1600,13 @@ impl Cx<'_> {
         };
         self.expr(index)?;
         let index_node = self.ast.node(index);
-        if !self.types.compat(index_ty, index_node.ty) {
+        if !self.types.compat(array.index, index_node.ty) {
             return Err(self.err(e, code::TYPE_MISMATCH));
         }
-        if matches!(index_node.kind, Kind::IntLit(c) if c < lo || c > hi) {
+        if matches!(index_node.kind, Kind::IntLit(c) if c < array.lo || c > array.hi) {
             return Err(self.err(e, code::CONSTANT_OUT_OF_RANGE));
         }
-        Ok((self.ast.kind(e), element))
+        Ok((self.ast.kind(e), array.elem))
     }
 
     /// `base.name` becomes the field at its byte offset.
@@ -1595,8 +1626,8 @@ impl Cx<'_> {
     /// when it is a function-valued procedural variable), or a function called without
     /// arguments.
     fn name_expr(&mut self, e: Id, name: u32) -> R<(Kind, Ty)> {
-        if let Some((record, ty, offset)) = self.with_field(name) {
-            return Ok((Kind::Field(record, offset), ty));
+        if let Some(field) = self.with_field(name) {
+            return Ok((Kind::Field(field.record, field.offset), field.ty));
         }
         let (sym, symbol) = self.resolve(e, name)?;
         Ok(match symbol.kind {
@@ -1649,7 +1680,7 @@ impl Cx<'_> {
         if !matches!(self.ast.kind(callee), Kind::Name(_)) {
             return self.designator_call(e, callee, args);
         }
-        let (_, symbol) = self.resolve(callee, name_of(self.ast, callee))?;
+        let (_, symbol) = self.resolve(callee, self.ast.name_of(callee))?;
         Ok(match symbol.kind {
             SymKind::Routine(r) => {
                 let call = self.function_call(e, callee, r, args)?;
@@ -1662,17 +1693,19 @@ impl Cx<'_> {
                 Some((params, result)) => (self.indirect(e, callee, params, args, true)?, result),
                 None => return Err(self.err(e, code::RIGHT_PAREN_EXPECTED)),
             },
-            SymKind::Intrinsic(i) if i.unary_op().is_some() => {
-                let items = self.ast.items_vec(args);
-                if items.len() > 1 {
-                    return Err(self.err(e, code::RIGHT_PAREN_EXPECTED));
-                }
-                self.unary(e, i.unary_op().unwrap_or(Op::Ord), items[0])?
-            }
             SymKind::Intrinsic(Intrinsic::SizeOf) => self.size_of(e, args)?,
             SymKind::Intrinsic(Intrinsic::Concat) => self.concat(e, args)?,
+            SymKind::Intrinsic(i) => match i.unary_op() {
+                Some(op) => {
+                    let items = self.ast.items_vec(args);
+                    if items.len() > 1 {
+                        return Err(self.err(e, code::RIGHT_PAREN_EXPECTED));
+                    }
+                    self.unary(e, op, items[0])?
+                }
+                None => return Err(self.err(callee, code::ERROR_IN_EXPRESSION)),
+            },
             SymKind::Type => self.cast(e, symbol.ty, args)?,
-            SymKind::Intrinsic(_) => return Err(self.err(callee, code::ERROR_IN_EXPRESSION)),
             _ => return Err(self.err(e, code::RIGHT_PAREN_EXPECTED)),
         })
     }
@@ -1690,15 +1723,18 @@ impl Cx<'_> {
         Ok((Kind::Indirect(callee, args), result))
     }
 
-    /// System's `Length` of a string constant is a constant.
+    /// System's `Length` of a string constant is a constant. It is the only function that is
+    /// folded, so it is recognised by its name.
     fn folded_length(&self, callee: Id, r: u32, args: List) -> Option<(Kind, Ty)> {
-        let is_length = self.routines[r as usize].builtin
-            && self.ast.names[name_of(self.ast, callee) as usize] == b"LENGTH";
+        let name = &self.ast.names[self.ast.name_of(callee) as usize];
+        if !self.routines[r as usize].builtin || name != b"LENGTH" {
+            return None;
+        }
         let Kind::StrLit(s) = self.ast.kind(*self.ast.items(args).first()?) else {
             return None;
         };
         let length = self.ast.strs[s as usize].len() as i64;
-        is_length.then(|| (Kind::IntLit(length), self.types.const_ty(length)))
+        Some((Kind::IntLit(length), self.types.const_ty(length)))
     }
 
     /// `[a, b..c]`: the base type is the type of the elements, which must agree.
@@ -1889,15 +1925,17 @@ impl Cx<'_> {
 
     /// The file of `Read` and `Write`: a leading variable of type Text, else the console. A
     /// write to the console passes the file address 0, a read the console file `Input`.
-    /// Returns the file node, the index of the first item and whether that item has been
-    /// checked (it was a variable of another type).
-    fn console_or_file(&mut self, at: Id, items: &[Id], reading: bool) -> R<(Id, usize, bool)> {
+    fn console_or_file(&mut self, at: Id, items: &[Id], reading: bool) -> R<FileArg> {
         let first = items.first().copied();
         let variable = first.filter(|&e| self.var_arg_error(e).is_none());
         if let Some(first) = variable {
             self.expr(first)?;
             if self.types.is_file(self.ast.ty(first)) {
-                return Ok((first, 1, false));
+                return Ok(FileArg {
+                    file: first,
+                    first_item: 1,
+                    first_item_checked: false,
+                });
             }
         }
         let console = if reading {
@@ -1905,7 +1943,11 @@ impl Cx<'_> {
         } else {
             self.ast.typed(Kind::IntLit(0), Ty::LONGINT, at)
         };
-        Ok((console, 0, variable.is_some()))
+        Ok(FileArg {
+            file: console,
+            first_item: 0,
+            first_item_checked: variable.is_some(),
+        })
     }
 
     /// A reference to System's `Input`.
@@ -1913,15 +1955,35 @@ impl Cx<'_> {
         self.ast.typed(Kind::Var(self.input), self.types.text, at)
     }
 
+    /// `Write(f, a, b)`: the file node followed by the checked items.
+    fn write_call(&mut self, at: Id, args: List, newline: bool) -> R<Kind> {
+        let items = self.ast.items_vec(args);
+        let FileArg {
+            file,
+            first_item,
+            first_item_checked,
+        } = self.console_or_file(at, &items, false)?;
+        for (n, &arg) in items.iter().enumerate().skip(first_item) {
+            self.write_arg(arg, first_item_checked && n == 0)?;
+        }
+        let mut parts = vec![file];
+        parts.extend(&items[first_item..]);
+        Ok(Kind::Write(self.ast.list(&parts), newline))
+    }
+
     /// `Read(f, a, b)` is `a := ReadChar(f)` (or `ReadLong`, `ReadReal`, `ReadStr`, by the
     /// type of `a`) for each variable, so narrowing and truncation are the assignment's;
     /// `ReadLn` ends with `ReadLnEnd(f)`.
     fn read_call(&mut self, at: Id, args: List, line_end: bool) -> R<Kind> {
         let items = self.ast.items_vec(args);
-        let (file, start, checked) = self.console_or_file(at, &items, true)?;
+        let FileArg {
+            file,
+            first_item,
+            first_item_checked,
+        } = self.console_or_file(at, &items, true)?;
         let mut steps = Vec::new();
-        for (n, &target) in items.iter().enumerate().skip(start) {
-            steps.push(self.read_item(at, file, target, checked && n == 0)?);
+        for (n, &target) in items.iter().enumerate().skip(first_item) {
+            steps.push(self.read_item(at, file, target, first_item_checked && n == 0)?);
         }
         if line_end {
             steps.push(self.helper_call(at, Helper::ReadLnEnd, &[file], Ty::NONE));
@@ -1943,8 +2005,12 @@ impl Cx<'_> {
         let (helper, result) = if self.types.tag(ty) == Some(Tag::Char) {
             (Helper::ReadChar, Ty::CHAR)
         } else if let Ok(result) = self.types.val_type(ty) {
-            let long_or_real = [Helper::ReadLong, Helper::ReadReal];
-            (long_or_real[(result == Ty::REAL) as usize], result)
+            let helper = if result == Ty::REAL {
+                Helper::ReadReal
+            } else {
+                Helper::ReadLong
+            };
+            (helper, result)
         } else if self.types.is_str(ty) {
             let capacity = Kind::IntLit(self.types.capacity(ty) as i64);
             args.push(self.ast.typed(capacity, Ty::INTEGER, at));
@@ -2010,9 +2076,7 @@ impl Cx<'_> {
         } else {
             Helper::StrDelete
         };
-        let list = self.ast.list(&items);
-        let call = Kind::Invoke(self.helpers[helper as usize], list);
-        let call = self.ast.typed(call, Ty::STRING, at);
+        let call = self.helper_call(at, helper, &items, Ty::STRING);
         Ok(Kind::Assign(target, call))
     }
 
@@ -2047,7 +2111,7 @@ impl Cx<'_> {
         };
         let sum = self.ast.typed(sum, result, at);
         // `Inc` and `Dec` are never range checked.
-        self.ast.nodes[sum as usize].range_checks = false;
+        self.ast.set_range_checks(sum, false);
         Ok(Kind::Assign(target, sum))
     }
 

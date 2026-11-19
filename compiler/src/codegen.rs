@@ -13,6 +13,12 @@
 //! as a static link (local 0); a variable of an enclosing routine is reached by following
 //! the links, each stored at offset 0 of its frame.
 //!
+//! A routine declared `external` is a WASM import, numbered before every defined function and
+//! present only if reached (`Layout::imports`). A typed constant is a data segment at its
+//! variable's address, emitted only if a live body names it (`static_image`). Every output
+//! call carries the file it writes to, an address with 0 for the console, so `write_string`
+//! and `write_integer` take it as their first parameter.
+//!
 //! Temporaries: a String value lives in memory, so an expression that produces one (a
 //! concatenation, a Char converted to String, a function result, a formatted Real) gets a
 //! 256-byte slot in the current frame. Slots are not reused within a statement; the next
@@ -41,6 +47,8 @@ const TRUE: i32 = FALSE + 5;
 /// Scratch for digits and single characters.
 const BUF: i32 = TRUE + 4;
 const BUF_LEN: i32 = 12;
+// The checker's globals start where this header ends.
+const _: () = assert!(BUF + BUF_LEN <= crate::symbols::GLOBALS as i32);
 const PAGES: u32 = 16;
 const TOP: u32 = PAGES * 65536;
 /// The shadow stack may use the top 64 KB of memory (docs/abi.md); the heap ends below it,
@@ -124,6 +132,14 @@ const F64_MUL: u8 = 0xA2;
 const F64_DIV: u8 = 0xA3;
 const F64_CONVERT_I32_S: u8 = 0xB7;
 
+/// How a Real argument reaches its callee: Pascal routines receive its address, imports the
+/// f64 itself.
+#[derive(Clone, Copy, PartialEq)]
+enum RealArgs {
+    ByAddress,
+    ByValue,
+}
+
 /// What the mark phase found: the defined routines to emit and the `external` routines to
 /// import, each in the order they were reached, and whether the program divides Reals.
 struct Reached {
@@ -138,8 +154,7 @@ struct Reached {
 /// program and the table's trap stub.
 struct Indexes {
     host_rterror: u32,
-    /// System's `TextOut`, which the built-in output functions call; known once the reached
-    /// routines are numbered.
+    /// System's `TextOut`, which the built-in output functions call.
     text_out: u32,
     write_string: u32,
     write_integer: u32,
@@ -149,16 +164,23 @@ struct Indexes {
 }
 
 impl Indexes {
-    fn new(import_count: u32, host_rterror: u32, uses_real_div: bool) -> Self {
+    /// `text_out_position` is the position of `TextOut` among the reached routines.
+    fn new(
+        import_count: u32,
+        host_rterror: u32,
+        text_out_position: u32,
+        uses_real_div: bool,
+    ) -> Self {
         let first_defined = import_count;
+        let first_routine = first_defined + 3 + uses_real_div as u32;
         Indexes {
             host_rterror,
-            text_out: 0,
+            text_out: first_routine + text_out_position,
             write_string: first_defined,
             write_integer: first_defined + 1,
             quotient: first_defined + 2,
             real_div: uses_real_div.then_some(first_defined + 3),
-            first_routine: first_defined + 3 + uses_real_div as u32,
+            first_routine,
         }
     }
 }
@@ -205,7 +227,7 @@ impl Layout {
             position: vec![None; info.routines.len()],
             external: info.routines.iter().map(|r| r.import.is_some()).collect(),
             uses_real_div: false,
-            indexes: Indexes::new(0, 0, false),
+            indexes: Indexes::new(0, 0, 0, false),
             wasm_types: vec![0; info.types.count()],
             table_slots: vec![0; info.routines.len()],
         }
@@ -219,15 +241,14 @@ impl Layout {
                 position[r as usize] = Some(at as u32);
             }
         }
-        let import_number =
-            |helper| position[info.helper(helper) as usize].expect("always reached");
-        let mut indexes = Indexes::new(
+        // The mark phase reaches these three helpers first of all.
+        let position_of = |helper| position[info.helper(helper) as usize].expect("always reached");
+        let indexes = Indexes::new(
             reached.imports.len() as u32,
-            import_number(Helper::HostRtError),
+            position_of(Helper::HostRtError),
+            position_of(Helper::TextOut),
             reached.uses_real_div,
         );
-        let text_out = position[info.helper(Helper::TextOut) as usize].expect("always reached");
-        indexes.text_out = indexes.first_routine + text_out;
         Layout {
             marking: false,
             reached: reached.routines.clone(),
@@ -242,7 +263,9 @@ impl Layout {
     }
 
     /// The function number of routine `r`; while marking, the first mention reaches it. An
-    /// `external` routine is an import, numbered before every defined function.
+    /// `external` routine is an import: its number is its position in `imports`, and every
+    /// import comes before every defined function. Any other routine is numbered after the
+    /// built-in functions: `first_routine` plus its position in `reached`.
     fn routine_index(&mut self, r: u32) -> u32 {
         let is_import = self.external[r as usize];
         let position = match self.position[r as usize] {
@@ -319,8 +342,6 @@ struct Gen<'a> {
     /// Lexical depth of the routine; a routine of depth 2 or more has its static link in
     /// local 0.
     depth: u32,
-    /// The local holding the address of the file the current `Write` writes to.
-    file: u32,
     /// The block around the routine body; `Exit` branches to it.
     exit: Label,
     /// Each `with` record designator and the local holding its address.
@@ -451,54 +472,64 @@ fn static_image(ast: &Ast, info: &Info, ty: Ty, init: Id) -> Vec<u8> {
         Kind::IntLit(value) => value.to_le_bytes()[..types.ord(ty).size as usize].to_vec(),
         Kind::RealLit(value) => value.to_le_bytes().to_vec(),
         Kind::StrLit(s) if types.is_str(ty) => {
-            let text = &ast.strs[s as usize];
-            let capacity = types.capacity(ty) as usize;
-            let length = text.len().min(capacity);
-            let mut image = vec![0; capacity + 1];
-            image[0] = length as u8;
-            image[1..=length].copy_from_slice(&text[..length]);
-            image
+            string_image(&ast.strs[s as usize], types.capacity(ty) as usize)
         }
         Kind::StrLit(s) => ast.strs[s as usize].clone(),
-        Kind::SetLit(items) => {
-            let mut image = vec![0u8; SET_TEMP as usize];
-            for &item in ast.items(items) {
-                let (first, last) = match ast.kind(item) {
-                    Kind::Range(lo, hi) => (lo, hi),
-                    _ => (item, item),
-                };
-                let (Kind::IntLit(first), Kind::IntLit(last)) = (ast.kind(first), ast.kind(last))
-                else {
-                    unreachable!("the checker accepts only constant set elements")
-                };
-                for element in first..=last {
-                    image[element as usize / 8] |= 1 << (element % 8);
-                }
-            }
-            image
-        }
+        Kind::SetLit(items) => set_image(ast, items),
         Kind::ArrayInit(items) => {
-            let (_, _, _, element) = types.array_of(ty).expect("an array initialiser");
+            let element = types.array_of(ty).expect("an array initialiser").elem;
             let image = ast.items(items).iter();
             image
                 .flat_map(|&item| static_image(ast, info, element, item))
                 .collect()
         }
-        Kind::RecordInit(entries) => {
-            let mut image = vec![0; types.size(ty) as usize];
-            let fields = types.record_fields(ty);
-            for (&entry, field) in ast.items(entries).iter().zip(&fields) {
-                let Kind::FieldInit(_, value) = ast.kind(entry) else {
-                    unreachable!("a record initialiser holds field entries")
-                };
-                let bytes = static_image(ast, info, field.ty, value);
-                let start = field.offset as usize;
-                image[start..start + bytes.len()].copy_from_slice(&bytes);
-            }
-            image
-        }
+        Kind::RecordInit(entries) => record_image(ast, info, ty, entries),
         _ => unreachable!("the checker accepts only constant initialisers"),
     }
+}
+
+/// A String of `capacity` characters: the length byte, the characters cut to the capacity,
+/// and zero padding up to it.
+fn string_image(text: &[u8], capacity: usize) -> Vec<u8> {
+    let length = text.len().min(capacity);
+    let mut image = vec![0; capacity + 1];
+    image[0] = length as u8;
+    image[1..=length].copy_from_slice(&text[..length]);
+    image
+}
+
+/// A set: element `i` is bit `i % 8` of byte `i / 8` (the layout `SetAdd` in
+/// `runtime/system.pas` uses).
+fn set_image(ast: &Ast, items: List) -> Vec<u8> {
+    let mut image = vec![0u8; SET_TEMP as usize];
+    for &item in ast.items(items) {
+        let (first, last) = match ast.kind(item) {
+            Kind::Range(lo, hi) => (lo, hi),
+            _ => (item, item),
+        };
+        let (Kind::IntLit(first), Kind::IntLit(last)) = (ast.kind(first), ast.kind(last)) else {
+            unreachable!("the checker accepts only constant set elements")
+        };
+        for element in first..=last {
+            image[element as usize / 8] |= 1 << (element % 8);
+        }
+    }
+    image
+}
+
+/// A record of type `ty`: zeros, with each initialised field placed at its offset.
+fn record_image(ast: &Ast, info: &Info, ty: Ty, entries: List) -> Vec<u8> {
+    let mut image = vec![0; info.types.size(ty) as usize];
+    let fields = info.types.record_fields(ty);
+    for (&entry, field) in ast.items(entries).iter().zip(&fields) {
+        let Kind::FieldInit(_, value) = ast.kind(entry) else {
+            unreachable!("a record initialiser holds field entries")
+        };
+        let bytes = static_image(ast, info, field.ty, value);
+        let start = field.offset as usize;
+        image[start..start + bytes.len()].copy_from_slice(&bytes);
+    }
+    image
 }
 
 /// One WASM import from module `host` for each `external` routine the program reaches: a Real
@@ -583,7 +614,6 @@ fn body(ast: &Ast, info: &Info, layout: &mut Layout, routine: Option<&Routine>, 
         temp_in_use: 0,
         temp_peak: 0,
         depth: routine.map_or(0, |r| r.depth),
-        file: 0,
         exit: Label(0),
         withs: Vec::new(),
     };
@@ -1062,7 +1092,8 @@ impl Gen<'_> {
     fn element_addr(&mut self, base: Id, index: Id) -> u32 {
         let offset = self.addr(base);
         let types = &self.info.types;
-        let (_, lo, hi, element) = types.array_of(self.ast.ty(base)).expect("checked array");
+        let array = types.array_of(self.ast.ty(base)).expect("checked array");
+        let (lo, hi, element) = (array.lo, array.hi, array.elem);
         let size = types.size(element);
         if let Kind::IntLit(c) = self.ast.kind(index) {
             return offset + (c - lo) as u32 * size;
@@ -1111,7 +1142,7 @@ impl Gen<'_> {
     // ---- Strings, sets and Reals in memory ----
 
     /// Pushes the address of the string value of `e`, which the caller must not modify:
-    /// literals and variables in place, everything else in a temporary (decision 13).
+    /// literals and variables in place, everything else in a temporary (docs/decisions.md).
     fn str(&mut self, e: Id) {
         match self.ast.kind(e) {
             Kind::StrLit(s) => {
@@ -1139,8 +1170,8 @@ impl Gen<'_> {
                 self.helper(Helper::StrCat);
                 self.temp_addr(t);
             }
-            Kind::Invoke(..) => {
-                let t = self.invoke(e).expect("string function");
+            Kind::Invoke(r, args) => {
+                let t = self.invoke(e, r, args).expect("string function");
                 self.temp_addr(t);
             }
             Kind::Fmt {
@@ -1247,11 +1278,8 @@ impl Gen<'_> {
     /// A call of routine `r`: value arguments converted to the parameter types, `var`
     /// arguments passed as addresses. The static link comes first, then, for a function
     /// whose result lives in memory, the address of a new temporary for the result, which is
-    /// returned.
-    fn invoke(&mut self, call: Id) -> Option<u32> {
-        let Kind::Invoke(r, args) = self.ast.kind(call) else {
-            unreachable!("an Invoke node")
-        };
+    /// returned. `call` is the `Invoke` node.
+    fn invoke(&mut self, call: Id, r: u32, args: List) -> Option<u32> {
         let info = self.info;
         let routine = &info.routines[r as usize];
         if routine.has_static_link() {
@@ -1263,7 +1291,12 @@ impl Gen<'_> {
         if let Some(t) = result {
             self.temp_addr(t);
         }
-        self.push_args(args, &routine.params, routine.import.is_some());
+        let reals = if routine.import.is_some() {
+            RealArgs::ByValue
+        } else {
+            RealArgs::ByAddress
+        };
+        self.push_args(args, &routine.params, reals);
         let index = self.layout.routine_index(r);
         self.code.call(index);
         if info.checks_io(r) {
@@ -1280,13 +1313,13 @@ impl Gen<'_> {
     }
 
     /// Value arguments converted to the parameter types, `var` arguments as addresses. A Real
-    /// goes by address, except to an import, which receives the f64 itself.
-    fn push_args(&mut self, args: List, params: &[ParamType], to_import: bool) {
+    /// is passed as `reals` says.
+    fn push_args(&mut self, args: List, params: &[ParamType], reals: RealArgs) {
         for (&arg, param) in self.ast.items(args).iter().zip(params) {
             let ty = param.ty;
             if param.by_ref || self.info.types.is_agg(ty) {
                 self.address_of(arg);
-            } else if ty == Ty::REAL && to_import {
+            } else if ty == Ty::REAL && reals == RealArgs::ByValue {
                 self.real(arg);
             } else if ty == Ty::REAL {
                 self.real_addr(arg);
@@ -1305,7 +1338,7 @@ impl Gen<'_> {
     fn indirect(&mut self, callee: Id, args: List) {
         let ty = self.ast.ty(callee);
         let (params, _) = self.info.types.sig(ty).expect("procedural callee");
-        self.push_args(args, &params, false);
+        self.push_args(args, &params, RealArgs::ByAddress);
         self.expr(callee);
         self.code
             .call_indirect(self.layout.wasm_types[ty.0 as usize]);
@@ -1357,8 +1390,8 @@ impl Gen<'_> {
             Kind::Compound(statements) => self.statements(statements),
             Kind::Assign(target, value) => self.assign(target, value),
             Kind::With(records, body) => self.with_statement(records, body),
-            Kind::Invoke(..) => {
-                self.invoke(id);
+            Kind::Invoke(r, args) => {
+                self.invoke(id, r, args);
             }
             Kind::Indirect(callee, args) => self.indirect(callee, args),
             Kind::RunErr(code) => {
@@ -1409,26 +1442,7 @@ impl Gen<'_> {
                 body,
                 downto,
             } => self.for_statement(variable, first, last, body, downto),
-            Kind::Write(args, newline) => {
-                // The first argument is the file; its address is computed once into a local.
-                let items = self.ast.items(args);
-                self.file = self.new_local();
-                match self.ast.kind(items[0]) {
-                    Kind::IntLit(console) => {
-                        self.code.i32_const(console as i32);
-                    }
-                    _ => self.address_of(items[0]),
-                }
-                self.code.local_set(self.file);
-                for &arg in &items[1..] {
-                    self.write_arg(arg);
-                }
-                if newline {
-                    self.code.local_get(self.file);
-                    self.helper(Helper::TextNewLine);
-                }
-                self.io_check(id);
-            }
+            Kind::Write(args, newline) => self.write_statement(id, args, newline),
             _ => unreachable!("checked statements"),
         }
     }
@@ -1574,8 +1588,31 @@ impl Gen<'_> {
         }
     }
 
-    /// One argument of `Write`: by the value's type, `value` or `value : width [: decimals]`.
-    fn write_arg(&mut self, arg: Id) {
+    /// `Write(file, items)`: the file's address, 0 for the console, is computed once into a local
+    /// that every item is written to; then the line end of `WriteLn` and the I/O check.
+    fn write_statement(&mut self, id: Id, args: List, newline: bool) {
+        let items = self.ast.items(args);
+        let file = self.new_local();
+        match self.ast.kind(items[0]) {
+            Kind::IntLit(console) => {
+                self.code.i32_const(console as i32);
+            }
+            _ => self.address_of(items[0]),
+        }
+        self.code.local_set(file);
+        for &arg in &items[1..] {
+            self.write_arg(file, arg);
+        }
+        if newline {
+            self.code.local_get(file);
+            self.helper(Helper::TextNewLine);
+        }
+        self.io_check(id);
+    }
+
+    /// One argument of `Write`, written to the file whose address is in local `file`: by the
+    /// value's type, `value` or `value : width [: decimals]`.
+    fn write_arg(&mut self, file: u32, arg: Id) {
         let (value, width, decimals) = match self.ast.kind(arg) {
             Kind::Fmt {
                 value,
@@ -1586,28 +1623,30 @@ impl Gen<'_> {
         };
         let node = self.ast.node(value);
         match (self.info.types.tag(node.ty), node.kind) {
-            (None, _) if node.ty == Ty::REAL => self.write_real(value, width, decimals),
-            (None, Kind::StrLit(s)) => self.write_literal(s, width),
-            (None, _) if self.info.types.is_str(node.ty) => self.write_string_value(value, width),
+            (None, _) if node.ty == Ty::REAL => self.write_real(file, value, width, decimals),
+            (None, Kind::StrLit(s)) => self.write_literal(file, s, width),
+            (None, _) if self.info.types.is_str(node.ty) => {
+                self.write_string_value(file, value, width)
+            }
             (None, _) if self.info.types.is_char_array(node.ty) => {
-                self.write_char_array(value, node.ty, width)
+                self.write_char_array(file, value, node.ty, width)
             }
             (Some(Tag::Int), _) => {
-                self.code.local_get(self.file);
+                self.code.local_get(file);
                 self.expr(value);
                 self.width(width);
                 self.code.call(self.layout.indexes.write_integer);
             }
-            (Some(Tag::Char), _) => self.write_char(value, width),
-            _ => self.write_boolean(value, width),
+            (Some(Tag::Char), _) => self.write_char(file, value, width),
+            _ => self.write_boolean(file, value, width),
         }
     }
 
     /// `fmt_real` formats into a temporary (-1 for an absent width or decimals); `write`
     /// then prints what it produced.
-    fn write_real(&mut self, value: Id, width: Option<Id>, decimals: Option<Id>) {
+    fn write_real(&mut self, file: u32, value: Id, width: Option<Id>, decimals: Option<Id>) {
         let t = self.new_temp(REAL_BUF);
-        self.code.local_get(self.file);
+        self.code.local_get(file);
         self.temp_addr(t);
         self.real(value);
         match width {
@@ -1623,11 +1662,11 @@ impl Gen<'_> {
     }
 
     /// A string literal is written from its text in static data, skipping the length byte.
-    fn write_literal(&mut self, s: u32, width: Option<Id>) {
+    fn write_literal(&mut self, file: u32, s: u32, width: Option<Id>) {
         let bytes = &self.ast.strs[s as usize];
         let addr = self.layout.literal(s, bytes);
         self.code
-            .local_get(self.file)
+            .local_get(file)
             .i32_const(addr as i32 + 1)
             .i32_const(bytes.len() as i32);
         self.width(width);
@@ -1635,11 +1674,11 @@ impl Gen<'_> {
     }
 
     /// Any other String is written from its address: text after the length byte.
-    fn write_string_value(&mut self, value: Id, width: Option<Id>) {
+    fn write_string_value(&mut self, file: u32, value: Id, width: Option<Id>) {
         let address = self.new_local();
         self.str(value);
         self.code.local_set(address);
-        self.code.local_get(self.file);
+        self.code.local_get(file);
         self.code.local_get(address).i32_const(1).op(I32_ADD);
         self.code.local_get(address).mem(I32_LOAD8_U, 0, 0);
         self.width(width);
@@ -1647,18 +1686,18 @@ impl Gen<'_> {
     }
 
     /// An array of Char is written from its address: every element.
-    fn write_char_array(&mut self, value: Id, ty: Ty, width: Option<Id>) {
-        let (_, low, high, _) = self.info.types.array_of(ty).expect("an array");
-        self.code.local_get(self.file);
+    fn write_char_array(&mut self, file: u32, value: Id, ty: Ty, width: Option<Id>) {
+        let array = self.info.types.array_of(ty).expect("an array");
+        self.code.local_get(file);
         self.address_of(value);
-        self.code.i32_const((high - low + 1) as i32);
+        self.code.i32_const((array.hi - array.lo + 1) as i32);
         self.width(width);
         self.code.call(self.layout.indexes.write_string);
     }
 
     /// A Char is stored in the scratch buffer and written as a one-character string.
-    fn write_char(&mut self, value: Id, width: Option<Id>) {
-        self.code.local_get(self.file);
+    fn write_char(&mut self, file: u32, value: Id, width: Option<Id>) {
+        self.code.local_get(file);
         self.code.i32_const(BUF);
         self.expr(value);
         self.code.mem(I32_STORE8, 0, 0).i32_const(BUF).i32_const(1);
@@ -1668,11 +1707,11 @@ impl Gen<'_> {
 
     /// A Boolean is written as `TRUE` or `FALSE`: `select(a, b, c)` yields `a` when `c` is
     /// non-zero, so one select picks the text's address and another its length.
-    fn write_boolean(&mut self, value: Id, width: Option<Id>) {
+    fn write_boolean(&mut self, file: u32, value: Id, width: Option<Id>) {
         let flag = self.new_local();
         self.expr(value);
         self.code.local_set(flag);
-        self.code.local_get(self.file);
+        self.code.local_get(file);
         self.code
             .i32_const(TRUE)
             .i32_const(FALSE)
@@ -1739,8 +1778,8 @@ impl Gen<'_> {
                 let offset = self.addr(e);
                 self.code.mem(F64_LOAD, 0, offset);
             }
-            Kind::Invoke(..) => {
-                let t = self.invoke(e).expect("Real function");
+            Kind::Invoke(r, args) => {
+                let t = self.invoke(e, r, args).expect("Real function");
                 self.reload(t);
             }
             Kind::Binary {
@@ -1797,8 +1836,8 @@ impl Gen<'_> {
                 self.code
                     .i32_const(self.layout.table_slots[r as usize] as i32);
             }
-            Kind::Invoke(..) => {
-                self.invoke(e);
+            Kind::Invoke(r, args) => {
+                self.invoke(e, r, args);
             }
             Kind::Indirect(callee, args) => self.indirect(callee, args),
             Kind::Binary {

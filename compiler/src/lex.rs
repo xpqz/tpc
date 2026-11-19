@@ -8,6 +8,11 @@
 //! The one ambiguity is `^`: after an operand (`p^`, `a[i]^`, `f(x)^`) it dereferences, anywhere
 //! else `^M` is a control character, which may be part of a string (`'a'^M'b'`). The scanner
 //! decides by looking at the previous token only.
+//!
+//! `Scanner` reads each kind of token. `Lexer` adds that one token of context and the stop after
+//! `END .`, and hands tokens out one at a time: `directives::expand` pulls them with
+//! `next_token`, and with `next_skipped` inside text that conditional compilation skips.
+//! `lex` collects them all at once and is used by the lexer tests.
 use crate::diag::{code, Diag};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +58,16 @@ const SATURATE_AT: i64 = 1 << 40;
 const MAX_DECIMAL: i64 = 0x7FFF_FFFF;
 const MAX_HEX: i64 = 0xFFFF_FFFF;
 
+/// A byte that may start an identifier.
+pub fn is_ident_start(c: u8) -> bool {
+    c.is_ascii_alphabetic() || c == b'_'
+}
+
+/// A byte that may continue an identifier.
+pub fn is_ident_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_'
+}
+
 struct Scanner<'a> {
     src: &'a [u8],
     pos: usize,
@@ -70,6 +85,7 @@ impl Scanner<'_> {
         *self.src.get(self.pos + ahead).unwrap_or(&0)
     }
 
+    /// An error at the start of the token being scanned; `file` is filled in by the caller.
     fn error(&self, code: u16) -> Diag {
         Diag {
             code,
@@ -190,7 +206,7 @@ impl Scanner<'_> {
     fn control_char(&self, ahead: usize) -> Option<u8> {
         let letter = self.peek(ahead + 1).to_ascii_uppercase();
         let next = self.peek(ahead + 2);
-        let next_is_identifier = next.is_ascii_alphanumeric() || next == b'_';
+        let next_is_identifier = is_ident_byte(next);
         let is_control =
             self.peek(ahead) == b'^' && (b'@'..=b'_').contains(&letter) && !next_is_identifier;
         is_control.then(|| letter - b'@')
@@ -300,7 +316,7 @@ impl Scanner<'_> {
 
     fn word(&mut self) -> Tok {
         let start = self.pos;
-        while self.peek(0).is_ascii_alphanumeric() || self.peek(0) == b'_' {
+        while is_ident_byte(self.peek(0)) {
             self.pos += 1;
         }
         let text = self.src[start..self.pos].to_ascii_uppercase();
@@ -371,7 +387,8 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// The next token; `Eof` at the end of the text and after the final `END .`.
+    /// The next token; `Eof` at the end of the text and after the final `END .`, after which
+    /// nothing more is read.
     pub fn next_token(&mut self) -> Result<Tok, Diag> {
         let scanner = &mut self.scanner;
         while !self.finished && scanner.pos < scanner.src.len() {
@@ -384,12 +401,14 @@ impl<'a> Lexer<'a> {
                 continue;
             }
             scanner.mark_token_start();
-            let is_dereference = ends_operand(self.previous.as_ref());
             let token = match c {
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => Some(scanner.word()),
                 b'0'..=b'9' | b'$' => Some(scanner.number()?),
                 b'\'' | b'#' => Some(scanner.string()?),
-                b'^' if !is_dereference && scanner.control_char(0).is_some() => {
+                // After an operand `^` dereferences; anywhere else `^X` is a control character.
+                b'^' if !ends_operand(self.previous.as_ref())
+                    && scanner.control_char(0).is_some() =>
+                {
                     Some(scanner.control_char_token_or_string()?)
                 }
                 b'{' => scanner.comment(1, b"}")?,
