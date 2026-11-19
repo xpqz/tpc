@@ -150,13 +150,13 @@ epilogue:  sp = fp + framesize
 | `fmt_real` | `(f64, width, decimals, bufPtr) -> len` | TP-style real formatting; `width` and `decimals` are -1 when absent; the buffer holds 512 bytes; imported only by modules that use Real (`host/fmt_real.js`) |
 | `halt` | `(code)` | terminate with exit code |
 | `rterror` | `(code)` | runtime error report |
-| `time` | `() -> i32` | ticks for `Delay`, `GetTime` |
+| `time` | `(what) -> i32` | the local clock for `GetDate` and `GetTime` (below); `Delay` will need its own contract |
 | `compile` | IDE worker only | invokes `compiler.wasm` |
 
 ### How a host import is declared
 
-A host import is a routine declared `external` in an embedded runtime source (`runtime/system.pas`
-now, Crt and Dos later): `procedure RtError(code: LongInt); external;`. `external` is
+A host import is a routine declared `external` in an embedded runtime source (`runtime/system.pas` and
+`runtime/dos.pas`, Crt later): `procedure RtError(code: LongInt); external;`. `external` is
 accepted only there; in a user program it is error 200. The import is from module `host`; its
 name is the routine's name in lower case, or the string after the directive when the routine
 cannot have that name (`procedure HostWrite(...); external 'write';`, because `Write` is
@@ -186,6 +186,22 @@ file's number: its position in registration order, counting from 1. The native C
 the `.pas` and `.inc` files beside the input, then those of `--dir AUXDIR`, which win on a name
 clash. Include files (`{$I name}`) are looked up in the same table, `name` or `name.PAS` when it
 has no extension; the CLI registers only `.PAS` and `.INC` files, `add_file` takes any name.
+
+### The clock (`time`) and Dos
+
+`runtime/dos.pas` is an embedded unit: `uses Dos` finds it before any registered file, so a
+user `DOS.PAS` never replaces it (TP 5.0 takes Dos from its own TURBO.TPL; measured). It is
+file 0 in diagnostics, with all tokens at line 0, like System. It declares `external 'time'` in
+its implementation part and computes the calendar in Pascal. `time(what)`, local time:
+
+- `time(0)` takes a reading of the clock and returns the whole days since 1970-01-01;
+- `time(1)` returns the seconds since midnight of that reading (0 to 86399);
+- `time(2)` returns the hundredths of a second of that reading (0 to 99).
+
+`GetDate` and `GetTime` call `time(0)` first, so the date and time of one call come from one
+instant. Dates before 1970 are not supported. The test runner reads the local time in
+milliseconds since 1970-01-01 from the environment variable `TP5_NOW_MS` when set (tests fix the
+clock with it), else the real local time. Any other `what` is a runner error.
 
 ### Text files in System
 
@@ -251,7 +267,7 @@ turns a negative result `-e` into `InOutRes := e`, so the codes are DOS error nu
   2 on runner error (stderr prefix `run.mjs:`). A program `halt(2)` is indistinguishable by code.
 - A host `RangeError` (engine stack exhausted by recursion in routines without a frame) is
   reported as `Runtime error 202`, exit code 202, the same as the shadow-stack overflow.
-- Imports other than `write`, `halt` and `rterror` are stubs that fail with
+- `readkey`, `keypressed`, `screen` and `compile` are stubs that fail with
   `host import X not available in test runner`; unknown imports fail instantiation.
 
 ## 9. Runtime errors
