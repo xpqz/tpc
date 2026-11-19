@@ -3,6 +3,7 @@
 //! Corpus programs are copied without PENDING into a scratch directory and checked with the
 //! real compiler; expected output and `N LINE` come from the real TP 5.0 (`tools/tp5.sh`).
 mod common;
+use common::OutputGuarded as _;
 mod driver;
 use common::*;
 use driver::*;
@@ -265,7 +266,7 @@ fn run_source(name: &str, src: &str) -> (i32, String, String) {
     let o = Command::new("node")
         .arg(root().join("tests/run.mjs"))
         .arg(&path)
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     (
         o.status.code().unwrap_or(-1),
@@ -325,7 +326,7 @@ fn probe_sp(name: &str, wasm: &[u8]) -> String {
     let o = Command::new("node")
         .args(["--input-type=module", "-e", SP_SCRIPT])
         .arg(&path)
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     String::from_utf8_lossy(&o.stdout).into_owned()
@@ -393,7 +394,7 @@ fn oracle_agrees() {
         std::fs::write(&p, src).unwrap();
         let o = Command::new(root().join("tools/tp5.sh"))
             .arg(&p)
-            .output()
+            .output_guarded()
             .unwrap();
         String::from_utf8_lossy(&o.stdout).into_owned()
     };

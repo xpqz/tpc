@@ -5,6 +5,7 @@
 //! file, a statement followed by anything but `;` or `end` is 85 (never 37), and a header
 //! name that is not an identifier is 2.
 mod common;
+use common::OutputGuarded as _;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -234,7 +235,7 @@ fn run_wasm(name: &str, wasm: &[u8]) -> Result<Vec<u8>, String> {
     let out = Command::new("node")
         .arg(root().join("tests/run.mjs"))
         .arg(&path)
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     if out.status.success() {
         Ok(out.stdout)
@@ -313,7 +314,7 @@ fn oracle_agrees() {
         std::fs::write(&p, [src, "\n"].concat()).unwrap();
         let o = Command::new(root().join("tools/tp5.sh"))
             .arg(&p)
-            .output()
+            .output_guarded()
             .unwrap();
         String::from_utf8_lossy(&o.stdout).into_owned()
     };

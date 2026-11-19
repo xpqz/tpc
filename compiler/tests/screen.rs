@@ -1,4 +1,6 @@
 //! Runs the Node checks of the screen grid, key scripts and virtual clock (tests/host/screen.mjs).
+mod common;
+use common::OutputGuarded as _;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -7,7 +9,7 @@ fn screen_model_follows_the_contract() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let o = Command::new("node")
         .arg(root.join("tests/host/screen.mjs"))
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(

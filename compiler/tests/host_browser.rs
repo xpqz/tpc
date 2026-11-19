@@ -2,6 +2,8 @@
 //! `host/terminal.js` (canvas renderer on a recording context) and `host/worker.js` (a program in
 //! a worker thread: blocking readkey, sleep, stop). Browser-level checks are `tests/host/*`'s
 //! successor in the Playwright suite.
+mod common;
+use common::OutputGuarded as _;
 use std::path::PathBuf;
 
 fn root() -> PathBuf {
@@ -11,7 +13,7 @@ fn root() -> PathBuf {
 fn node(script: &str) {
     let o = std::process::Command::new("node")
         .arg(root().join("tests/host").join(script))
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     let out = String::from_utf8_lossy(&o.stdout);
     let err = String::from_utf8_lossy(&o.stderr);
@@ -48,7 +50,7 @@ fn console_readln_without_crt_reads_typed_lines() {
     let o = std::process::Command::new("node")
         .arg(root().join("tests/host/console_readln.mjs"))
         .env("TP5C", env!("CARGO_BIN_EXE_tp5c"))
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     let out = String::from_utf8_lossy(&o.stdout);
     let err = String::from_utf8_lossy(&o.stderr);
@@ -60,7 +62,7 @@ fn console_newline_without_crt_starts_in_column_one() {
     let o = std::process::Command::new("node")
         .arg(root().join("tests/host/console_newline.mjs"))
         .env("TP5C", env!("CARGO_BIN_EXE_tp5c"))
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     let out = String::from_utf8_lossy(&o.stdout);
     let err = String::from_utf8_lossy(&o.stderr);

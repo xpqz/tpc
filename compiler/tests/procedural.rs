@@ -3,6 +3,7 @@
 //! checked with the real compiler; expected output and `N LINE` come from the real TP 5.0
 //! (`tools/tp5.sh`).
 mod common;
+use common::OutputGuarded as _;
 mod driver;
 use driver::*;
 use std::path::PathBuf;
@@ -274,7 +275,7 @@ fn calling_an_unassigned_procedural_variable_traps() {
     let o = Command::new("node")
         .arg(root().join("tests/run.mjs"))
         .arg(&path)
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     assert_eq!(String::from_utf8_lossy(&o.stdout), "before\n");
     let err = String::from_utf8_lossy(&o.stderr);
@@ -292,7 +293,7 @@ fn oracle_agrees() {
         std::fs::write(&p, [src, "\n"].concat()).unwrap();
         let o = Command::new(root().join("tools/tp5.sh"))
             .arg(&p)
-            .output()
+            .output_guarded()
             .unwrap();
         String::from_utf8_lossy(&o.stdout).into_owned()
     };

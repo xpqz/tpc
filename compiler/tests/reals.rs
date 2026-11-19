@@ -4,6 +4,7 @@
 //! `host.fmt_real`. Every `.out` and `.err` (`N LINE`) comes from the real TP 5.0 (`tools/tp5.sh`).
 //! Programs avoid exact decimal ties of magnitude 8 and above, where TP 5.0 rounds some down.
 mod common;
+use common::OutputGuarded as _;
 mod driver;
 use driver::*;
 use std::path::{Path, PathBuf};
@@ -198,7 +199,7 @@ fn corpus_lists_are_sorted_name_existing_programs_and_leave_pending() {
 fn fmt_real_matches_tp5_output() {
     let o = std::process::Command::new("node")
         .arg(root().join("tests/host/fmt_real.mjs"))
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(o.status.success(), "{err}");

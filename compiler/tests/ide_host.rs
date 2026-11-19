@@ -5,6 +5,7 @@
 //! real TP 5.0, which compiles them with the stand-in tests/ide/standin/IDEHOST.PAS.
 mod common;
 use common::node;
+use common::OutputGuarded as _;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -68,7 +69,7 @@ fn a_registered_file_called_idehost_does_not_replace_the_unit() {
 fn compiler_wasm() -> PathBuf {
     let target = Command::new("sh")
         .arg(root().join("scripts/cargo-target.sh"))
-        .output()
+        .output_guarded()
         .unwrap();
     let target = String::from_utf8(target.stdout).unwrap();
     let target = target.trim();
@@ -98,7 +99,7 @@ fn node_test(script: &str) {
         .arg(root().join("tests/ide").join(script))
         .arg(compiler_wasm())
         .current_dir(root())
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     assert!(
         o.status.success(),
@@ -129,7 +130,7 @@ fn ide_main_with_the_real_compiler_wasm() {
 fn ide_error_messages_agree_with_the_compiler_table() {
     let o = Command::new("node")
         .arg(root().join("tests/ide/errors_test.mjs"))
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     assert!(
         o.status.success(),
@@ -150,7 +151,7 @@ fn the_runner_refuses_an_ide_program_without_a_compiler_and_a_missing_compiler_f
             .arg(root().join("tests/run.mjs"))
             .args(args)
             .arg(&wasm)
-            .output()
+            .output_guarded()
             .unwrap();
         (
             o.status.code(),
@@ -169,4 +170,19 @@ fn the_runner_refuses_an_ide_program_without_a_compiler_and_a_missing_compiler_f
         stderr.contains("cannot read /nonexistent/tp5c.wasm"),
         "{stderr}"
     );
+}
+
+/// The hang guard of the node children kills a child that outlives its deadline and fails with
+/// the output it had written.
+#[test]
+#[should_panic(expected = "hung for 1s and was killed\nstdout: before the hang")]
+fn the_hang_guard_kills_a_child_that_never_ends() {
+    let child = Command::new("sh")
+        .args(["-c", "echo before the hang; exec sleep 600"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    common::wait_within_deadline(child, std::time::Duration::from_secs(1)).unwrap();
 }

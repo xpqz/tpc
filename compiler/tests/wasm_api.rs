@@ -1,4 +1,6 @@
 //! The wasm32 release build exports the compiler API (plan section 3).
+mod common;
+use common::OutputGuarded as _;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -10,7 +12,7 @@ fn root() -> PathBuf {
 fn wasm_exports_compile_and_report_errors() {
     let target = Command::new("sh")
         .arg(root().join("scripts/cargo-target.sh"))
-        .output()
+        .output_guarded()
         .unwrap();
     let target = String::from_utf8(target.stdout).unwrap();
     let target = target.trim();
@@ -44,7 +46,7 @@ fn wasm_exports_compile_and_report_errors() {
         .arg(ok.with_extension("out"))
         .arg(&err)
         .args([d.code.to_string(), d.line.to_string(), d.col.to_string()])
-        .output()
+        .output_guarded()
         .expect("node must be installed");
     assert!(
         out.status.success(),
