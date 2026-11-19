@@ -62,3 +62,6 @@ export const echoProgram = () =>
 // loop br 0 end: never returns and never calls the host.
 export const spinProgram = () => program([0x03, 0x40, 0x0c, 0, 0x0b]);
 export const emptyProgram = () => program([]);
+// Forever: read a key, echo it. Used where the program must keep up with many keys.
+export const loopEchoProgram = () =>
+  program([0x03, 0x40, ...i32(0), ...call(READKEY), ...STORE8, ...EMIT, 0x0c, 0, 0x0b]);
