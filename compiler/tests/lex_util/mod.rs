@@ -1,6 +1,6 @@
 #![allow(dead_code, unused_imports)]
 use tp5c::lex::Tk as R;
-pub use tp5c::lex::{lex, LexErr, Tok};
+pub use tp5c::lex::{lex, Tok};
 
 /// Lexes `src`, requires success and a trailing Eof, returns the tokens without it.
 pub fn toks(src: &str) -> Vec<Tok> {
@@ -42,7 +42,7 @@ pub fn string(src: &str) -> Vec<u8> {
 pub fn err(src: &str) -> (u16, u32, u32) {
     match lex(src.as_bytes()) {
         Ok(v) => panic!("{src:?}: expected error, got {v:?}"),
-        Err(e) => (e.num, e.line, e.col),
+        Err(e) => (e.code, e.line, e.col),
     }
 }
 

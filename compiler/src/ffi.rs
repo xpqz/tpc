@@ -8,7 +8,7 @@ use std::cell::RefCell;
 struct State {
     src: Vec<u8>,
     out: Vec<u8>,
-    err: (u32, u32, u32),
+    err: crate::Diag,
 }
 
 thread_local! {
@@ -38,11 +38,7 @@ pub extern "C" fn compile(src_ptr: *const u8, src_len: usize, _flags: u32) -> u3
         let res = if valid {
             crate::compile(&s.src[..src_len])
         } else {
-            Err(crate::Diag {
-                code: 0,
-                line: 0,
-                col: 0,
-            })
+            Err(crate::Diag::default())
         };
         match res {
             Ok(wasm) => {
@@ -50,7 +46,7 @@ pub extern "C" fn compile(src_ptr: *const u8, src_len: usize, _flags: u32) -> u3
                 0
             }
             Err(d) => {
-                s.err = (d.code as u32, d.line, d.col);
+                s.err = d;
                 1
             }
         }
@@ -69,15 +65,15 @@ pub extern "C" fn out_len() -> usize {
 
 #[no_mangle]
 pub extern "C" fn err_code() -> u32 {
-    with(|s| s.err.0)
+    with(|s| s.err.code as u32)
 }
 
 #[no_mangle]
 pub extern "C" fn err_line() -> u32 {
-    with(|s| s.err.1)
+    with(|s| s.err.line)
 }
 
 #[no_mangle]
 pub extern "C" fn err_col() -> u32 {
-    with(|s| s.err.2)
+    with(|s| s.err.col)
 }

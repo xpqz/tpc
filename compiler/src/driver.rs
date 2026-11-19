@@ -1,46 +1,39 @@
+//! The compiler pipeline (lex, parse, check, codegen) and the native command line.
 use crate::check::check;
 use crate::codegen::gen;
+use crate::diag::{code, Diag};
 use crate::lex::lex;
 use crate::parse::parse;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Diag {
-    pub code: u16,
-    pub line: u32,
-    pub col: u32,
-}
 
 /// lex, parse, check, codegen.
 pub fn compile(src: &[u8]) -> Result<Vec<u8>, Diag> {
     compile_with(include_bytes!("../../runtime/system.pas"), src)
 }
 
+/// TP reports end of file on the last line of the file, not after its final newline.
+fn last_line(src: &[u8]) -> u32 {
+    let newlines = src.iter().filter(|&&c| c == b'\n').count() as u32;
+    let unterminated = !src.ends_with(b"\n") as u32;
+    (newlines + unterminated).max(1)
+}
+
 /// `compile` with `system` as the source of the System declaration part.
 pub fn compile_with(system: &[u8], src: &[u8]) -> Result<Vec<u8>, Diag> {
-    // TP reports end of file on the last line of the file, not after its final newline.
-    let last_line =
-        src.iter().filter(|&&c| c == b'\n').count() as u32 + !src.ends_with(b"\n") as u32;
-    let diag = |d: Diag| Diag {
-        line: if d.code == 10 && d.line != 0 {
-            last_line.max(1)
+    let last_line = last_line(src);
+    let at_last_line = |d: Diag| {
+        let eof_in_user_source = d.code == code::UNEXPECTED_END_OF_FILE && d.line != 0;
+        let line = if eof_in_user_source {
+            last_line
         } else {
             d.line
-        },
-        ..d
-    };
-    let lexed = |src| {
-        lex(src).map_err(|e| {
-            diag(Diag {
-                code: e.num,
-                line: e.line,
-                col: e.col,
-            })
-        })
+        };
+        Diag { line, ..d }
     };
     // Every token of System is at line 0, so its diagnostics never carry a user line.
-    let mut sys = lexed(system).map_err(|d| Diag { line: 0, ..d })?;
-    sys.iter_mut().for_each(|t| t.line = 0);
-    let (mut ast, root) = parse(sys, lexed(src)?).map_err(diag)?;
+    let mut system_tokens = lex(system).map_err(|d| Diag { line: 0, ..d })?;
+    system_tokens.iter_mut().for_each(|t| t.line = 0);
+    let user_tokens = lex(src).map_err(at_last_line)?;
+    let (mut ast, root) = parse(system_tokens, user_tokens).map_err(at_last_line)?;
     let info = check(&mut ast, root)?;
     Ok(gen(&ast, &info, root))
 }

@@ -1,4 +1,82 @@
-use crate::driver::Diag;
+//! Diagnostics: the error type, TP error numbers with their messages, and rendering.
+//! There is no `format!`: messages come from a static table and numbers are printed by
+//! `push_dec`.
+
+/// A compile error: TP error number and the source position TP reports it at.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Diag {
+    pub code: u16,
+    pub line: u32,
+    pub col: u32,
+}
+
+/// Names for the TP error numbers the compiler reports (see `docs/tp-errors.md`).
+pub mod code {
+    pub const IDENTIFIER_EXPECTED: u16 = 2;
+    pub const UNKNOWN_IDENTIFIER: u16 = 3;
+    pub const DUPLICATE_IDENTIFIER: u16 = 4;
+    pub const SYNTAX_ERROR: u16 = 5;
+    pub const REAL_CONSTANT_ERROR: u16 = 6;
+    pub const INTEGER_CONSTANT_ERROR: u16 = 7;
+    pub const STRING_EXCEEDS_LINE: u16 = 8;
+    pub const UNEXPECTED_END_OF_FILE: u16 = 10;
+    pub const TYPE_IDENTIFIER_EXPECTED: u16 = 12;
+    pub const INVALID_DIRECTIVE: u16 = 17;
+    pub const UNDEFINED_POINTER_TARGET: u16 = 19;
+    pub const VARIABLE_EXPECTED: u16 = 20;
+    pub const ERROR_IN_TYPE: u16 = 21;
+    pub const STRUCTURE_TOO_LARGE: u16 = 22;
+    pub const SET_BASE_OUT_OF_RANGE: u16 = 23;
+    pub const INVALID_STRING_LENGTH: u16 = 25;
+    pub const TYPE_MISMATCH: u16 = 26;
+    pub const LOWER_BOUND_GREATER: u16 = 28;
+    pub const ORDINAL_TYPE_EXPECTED: u16 = 29;
+    pub const INVALID_RESULT_TYPE: u16 = 34;
+    pub const BEGIN_EXPECTED: u16 = 36;
+    pub const INTEGER_EXPRESSION_EXPECTED: u16 = 38;
+    pub const ORDINAL_EXPRESSION_EXPECTED: u16 = 39;
+    pub const BOOLEAN_EXPRESSION_EXPECTED: u16 = 40;
+    pub const OPERAND_TYPES_MISMATCH: u16 = 41;
+    pub const ERROR_IN_EXPRESSION: u16 = 42;
+    pub const FIELD_IDENTIFIER_EXPECTED: u16 = 44;
+    pub const DO_EXPECTED: u16 = 50;
+    pub const OF_EXPECTED: u16 = 54;
+    pub const THEN_EXPECTED: u16 = 57;
+    pub const TO_OR_DOWNTO_EXPECTED: u16 = 58;
+    pub const UNDEFINED_FORWARD: u16 = 59;
+    pub const DIVISION_BY_ZERO: u16 = 62;
+    pub const CANNOT_READ_OR_WRITE: u16 = 64;
+    pub const POINTER_VARIABLE_EXPECTED: u16 = 65;
+    pub const STRING_VARIABLE_EXPECTED: u16 = 66;
+    pub const STRING_EXPRESSION_EXPECTED: u16 = 67;
+    pub const CASE_TYPES_MISMATCH: u16 = 74;
+    pub const RECORD_VARIABLE_EXPECTED: u16 = 75;
+    pub const CONSTANT_OUT_OF_RANGE: u16 = 76;
+    pub const INTEGER_OR_REAL_EXPRESSION_EXPECTED: u16 = 79;
+    pub const SEMICOLON_EXPECTED: u16 = 85;
+    pub const COLON_EXPECTED: u16 = 86;
+    pub const COMMA_EXPECTED: u16 = 87;
+    pub const LEFT_PAREN_EXPECTED: u16 = 88;
+    pub const RIGHT_PAREN_EXPECTED: u16 = 89;
+    pub const EQUALS_EXPECTED: u16 = 90;
+    pub const ASSIGN_EXPECTED: u16 = 91;
+    pub const RIGHT_BRACKET_EXPECTED: u16 = 93;
+    pub const PERIOD_EXPECTED: u16 = 94;
+    pub const TOO_MANY_VARIABLES: u16 = 96;
+    pub const INVALID_FOR_VARIABLE: u16 = 97;
+    pub const INTEGER_VARIABLE_EXPECTED: u16 = 98;
+    pub const NUMERIC_VARIABLE_EXPECTED: u16 = 103;
+    pub const ORDINAL_VARIABLE_EXPECTED: u16 = 104;
+    pub const CHAR_EXPRESSION_EXPECTED: u16 = 106;
+    pub const CASE_CONSTANT_OUT_OF_RANGE: u16 = 112;
+    pub const ERROR_IN_STATEMENT: u16 = 113;
+    pub const INVALID_QUALIFIER: u16 = 121;
+    pub const INVALID_VARIABLE_REFERENCE: u16 = 122;
+    pub const HEADER_MISMATCH: u16 = 131;
+    pub const CANNOT_EVALUATE: u16 = 133;
+    pub const INVALID_PROCEDURE_REFERENCE: u16 = 143;
+    pub const NOT_SUPPORTED: u16 = 200;
+}
 
 /// TP error numbers and messages (docs/tp-errors.md) the compiler can emit, ascending.
 pub const TABLE: &[(u16, &str)] = &[
@@ -86,10 +164,10 @@ pub fn push_dec(out: &mut String, n: i64) {
 /// `NAME(LINE,COL): Error N: MESSAGE`, without a trailing newline.
 pub fn render(name: &str, d: &Diag) -> String {
     let mut s = String::from(name);
-    for (open, n) in [("(", d.line), (",", d.col)] {
-        s.push_str(open);
-        push_dec(&mut s, n as i64);
-    }
+    s.push('(');
+    push_dec(&mut s, d.line as i64);
+    s.push(',');
+    push_dec(&mut s, d.col as i64);
     s.push_str("): Error ");
     push_dec(&mut s, d.code as i64);
     s.push_str(": ");

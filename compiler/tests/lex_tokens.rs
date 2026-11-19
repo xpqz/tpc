@@ -351,3 +351,13 @@ fn invalid_characters_are_error_5() {
 fn nonterminating_garbage_after_valid_tokens_still_errors() {
     assert_eq!(err("begin end ;;; ?"), (5, 1, 15));
 }
+
+#[test]
+fn string_end_before_a_period_does_not_stop_lexing() {
+    assert_eq!(kinds("'END'. x"), [StrLit, Dot, Ident]);
+}
+
+#[test]
+fn end_period_stops_lexing() {
+    assert_eq!(kinds("end. x"), [End, Dot]);
+}

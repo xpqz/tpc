@@ -1,11 +1,20 @@
 //! Node arena shared by parser, checker and codegen (docs/design/ast.md).
+//!
+//! Nodes are plain `Copy` values in one `Vec`, referred to by `Id` (their index); a child list
+//! is a `List`, a slice of the shared `lists` vector. The parser builds the tree with `Name`,
+//! `Call`, `Index` and similar unresolved nodes; the checker then rewrites them in place into
+//! resolved ones (`Name` becomes `Var`, `IntLit`, `Invoke`, ...) and fills in each node's type,
+//! so codegen only ever sees checked nodes.
 use crate::types::{Sym, Ty};
 
 pub type Id = u32;
 
-/// A child list: (start, len) into `Ast::lists`.
+/// A child list: `len` handles starting at `start` in `Ast::lists`.
 #[derive(Clone, Copy)]
-pub struct List(pub u32, pub u32);
+pub struct List {
+    pub start: u32,
+    pub len: u32,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Op {
@@ -76,20 +85,32 @@ pub enum Kind {
     Exit,
     Assign(Id, Id),
     Compound(List),
-    /// Condition, then-branch, else-branch.
-    If(Id, Id, Option<Id>),
+    If {
+        condition: Id,
+        then_branch: Id,
+        else_branch: Option<Id>,
+    },
     /// Condition, body.
     While(Id, Id),
     /// Body statements, condition.
     Repeat(List, Id),
-    /// Selector, arms, `else` statements.
-    Case(Id, List, List),
+    /// `arms` are `Arm` nodes; `else_body` holds the `else` statements.
+    Case {
+        selector: Id,
+        arms: List,
+        else_body: List,
+    },
     /// Labels (ranges), body.
     Arm(List, Id),
     /// Label range; a single label has both ends equal.
     Range(Id, Id),
-    /// Control variable, first, last, body, `downto`.
-    For(Id, Id, Id, Id, bool),
+    For {
+        variable: Id,
+        first: Id,
+        last: Id,
+        body: Id,
+        downto: bool,
+    },
     /// Index into `Ast::strs`.
     StrLit(u32),
     /// Integer, Boolean and Char constants.
@@ -99,27 +120,54 @@ pub enum Kind {
     IntToReal(Id),
     Var(Sym),
     Unary(Op, Id),
-    Binary(Op, Id, Id),
+    Binary {
+        op: Op,
+        left: Id,
+        right: Id,
+    },
     /// `value : width [: decimals]` in a write argument.
-    Fmt(Id, Id, Option<Id>),
+    Fmt {
+        value: Id,
+        width: Id,
+        decimals: Option<Id>,
+    },
     /// `Write` / `WriteLn` (true) with its arguments.
     Write(List, bool),
-    /// Header name (`NO_NAME` when absent), declarations, body.
-    Program(u32, List, Id),
+    /// `name` is `NO_NAME` when the program has no header.
+    Program {
+        name: u32,
+        declarations: List,
+        body: Id,
+    },
     ConstDecl(u32, Id),
-    /// Name, parameter list (None when omitted), result type name (`NO_NAME` when
-    /// omitted), function, block (None for `forward`). Stamped after the header.
-    Routine(u32, Option<List>, u32, bool, Option<Id>),
-    /// Parameter name, type name, passed by reference (`var`).
-    Param(u32, u32, bool),
+    /// A procedure or function, stamped after its header. `params` is None when the header
+    /// has no parameter list, `result` is `NO_NAME` when it has no result type, `block` is
+    /// None for a `forward` declaration.
+    Routine {
+        name: u32,
+        params: Option<List>,
+        result: u32,
+        is_function: bool,
+        block: Option<Id>,
+    },
+    /// `by_ref` is set for a `var` parameter.
+    Param {
+        name: u32,
+        type_name: u32,
+        by_ref: bool,
+    },
     /// Declarations and body, stamped where the declarations start.
     Block(List, Id),
     /// Variable name, type name.
     VarDecl(u32, u32),
     /// Type name and its definition: `Name`, `Range` (a subrange), `Enum` or `ProcType`.
     TypeDecl(u32, Id),
-    /// Parameters (None when omitted), result type name (`NO_NAME` for a procedure), function.
-    ProcType(Option<List>, u32, bool),
+    /// `params` is None when omitted, `result` is `NO_NAME` for a procedure.
+    ProcType {
+        params: Option<List>,
+        result: u32,
+        is_function: bool,
+    },
     /// An enumerated type: its identifiers as `Name` nodes.
     Enum(List),
     /// Index types (one per dimension) and element type.
@@ -130,8 +178,12 @@ pub enum Kind {
     FieldDecl(u32, Id),
     /// The arms of a variant part, each a `Record`.
     Variant(List),
-    /// `base[index]`; the flag marks an index that continues the same brackets (`a[i, j]`).
-    Index(Id, Id, bool),
+    /// `base[index]`; `continues` marks an index that continues the same brackets (`a[i, j]`).
+    Index {
+        base: Id,
+        index: Id,
+        continues: bool,
+    },
     /// `base.name`; the checker replaces the name with the field's offset.
     Field(Id, u32),
     /// Record designators whose fields are visible in the body.
@@ -146,6 +198,7 @@ pub enum Kind {
     SetType(Id),
 }
 
+/// The name handle of an absent name: no program header, no result type.
 pub const NO_NAME: u32 = u32::MAX;
 
 #[derive(Clone, Copy)]
@@ -167,9 +220,21 @@ pub struct Ast {
     pub system: usize,
     /// For each identifier used as an operand without arguments, the line of the token that
     /// follows it, where TP reports a missing argument list.
-    pub follow: Vec<(Id, u32)>,
-    /// The `{$R+}` / `{$R-}` switches in source order: (line, col, on).
-    pub range: Vec<(u32, u32, bool)>,
+    pub follow: Vec<FollowLine>,
+    /// The `{$R+}` / `{$R-}` switches in source order.
+    pub range: Vec<RangeSwitch>,
+}
+
+pub struct FollowLine {
+    pub node: Id,
+    pub line: u32,
+}
+
+/// A `{$R+}` or `{$R-}` directive and where it appears.
+pub struct RangeSwitch {
+    pub line: u32,
+    pub col: u32,
+    pub on: bool,
 }
 
 impl Ast {
@@ -185,32 +250,75 @@ impl Ast {
 
     /// A node of type `ty` at the position of `at`.
     pub fn typed(&mut self, kind: Kind, ty: Ty, at: Id) -> Id {
-        let (line, col) = (self.nodes[at as usize].line, self.nodes[at as usize].col);
+        let (line, col) = self.position(at);
         let id = self.add(kind, line, col);
-        self.nodes[id as usize].ty = ty;
+        self.set_ty(id, ty);
         id
+    }
+
+    pub fn position(&self, id: Id) -> (u32, u32) {
+        let node = self.node(id);
+        (node.line, node.col)
     }
 
     pub fn list(&mut self, items: &[Id]) -> List {
         let start = self.lists.len() as u32;
         self.lists.extend_from_slice(items);
-        List(start, items.len() as u32)
-    }
-
-    pub fn items(&self, l: List) -> &[Id] {
-        &self.lists[l.0 as usize..(l.0 + l.1) as usize]
-    }
-
-    pub fn intern(&mut self, name: &[u8]) -> u32 {
-        let up = name.to_ascii_uppercase();
-        let at = self
-            .names
-            .iter()
-            .position(|n| *n == up)
-            .unwrap_or(self.names.len());
-        if at == self.names.len() {
-            self.names.push(up);
+        List {
+            start,
+            len: items.len() as u32,
         }
-        at as u32
+    }
+
+    pub fn items(&self, list: List) -> &[Id] {
+        &self.lists[list.start as usize..(list.start + list.len) as usize]
+    }
+
+    /// The items as an owned vector, for loops that also modify the tree.
+    pub fn items_vec(&self, list: List) -> Vec<Id> {
+        self.items(list).to_vec()
+    }
+
+    pub fn node(&self, id: Id) -> Node {
+        self.nodes[id as usize]
+    }
+
+    pub fn kind(&self, id: Id) -> Kind {
+        self.nodes[id as usize].kind
+    }
+
+    pub fn ty(&self, id: Id) -> Ty {
+        self.nodes[id as usize].ty
+    }
+
+    pub fn set_kind(&mut self, id: Id, kind: Kind) {
+        self.nodes[id as usize].kind = kind;
+    }
+
+    pub fn set_ty(&mut self, id: Id, ty: Ty) {
+        self.nodes[id as usize].ty = ty;
+    }
+
+    /// Replaces a node's kind and type together: the checker's rewrite step.
+    pub fn resolve(&mut self, id: Id, kind: Kind, ty: Ty) {
+        self.set_kind(id, kind);
+        self.set_ty(id, ty);
+    }
+
+    /// The handle of an identifier, adding it on first use. Names are compared upper-cased.
+    pub fn intern(&mut self, name: &[u8]) -> u32 {
+        let upper = name.to_ascii_uppercase();
+        if let Some(index) = self.names.iter().position(|n| *n == upper) {
+            return index as u32;
+        }
+        self.names.push(upper);
+        self.names.len() as u32 - 1
+    }
+
+    /// A fresh type name for an anonymous type (`var x: array[1..3] of Byte`). It is empty,
+    /// so no identifier can ever be interned to the same handle.
+    pub fn anonymous_name(&mut self) -> u32 {
+        self.names.push(Vec::new());
+        self.names.len() as u32 - 1
     }
 }
