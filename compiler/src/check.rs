@@ -4,7 +4,7 @@ use crate::driver::Diag;
 use crate::types::{Routine, Sym, SymKind, Symbol, Tag, Ty, Type, Types};
 
 /// System routines bound by handle right after System is loaded (decision 11).
-const HELPERS: [&[u8]; 10] = [
+const HELPERS: [&[u8]; 14] = [
     b"ABSLONG",
     b"STRCAT",
     b"STRCMP",
@@ -15,6 +15,10 @@ const HELPERS: [&[u8]; 10] = [
     b"HEAPPUT",
     b"HEAPMARK",
     b"HEAPRELEASE",
+    b"SETOP",
+    b"SETADD",
+    b"SETIN",
+    b"SETCMP",
 ];
 pub const H_ABS: usize = 0;
 pub const H_CAT: usize = 1;
@@ -26,6 +30,10 @@ const H_GET: usize = 6;
 const H_PUT: usize = 7;
 const H_MARK: usize = 8;
 const H_RELEASE: usize = 9;
+pub const H_SETOP: usize = 10;
+pub const H_SETADD: usize = 11;
+pub const H_SETIN: usize = 12;
+pub const H_SETCMP: usize = 13;
 
 /// The most bytes of one structure, of all globals, or of one routine's locals.
 const MAX_DATA: u32 = 65535;
@@ -220,6 +228,7 @@ fn fold(op: Op, a: i64, b: i64) -> i64 {
         Op::Gt => (x > y) as i32,
         Op::Le => (x <= y) as i32,
         Op::Ge => (x >= y) as i32,
+        Op::In => 0,
         Op::Neg => x.wrapping_neg(),
         Op::Not => !x,
         Op::Ord => x,
@@ -288,6 +297,9 @@ impl Cx<'_> {
                 let (val, ty) = match n.kind {
                     Kind::IntLit(v) => (v, n.ty),
                     Kind::StrLit(i) => (i as i64, Ty::STRING),
+                    Kind::SetLit(l) if self.ast.items(l).iter().all(|&i| self.fixed(i)) => {
+                        (e as i64, n.ty)
+                    }
                     _ => return Err(self.err(e, 133)),
                 };
                 self.declare(d, name, Symbol::new(SymKind::Const, ty, val))?;
@@ -383,6 +395,10 @@ impl Cx<'_> {
                     return Err(self.err(spec, 22));
                 }
                 Ok(self.types.record(fields, size))
+            }
+            Kind::SetType(of) => {
+                let base = self.spec(of, NO_NAME)?;
+                self.types.set_of(base).map_err(|code| self.err(of, code))
             }
             Kind::Range(lo, hi) => {
                 let mut ends = [(0, Ty::NONE); 2];
@@ -1095,8 +1111,9 @@ impl Cx<'_> {
             return Ok(());
         }
         if self.types.is_agg(dest) {
-            // Name equivalence: only the very same type.
-            return if v.ty == dest {
+            // Name equivalence: only the very same type; sets need compatible bases.
+            let set = self.types.is_set(dest) && self.types.compat(dest, v.ty);
+            return if v.ty == dest || set {
                 Ok(())
             } else {
                 Err(self.err(at, 26))
@@ -1179,6 +1196,9 @@ impl Cx<'_> {
                 let (sym, s) = self.resolve(e, name)?;
                 match s.kind {
                     SymKind::Const if s.ty == Ty::STRING => (Kind::StrLit(s.val as u32), s.ty),
+                    SymKind::Const if self.types.is_set(s.ty) => {
+                        (self.ast.nodes[s.val as usize].kind, s.ty)
+                    }
                     SymKind::Const => (Kind::IntLit(s.val), s.ty),
                     SymKind::Var | SymKind::Local | SymKind::Ref => match self.types.sig(s.ty) {
                         // A procedural variable in an expression is called.
@@ -1283,6 +1303,28 @@ impl Cx<'_> {
                 (inner.kind, inner.ty)
             }
             Kind::Unary(op, a) => self.unary(e, op, a)?,
+            Kind::SetLit(items) => {
+                let mut base = Ty::NONE;
+                for item in self.ast.items(items).to_vec() {
+                    self.expr(item)?;
+                    let ty = self.ast.nodes[item as usize].ty;
+                    let el = self.types.element(base, ty);
+                    base = el.map_err(|code| self.err(item, code))?;
+                }
+                (n.kind, self.types.set(base))
+            }
+            Kind::Range(lo, hi) => {
+                self.expr(lo)?;
+                self.expr(hi)?;
+                let (a, b) = (
+                    self.ast.nodes[lo as usize].ty,
+                    self.ast.nodes[hi as usize].ty,
+                );
+                if !self.types.compat(a, b) {
+                    return Err(self.err(hi, 26));
+                }
+                (n.kind, a)
+            }
             Kind::Binary(op, a, b) => {
                 self.expr(a)?;
                 self.expr(b)?;
@@ -1320,6 +1362,15 @@ impl Cx<'_> {
         self.ast.nodes[e as usize].kind = kind;
         self.ast.nodes[e as usize].ty = ty;
         Ok(())
+    }
+
+    /// A set element or range whose ends are constants.
+    fn fixed(&self, item: Id) -> bool {
+        let lit = |i: Id| matches!(self.ast.nodes[i as usize].kind, Kind::IntLit(_));
+        match self.ast.nodes[item as usize].kind {
+            Kind::Range(lo, hi) => lit(lo) && lit(hi),
+            _ => lit(item),
+        }
     }
 
     /// `T(x)`: the ordinal value of `x` as type `ty`.

@@ -120,6 +120,45 @@ begin
   StrInsert := Copy(s, 1, i - 1) + src + Copy(s, i, 255)
 end;
 
+{ Set helpers the compiler calls: a set is 32 bytes, bit i of byte i div 8 is element i. }
+type SetBuf = array[0..31] of Byte;
+
+{ d := a + b, a * b or a - b for op 0, 1, 2; d may be a or b. }
+procedure SetOp(var d, a, b: SetBuf; op: Integer);
+var i: Integer;
+begin
+  for i := 0 to 31 do
+    if op = 0 then d[i] := a[i] or b[i]
+    else if op = 1 then d[i] := a[i] and b[i]
+    else d[i] := a[i] and not b[i]
+end;
+
+{ d := d + [lo..hi]; elements are taken modulo 256, as TP does. }
+procedure SetAdd(var d: SetBuf; lo, hi: Integer);
+var i: Integer;
+begin
+  hi := hi and 255;
+  for i := lo and 255 to hi do d[i shr 3] := d[i shr 3] or (1 shl (i and 7))
+end;
+
+function SetIn(var s: SetBuf; i: Integer): Boolean;
+begin
+  SetIn := (i >= 0) and (i <= 255) and ((s[i shr 3] and (1 shl (i and 7))) <> 0)
+end;
+
+{ Bit 0: a has an element that b lacks. Bit 1: b has an element that a lacks. }
+function SetCmp(var a, b: SetBuf): Integer;
+var i, r: Integer;
+begin
+  r := 0;
+  for i := 0 to 31 do
+  begin
+    if (a[i] and not b[i]) <> 0 then r := r or 1;
+    if (b[i] and not a[i]) <> 0 then r := r or 2
+  end;
+  SetCmp := r
+end;
+
 { Heap (decision 18): from HeapOrg up to the stack limit, 8-byte blocks. HeapOrg and HeapPtr are
   adjacent and both set to the end of static data by the compiler. A free block holds its size
   and the address of the next free block; the list is first-fit and unordered. }

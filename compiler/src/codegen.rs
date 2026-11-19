@@ -2,7 +2,7 @@
 //! Static data: a fixed header, the globals (`check::GLOBALS`..), then the string literals that
 //! live bodies use. Bodies are emitted from a worklist (decision 14).
 use crate::ast::{Ast, Id, Kind, List, Op};
-use crate::check::{Info, H_ABS, H_ASSIGN, H_CAT, H_CMP};
+use crate::check::{Info, H_ABS, H_ASSIGN, H_CAT, H_CMP, H_SETADD, H_SETCMP, H_SETIN, H_SETOP};
 use crate::types::{Routine, SymKind, Symbol, Tag, Ty, Type};
 use crate::wasm::{Code, Label, Module, FUNC, GLOBAL, I32, MEM, VOID};
 
@@ -18,6 +18,7 @@ const BUF_LEN: i32 = 12;
 const TOP: u32 = PAGES * 65536;
 /// Bytes of a string temporary: the length byte and 255 characters.
 const STRING_TEMP: u32 = 256;
+const SET_TEMP: u32 = 32;
 /// The shadow stack may use the top 64 KB of memory (docs/abi.md).
 const STACK_LIMIT: i32 = (TOP - 65536) as i32;
 const SP: u32 = 0;
@@ -115,7 +116,7 @@ struct Gen<'a> {
     fp: Option<u32>,
     /// Offset of the string temporaries in the frame: the end of the declared frame.
     frame: u32,
-    /// The next free string temporary, and how many a statement used at most.
+    /// Bytes of temporaries in use, and the most a statement used.
     temp: u32,
     temps: u32,
     /// Lexical depth of the routine; a routine of depth 2 or more has its static link in
@@ -247,7 +248,7 @@ fn body(
     g.code.end();
     let inner = std::mem::take(&mut g.code);
     if let Some(fp) = g.fp {
-        let frame = g.frame + STRING_TEMP * g.temps;
+        let frame = g.frame + g.temps;
         g.code
             .idx(GLOBAL_GET, SP)
             .i32_const(frame as i32)
@@ -459,12 +460,17 @@ impl Gen<'_> {
         self.fp.unwrap_or_default()
     }
 
-    /// A new string temporary, returned as its frame offset. A statement's temporaries are
-    /// not reused within it.
-    fn new_temp(&mut self) -> u32 {
-        self.temp += 1;
+    /// A new temporary of `size` bytes, returned as its frame offset. A statement's
+    /// temporaries are not reused within it.
+    fn new_temp(&mut self, size: u32) -> u32 {
+        self.temp += size;
         self.temps = self.temps.max(self.temp);
-        self.frame + STRING_TEMP * (self.temp - 1)
+        self.frame + self.temp - size
+    }
+
+    fn helper(&mut self, h: usize) {
+        let f = self.layout.func(self.info.helpers[h]);
+        self.code.idx(CALL, f);
     }
 
     fn temp_addr(&mut self, offset: u32) {
@@ -484,7 +490,7 @@ impl Gen<'_> {
                 self.code.i32_const(addr as i32);
             }
             Kind::CharToStr(c) => {
-                let t = self.new_temp();
+                let t = self.new_temp(STRING_TEMP);
                 self.temp_addr(t);
                 self.code.i32_const(1).mem(I32_STORE8, 0, 0);
                 self.temp_addr(t);
@@ -493,7 +499,7 @@ impl Gen<'_> {
                 self.temp_addr(t);
             }
             Kind::Binary(Op::Add, a, b) => {
-                let t = self.new_temp();
+                let t = self.new_temp(STRING_TEMP);
                 self.temp_addr(t);
                 self.str(a);
                 self.str(b);
@@ -626,8 +632,52 @@ impl Gen<'_> {
         }
     }
 
-    /// Pushes the address of the designator `e`.
+    /// Pushes the address of the designator `e`, or of the temporary holding the set value `e`
+    /// (a constructor, or the result of `+ * -`).
     fn address_of(&mut self, e: Id) {
+        match self.ast.nodes[e as usize].kind {
+            Kind::SetLit(items) => {
+                let t = self.new_temp(SET_TEMP);
+                for _ in 0..3 {
+                    self.temp_addr(t);
+                }
+                self.code.i32_const(2);
+                self.helper(H_SETOP);
+                let single = self.new_local();
+                for &item in self.ast.items(items) {
+                    self.temp_addr(t);
+                    let (lo, hi) = match self.ast.nodes[item as usize].kind {
+                        Kind::Range(lo, hi) => (lo, Some(hi)),
+                        _ => (item, None),
+                    };
+                    self.expr(lo);
+                    match hi {
+                        Some(hi) => self.expr(hi),
+                        None => {
+                            self.code.idx(LOCAL_TEE, single).idx(LOCAL_GET, single);
+                        }
+                    }
+                    self.helper(H_SETADD);
+                }
+                self.temp_addr(t);
+                return;
+            }
+            Kind::Binary(op, a, b) => {
+                let t = self.new_temp(SET_TEMP);
+                self.temp_addr(t);
+                self.address_of(a);
+                self.address_of(b);
+                self.code.i32_const(match op {
+                    Op::Add => 0,
+                    Op::Mul => 1,
+                    _ => 2,
+                });
+                self.helper(H_SETOP);
+                self.temp_addr(t);
+                return;
+            }
+            _ => {}
+        }
         let offset = self.addr(e);
         if offset > 0 {
             self.code.i32_const(offset as i32).op(I32_ADD);
@@ -671,7 +721,7 @@ impl Gen<'_> {
         if routine.depth > 1 {
             self.frame_ptr(self.depth + 1 - routine.depth);
         }
-        let result = routine.result_ptr.then(|| self.new_temp());
+        let result = routine.result_ptr.then(|| self.new_temp(STRING_TEMP));
         if let Some(t) = result {
             self.temp_addr(t);
         }
@@ -980,6 +1030,23 @@ impl Gen<'_> {
                 self.code.end();
             }
             Kind::Unary(op, a) => self.unary(op, a, n.ty),
+            Kind::Binary(Op::In, a, set) => {
+                self.address_of(set);
+                self.expr(a);
+                self.helper(H_SETIN);
+            }
+            Kind::Binary(op, a, b) if self.info.types.is_set(self.ast.nodes[a as usize].ty) => {
+                self.address_of(a);
+                self.address_of(b);
+                self.helper(H_SETCMP);
+                let mask = match op {
+                    Op::Le => 1,
+                    Op::Ge => 2,
+                    _ => 3,
+                };
+                let test = binary_op(if op == Op::Ne { Op::Ne } else { Op::Eq });
+                self.code.i32_const(mask).op(I32_AND).i32_const(0).op(test);
+            }
             Kind::Binary(op, a, b) if self.info.types.is_str(self.ast.nodes[a as usize].ty) => {
                 self.str(a);
                 self.str(b);

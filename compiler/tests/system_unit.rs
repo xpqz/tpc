@@ -24,7 +24,12 @@ var HeapOrg, HeapPtr: LongInt;\n\
 function HeapGet(n: LongInt): Pointer;\nbegin\n  HeapGet := nil\nend;\n\
 procedure HeapPut(p: Pointer; n: LongInt);\nbegin\nend;\n\
 function HeapMark: Pointer;\nbegin\n  HeapMark := nil\nend;\n\
-procedure HeapRelease(p: Pointer);\nbegin\nend;\n";
+procedure HeapRelease(p: Pointer);\nbegin\nend;\n\
+type SetBuf = array[0..31] of Byte;\n\
+procedure SetOp(var d, a, b: SetBuf; op: Integer);\nbegin\nend;\n\
+procedure SetAdd(var d: SetBuf; lo, hi: Integer);\nbegin\nend;\n\
+function SetIn(var s: SetBuf; i: Integer): Boolean;\nbegin\n  SetIn := False\nend;\n\
+function SetCmp(var a, b: SetBuf): Integer;\nbegin\n  SetCmp := 0\nend;\n";
 
 fn fixtures(sub: &str) -> std::path::PathBuf {
     driver::root()

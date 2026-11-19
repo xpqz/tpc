@@ -93,6 +93,7 @@ const REL: &[(&[u8], Op)] = &[
     (b">", Op::Gt),
     (b"<=", Op::Le),
     (b">=", Op::Ge),
+    (b"IN", Op::In),
 ];
 
 impl Parser {
@@ -399,6 +400,11 @@ impl Parser {
             self.expect_sym(b")", 89)?;
             let list = self.ast.list(&names);
             return Ok(self.ast.add(Kind::Enum(list), line, col));
+        }
+        if self.kw(b"SET") {
+            self.expect_kw(b"OF", 54)?;
+            let base = self.type_spec()?;
+            return Ok(self.ast.add(Kind::SetType(base), line, col));
         }
         if self.kw(b"PACKED") && !self.is(Tk::Kw, b"ARRAY") && !self.is(Tk::Kw, b"RECORD") {
             return Err(self.err(5));
@@ -820,6 +826,26 @@ impl Parser {
                 self.at += 1;
                 self.ast.strs.push(bytes);
                 Kind::StrLit(self.ast.strs.len() as u32 - 1)
+            }
+            Tk::Sym if t.text == b"[" => {
+                self.at += 1;
+                let mut items = Vec::new();
+                while !self.is(Tk::Sym, b"]") {
+                    let lo = self.expr()?;
+                    items.push(match self.sym(b"..") {
+                        true => {
+                            let hi = self.expr()?;
+                            self.ast.add(Kind::Range(lo, hi), line, col)
+                        }
+                        false => lo,
+                    });
+                    if !self.sym(b",") {
+                        break;
+                    }
+                }
+                self.expect_sym(b"]", 93)?;
+                let list = self.ast.list(&items);
+                return Ok(self.ast.add(Kind::SetLit(list), line, col));
             }
             Tk::Sym if t.text == b"(" => {
                 self.at += 1;
