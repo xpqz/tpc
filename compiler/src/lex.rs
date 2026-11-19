@@ -30,6 +30,9 @@ pub enum Tk {
     Ctrl,
     Kw,
     Sym,
+    /// Scanning failed here: `int` is the error code, `line`, `col` and `file` its position.
+    /// TP scans on demand, so the error belongs to the point where the parser reaches it.
+    Error,
     Eof,
 }
 
@@ -45,6 +48,23 @@ pub struct Tok {
     pub file: u32,
     pub range_checks: bool,
     pub io_checks: bool,
+}
+
+impl Tok {
+    /// The token that stands for the scanning error `d`.
+    pub fn error(d: Diag) -> Tok {
+        Tok {
+            kind: Tk::Error,
+            line: d.line,
+            col: d.col,
+            text: Vec::new(),
+            int: i64::from(d.code),
+            real: 0.0,
+            file: d.file,
+            range_checks: false,
+            io_checks: true,
+        }
+    }
 }
 
 /// The reserved words, upper case and space separated; `word` scans the list for each

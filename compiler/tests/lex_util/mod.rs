@@ -215,6 +215,7 @@ pub fn k(t: &Tok) -> Tk {
         R::Directive => Tk::Directive,
         R::Ctrl => Tk::Ctrl,
         R::Eof => Tk::Eof,
+        R::Error => panic!("the lexer never makes error tokens"),
         R::Kw => *KWS
             .iter()
             .find(|v| format!("{v:?}").to_uppercase().as_bytes() == t.text)

@@ -32,6 +32,7 @@ pub mod code {
     pub const UNEXPECTED_END_OF_FILE: u16 = 10;
     pub const LINE_TOO_LONG: u16 = 11;
     pub const TYPE_IDENTIFIER_EXPECTED: u16 = 12;
+    pub const INVALID_FILENAME: u16 = 14;
     pub const FILE_NOT_FOUND: u16 = 15;
     pub const INVALID_DIRECTIVE: u16 = 17;
     pub const UNDEFINED_POINTER_TARGET: u16 = 19;
@@ -118,6 +119,7 @@ pub const TABLE: &[(u16, &str)] = &[
     (10, "Unexpected end of file"),
     (11, "Line too long"),
     (12, "Type identifier expected"),
+    (14, "Invalid file name"),
     (15, "File not found"),
     (17, "Invalid compiler directive"),
     (19, "Undefined type in pointer definition"),
@@ -178,6 +180,7 @@ pub const TABLE: &[(u16, &str)] = &[
     (113, "Error in statement"),
     (118, "Include files are not allowed here"),
     (121, "Invalid qualifier"),
+    (122, "Invalid variable reference"),
     (126, "Files must be var parameters"),
     (128, "Misplaced conditional directive"),
     (129, "ENDIF directive missing"),

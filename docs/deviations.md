@@ -115,7 +115,7 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
-| D38 | `{$A B D F L O S V}` switches and `{$M stack,heapmin,heapmax}` | Change code generation, the stack and the heap | Checked as TP checks them (stack 1024 to 65520, heap sizes 0 to 655360) and ignored | `{$N}` and `{$E}`, which TP accepts, stay error 200 (8087 code is omitted); other letters are error 17 as in TP. Odd forms TP tolerates (`{$A++}`, `{$A+B-}`, a `;` between the `$M` numbers) are error 17 here |
+| D38 | `{$A B D F L O S V}` switches and `{$M stack,heapmin,heapmax}` | Change code generation, the stack and the heap | Checked as TP checks them (stack 1024 to 65520, heap sizes 0 to 655360) and ignored | `{$N+}` and `{$E+}`, which TP accepts, stay error 200 (8087 code is omitted); their `-` forms are accepted and ignored; other letters are error 17 as in TP, wherever they stand in a list (an `E+` before a bad letter does not hide it). Odd forms TP tolerates (`{$A++}`, `{$A+B-}`, a `;` between the `$M` numbers) are error 17 here |
 | D40 | `SetTextBuf(f, buf[, size])` | Gives the file a program-supplied buffer | Checked as TP checks it (a Text variable, any variable, an optional Word size) and ignored: buffering is internal to System. Output is the same unless the program relies on the buffer's contents | `lang/settextbuf_with_and_without_size_is_ignored` |
 | D41 | `LastMode` and `TextMode` | `LastMode` is the video mode before the program started; `TextMode(m)` switches mode, clears the screen and sets `LastMode` to `m` | `LastMode` is a Word variable fixed at 3 (`CO80`); `TextMode` is omitted (error 3) | `lang/swag_crt_lastmode` |
 
@@ -124,3 +124,22 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
 | D39 | `FExpand`, `GetDir`, `DosError` on a flat virtual file system | `FExpand` and `GetDir` use the real current directory of each drive (the oracle runs with `C:\` current, so the corpus cannot tell); `DosError` holds whatever the unit data held at start | The current directory of every drive is its root; `GetDir(d)` is the letter `Chr(64 + d)` (0 is `C`) and `:\`, with no check that the drive exists; `DosError` is 0 and nothing sets it. `FExpand` upper-cases ASCII only | `FindFirst`, `FindNext`, `FSearch`, `DiskSize`, `DiskFree`, `ChDir`, `GetFAttr`, `GetFTime` are omitted (see subset.md) |
+
+## Diagnostics order and fidelity (#94)
+
+TP is a one-pass compiler that scans one token at a time; this compiler parses the whole file,
+then checks it. Scanning errors (illegal character, bad number, unterminated string, line too
+long, bad directive, missing include) are deferred to the point where the parser reaches them,
+so a syntax error earlier in the file wins as in TP, and text after the final `end.` is never
+scanned. The rows below are what remains.
+
+| # | Deviation | TP5 | This compiler | Notes |
+|---|---|---|---|---|
+| D42 | A syntax error after a semantic error | The semantic error (3, 26, 44, 88, ...) at its own line, because checking happens while reading | The syntax error (85, 89, 93, 113, ...) wins: parsing finishes before checking starts | Six of the 134 SWAG both-reject files (`ansi/0014`, `findrepl/0006`, `math/0075`, `math/0083`, `textedit/0009`, `memory/0021`). Fixing it needs the checker to run over the part of the program parsed before the error (error recovery in the parser); the checker is at its budget. `new[q)`: TP 88, ours 93 is the same cause. Tests: none (PENDING would need the fix) |
+| D43 | `extended`, `double`, `single`, `comp` without `{$N+}` | Declaring them is accepted; the first expression that uses one is error 116 *Must be in 8087 mode* | Error 200 at the declaration (8087 types are omitted) | `{$N+}` is also 200 here. `math/0104` (TP 116 at the first use) |
+| D44 | `{$L file.OBJ}` | Links the object file; error 15 at the end of the program when the file is missing (the usual case in SWAG) | Error 17 at the directive | The external routines it supplies cannot be linked here. Two SWAG files |
+| D45 | A program that TP rejects for a feature that this compiler omits | The error of the TP rule (3, 122, 11, 42, 26, ...) | Error 200 at the omitted feature when it comes first in the file | 20 of 134: the omitted feature (typed file, label, `{$N+}`, ...) is accepted by TP, so no ordering fix is possible |
+
+An include whose name has a directory part (`{$I c:\ra\x.inc}`) that cannot be found is error 14
+as in TP when the directory is missing; TP says 15 when the directory exists and the file does
+not, which a flat file table cannot tell apart (14 is reported).

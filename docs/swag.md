@@ -162,6 +162,13 @@ before TP's error: 27 + 7 + 4 + 3 + ...), and TP 36 against ours 5/7/8/17 (12; p
 where the first token is not Pascal). Diagnostics numbers in `tests/neg` are exact, so the
 12 *BEGIN expected* disagreements show how far recovery of unusual tokens is from TP.
 
+Re-run after #94 (`tools/swag.sh` cache, tp5c from this branch, error number and line must both
+match): 72 of 134 agreed before, 103 after. Fixed: error 17 against 200 for a `{$A+,...,G+}` list
+whose bad letter follows `N`/`E` (23 files), and TP 36/11 and others against our scanner errors
+(about 8 files; scanning errors are now deferred, see D42 to D45 in deviations.md). The 31 left are 20
+omitted features that TP accepts (D45), 6 syntax errors after a semantic one (D42), and
+`{$L}`, `extended`, `FindFirst`, and a data segment overflow.
+
 ## Proposed bug issues (for the lead to file)
 
 1. **Accept the harmless compiler switches.** `{$A+ B- D- L- S- V- O-}` and the other letters
