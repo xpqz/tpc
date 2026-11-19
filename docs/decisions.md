@@ -348,6 +348,8 @@ Plan §1 budgets "Types, symbols, frame layout" (1,400) separately from the chec
 (2,200), but the scope stack, storage choice and frame placement were written in
 check.rs. #57 moves them into symbols.rs under the types component. Conditions: symbols.rs
 owns its state and never depends on the checker (guarded by a test); limits are
-unchanged; behaviour is byte-identical. Measured before the move: about 165 checker lines.
+unchanged; behaviour is byte-identical. Measured before the move: about 165 checker lines;
+the move took 314, including the predefined-name table and System helper binding, which
+are symbol-table work (checker 1,989 to 1,675; types+symbols 659 to 1,059).
 Checker allowances for #52-#54 are set at each RED verdict at ~1.5x the implementer's
 estimate, with negatives pruned there.
