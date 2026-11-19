@@ -1,0 +1,34 @@
+
+ F1 add  F2 sub  F3 reset  Esc quit
+                                       Counter
+
+                                          -2
+
+
+
+
+
+
+bye -2
+
+
+
+
+
+
+
+
+
+
+
+
+subtracted
+cursor 7 12
+exit 0
+attr 3 40 21 1F
+attr 4 40 21 1F
+attr 5 40 21 1F
+attr 6 40 21 1F
+attr 7 40 21 1F
+attr 8 40 21 1F
+attr 25 1 80 70
