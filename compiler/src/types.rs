@@ -200,9 +200,29 @@ pub enum Intrinsic {
     Dec,
     Str,
     Val,
+    FillChar,
+    Move,
+    Exp,
+    Ln,
+    Sin,
+    Cos,
+    ArcTan,
 }
 
 impl Intrinsic {
+    /// The functions of one numeric argument that return a Real computed by a System routine.
+    pub fn is_real_function(self) -> bool {
+        matches!(
+            self,
+            Intrinsic::Exp | Intrinsic::Ln | Intrinsic::Sin | Intrinsic::Cos | Intrinsic::ArcTan
+        )
+    }
+
+    /// An intrinsic that is a function of one argument, never a statement or a variable.
+    pub fn is_function(self) -> bool {
+        self.unary_op().is_some() || self.is_real_function()
+    }
+
     /// The operator behind an intrinsic function of one argument.
     pub fn unary_op(self) -> Option<Op> {
         match self {

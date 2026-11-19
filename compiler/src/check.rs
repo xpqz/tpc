@@ -24,7 +24,9 @@
 //! Several intrinsics are rewritten into an assignment of a System helper's result:
 //! `Inc(x, n)` is `x := Ord(x) + n`, `New(p)` is `p := HeapGet(size)`, `Delete(s, i, n)` is
 //! `s := StrDelete(s, i, n)`, `Str`, `Val`, `Insert`, `GetMem`, `Mark` likewise; `Concat` is
-//! a chain of `+`. Codegen then needs no knowledge of them.
+//! a chain of `+`, and `Exp`, `Sin` and the like are calls of System routines. Codegen then
+//! needs no knowledge of them. `FillChar` and `Move` become `FillMem` and `CopyMem` nodes
+//! whose addresses are `@x` nodes, because an untyped `var` parameter has no Pascal type.
 use crate::ast::{Ast, Id, Kind, List, Op, Plan, NO_NAME};
 use crate::diag::{code, Diag};
 use crate::symbols::{Helper, SymbolError, Symbols, HELPERS, MAX_DATA};
@@ -1001,9 +1003,7 @@ impl Cx<'_> {
                     code::LEFT_PAREN_EXPECTED
                 }
             }
-            Some(SymKind::Intrinsic(i)) if i.unary_op().is_some() => {
-                code::INVALID_VARIABLE_REFERENCE
-            }
+            Some(SymKind::Intrinsic(i)) if i.is_function() => code::INVALID_VARIABLE_REFERENCE,
             _ => code::VARIABLE_EXPECTED,
         }
     }
@@ -1249,6 +1249,9 @@ impl Cx<'_> {
                 return Err(self.err(target, code::INVALID_VARIABLE_REFERENCE));
             }
             SymKind::Routine(_) => return Err(self.err(target, code::SEMICOLON_EXPECTED)),
+            SymKind::Intrinsic(i) if i.is_function() => {
+                return Err(self.err(target, code::LEFT_PAREN_EXPECTED));
+            }
             _ => return Err(self.err(target, code::ERROR_IN_STATEMENT)),
         };
         self.ast.resolve(target, kind, ty);
@@ -1345,6 +1348,8 @@ impl Cx<'_> {
                 self.inc_dec(id, i, args)?
             }
             SymKind::Intrinsic(Intrinsic::Halt) => self.halt_call(id, args)?,
+            SymKind::Intrinsic(Intrinsic::FillChar) => self.fill_char(id, args)?,
+            SymKind::Intrinsic(Intrinsic::Move) => self.move_bytes(id, args)?,
             SymKind::Intrinsic(Intrinsic::Str) => self.str_call(id, args)?,
             SymKind::Intrinsic(Intrinsic::Val) => self.val_call(id, args)?,
             SymKind::Intrinsic(Intrinsic::Exit) => {
@@ -1360,6 +1365,9 @@ impl Cx<'_> {
                 Kind::Invoke(r, args)
             }
             SymKind::Routine(_) => return Err(self.err(id, code::INVALID_VARIABLE_REFERENCE)),
+            SymKind::Intrinsic(i) if i.is_function() => {
+                return Err(self.err(id, code::INVALID_VARIABLE_REFERENCE));
+            }
             kind if kind.is_variable() => match self.types.sig(symbol.ty) {
                 Some((params, Ty::NONE)) => self.indirect(id, callee, params, args, false)?,
                 _ => return Err(self.err(id, code::ASSIGN_EXPECTED)),
@@ -1736,7 +1744,7 @@ impl Cx<'_> {
                 let no_args = self.ast.list(&[]);
                 self.function_call(e, e, r, no_args)?
             }
-            SymKind::Intrinsic(i) if i.unary_op().is_some() => {
+            SymKind::Intrinsic(i) if i.is_function() => {
                 return Err(self.err(e, code::LEFT_PAREN_EXPECTED));
             }
             _ => return Err(self.err(e, code::ERROR_IN_EXPRESSION)),
@@ -1777,6 +1785,7 @@ impl Cx<'_> {
                 None => return Err(self.err(e, code::RIGHT_PAREN_EXPECTED)),
             },
             SymKind::Intrinsic(Intrinsic::SizeOf) => self.size_of(e, args)?,
+            SymKind::Intrinsic(i) if i.is_real_function() => self.real_function(e, i, args)?,
             SymKind::Intrinsic(Intrinsic::Concat) => self.concat(e, args)?,
             SymKind::Intrinsic(i) => match i.unary_op() {
                 Some(op) => {
@@ -1988,6 +1997,9 @@ impl Cx<'_> {
 
     /// Error 87 (too few) or 89 (too many) at `at` unless `min..=max` arguments were given.
     fn expect_arg_count(&self, at: Id, count: usize, min: usize, max: usize) -> R<()> {
+        if count == 0 && min > 0 {
+            return Err(self.err(at, code::LEFT_PAREN_EXPECTED));
+        }
         if count < min {
             return Err(self.err(at, code::COMMA_EXPECTED));
         }
@@ -2266,6 +2278,72 @@ impl Cx<'_> {
         };
         let call = self.helper_call(at, helper, &[source, error_code], result);
         Ok(Kind::Assign(target, call))
+    }
+
+    /// `Exp`, `Ln`, `Sin`, `Cos` and `ArcTan` of an integer or Real: a call of the System
+    /// routine that computes it, with the argument converted to Real.
+    fn real_function(&mut self, at: Id, which: Intrinsic, args: List) -> R<(Kind, Ty)> {
+        let items = self.ast.items_vec(args);
+        self.expect_arg_count(at, items.len(), 1, 1)?;
+        let operand = items[0];
+        self.expr(operand)?;
+        // Like `Sqrt`, the operand must be an integer or a Real (error 79).
+        let operand_ty = self.ast.ty(operand);
+        self.types
+            .unary(Op::Sqrt, operand_ty)
+            .map_err(|code| self.err(at, code))?;
+        self.coerce_real(operand);
+        let helper = match which {
+            Intrinsic::Exp => Helper::Exp,
+            Intrinsic::Ln => Helper::Ln,
+            Intrinsic::Sin => Helper::Sin,
+            Intrinsic::Cos => Helper::Cos,
+            _ => Helper::ArcTan,
+        };
+        let call = self.helper_call(at, helper, &[operand], Ty::REAL);
+        Ok((self.ast.kind(call), Ty::REAL))
+    }
+
+    /// The address of the variable `arg` of an untyped `var` parameter: any variable is
+    /// accepted, whatever its type, and it must live in memory like any address-taken one.
+    fn address_of_variable(&mut self, at: Id, arg: Id) -> R<Id> {
+        self.variable(arg)?;
+        if let Kind::Var(sym) = self.ast.kind(arg) {
+            self.symbols.capture(sym, true);
+        }
+        Ok(self.ast.typed(Kind::AddrOf(arg), Ty::POINTER, at))
+    }
+
+    /// A byte count of type Word: any integer expression, a constant within 0 to 65535.
+    fn byte_count(&mut self, at: Id, count: Id) -> R<()> {
+        self.expr(count)?;
+        self.argument_assignable(at, Ty::WORD, count, Origin::System)
+    }
+
+    /// `FillChar(x, count, value)`: stores `value`, an ordinal, in `count` bytes from `x`.
+    fn fill_char(&mut self, at: Id, args: List) -> R<Kind> {
+        let items = self.ast.items_vec(args);
+        self.expect_arg_count(at, items.len(), 3, 3)?;
+        let (target, count, value) = (items[0], items[1], items[2]);
+        let first_byte = self.address_of_variable(at, target)?;
+        self.byte_count(at, count)?;
+        self.expr(value)?;
+        match self.types.tag(self.ast.ty(value)) {
+            None => return Err(self.err(value, code::ORDINAL_EXPRESSION_EXPECTED)),
+            Some(Tag::Int) => self.argument_assignable(at, Ty::BYTE, value, Origin::System)?,
+            Some(_) => {}
+        }
+        Ok(Kind::FillMem(first_byte, count, value))
+    }
+
+    /// `Move(source, dest, count)`: copies `count` bytes, correctly when they overlap.
+    fn move_bytes(&mut self, at: Id, args: List) -> R<Kind> {
+        let items = self.ast.items_vec(args);
+        self.expect_arg_count(at, items.len(), 3, 3)?;
+        let source = self.address_of_variable(at, items[0])?;
+        let dest = self.address_of_variable(at, items[1])?;
+        self.byte_count(at, items[2])?;
+        Ok(Kind::CopyMem(dest, source, items[2]))
     }
 
     /// `Halt` and `Halt(code)`: a call of System's `HostHalt` with the exit code, 0 without

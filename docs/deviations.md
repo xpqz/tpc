@@ -105,3 +105,9 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | D34 | A parameterless function called with arguments inside `if`, `[]`, `for` bounds or `case` | Error 40, 93, 58 or 54 (the next token the construct expects) | Error 85 | Matching needs an expected-token context through `expr` (#81); assignment and argument positions match TP |
 | D35 | DOS device names in Assign (COM1, LPT1, PRN, AUX, CON, NUL) | Devices | Ordinary file names | Decision 50 |
 | D36 | Reading a variable never assigned | Memory contents (garbage) | Zero (memory starts zeroed) | Decision 50; tests never depend on it |
+
+## Real math functions (#87)
+
+| # | Deviation | TP5 | This compiler | Notes |
+|---|---|---|---|---|
+| D37 | `Exp`, `Ln`, `Sin`, `Cos`, `ArcTan` in 64-bit arithmetic | 48-bit Real (11 to 12 significant digits); `Exp(x)` overflows (205) above about 88.7; `Sin` and `Cos` lose accuracy for large arguments in their own way | Results are accurate to about 1E-15 for moderate arguments (decision 19); `Exp` overflows (205) above 709.78; `Sin` and `Cos` are accurate while the argument is below about 1E9; the zero or negative argument of `Ln` is error 207 as in TP5 | Tests print at most the digits both representations agree on. System also declares helper names (`ExpReal`, `Reduce`, `Ln2`, ...) that a program can see, as it can the other System helpers |

@@ -1383,6 +1383,12 @@ impl Gen<'_> {
 
     // ---- Statements ----
 
+    /// Pushes a byte count: the checker accepts any integer, TP reads it as a Word.
+    fn word_count(&mut self, count: Id) {
+        self.expr(count);
+        self.code.i32_const(0xFFFF).op(I32_AND);
+    }
+
     fn stmt(&mut self, id: Id) {
         // Each statement starts with no temporaries in use.
         self.temp_in_use = 0;
@@ -1394,6 +1400,19 @@ impl Gen<'_> {
                 self.invoke(id, r, args);
             }
             Kind::Indirect(callee, args) => self.indirect(callee, args),
+            // memory.fill takes (address, byte, count); memory.copy (dest, source, count).
+            Kind::FillMem(first_byte, count, value) => {
+                self.expr(first_byte);
+                self.expr(value);
+                self.word_count(count);
+                self.code.memory_fill();
+            }
+            Kind::CopyMem(dest, source, count) => {
+                self.expr(dest);
+                self.expr(source);
+                self.word_count(count);
+                self.code.memory_copy();
+            }
             Kind::RunErr(code) => {
                 self.expr(code);
                 self.code.call(self.layout.indexes.host_rterror);

@@ -88,6 +88,10 @@ pub enum Kind {
     PtrType(u32),
     /// `RunError(code)`.
     RunErr(Id),
+    /// `FillChar`: the address of the first byte, the count and the byte value.
+    FillMem(Id, Id, Id),
+    /// `Move`: the destination address, the source address and the count.
+    CopyMem(Id, Id, Id),
     /// A parenthesised name: not a variable reference for a `var` argument.
     Paren(Id),
     Exit,
