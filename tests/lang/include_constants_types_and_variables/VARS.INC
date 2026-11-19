@@ -1,0 +1,2 @@
+  p: TPoint;
+  counter: Integer;
