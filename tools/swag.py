@@ -134,6 +134,8 @@ def ours(program, work):
     except subprocess.TimeoutExpired:
         return "timeout", "", ""
     text = r.stdout.decode("latin1")
+    if r.returncode == 2 and b"output limit" in r.stderr:  # endless output: TP times out too
+        return "timeout", "", ""
     killed = r.returncode < 0  # node aborted (out of memory) or crashed
     if killed or (r.returncode == 2 and b"run.mjs:" in r.stderr):  # else the program's exit code 2
         return "fail", text, r.stderr.decode("latin1").strip()
