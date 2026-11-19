@@ -130,7 +130,7 @@ const ACCEPTED: &[(&str, &str)] = &[
 
 /// TP accepts these; the compiler reports 200 (decision 6) on the given line.
 const UNSUPPORTED: &[(&str, &str, u32)] =
-    &[("other_directive", "program Prog;\n{$B+}\nbegin\nend.", 2)];
+    &[("other_directive", "program Prog;\n{$N+}\nbegin\nend.", 2)];
 
 fn tmp_dir() -> PathBuf {
     crate::common::fresh_dir("procedural")

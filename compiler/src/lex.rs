@@ -13,6 +13,10 @@
 //! `END .`, and hands tokens out one at a time: `directives::expand` pulls them with
 //! `next_token`, and with `next_skipped` inside text that conditional compilation skips.
 //! `lex` collects them all at once and is used by the lexer tests.
+//!
+//! TP reads a source line into a buffer of 127 bytes; a longer line is error 11. The lexer
+//! checks each line when its first byte has been reached, so text after the final `END .` is
+//! never checked, and counts bytes, so a UTF-8 character counts as its encoded length.
 use crate::diag::{code, Diag};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +72,9 @@ pub fn is_ident_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_'
 }
 
+/// The longest source line TP accepts, in bytes, not counting the line terminator.
+const MAX_LINE_BYTES: usize = 127;
+
 struct Scanner<'a> {
     src: &'a [u8],
     pos: usize,
@@ -77,6 +84,9 @@ struct Scanner<'a> {
     /// Where the token being scanned began.
     token_line: u32,
     token_col: u32,
+    /// The first line whose length has not been checked yet, and where it starts.
+    unchecked_line: u32,
+    unchecked_start: usize,
 }
 
 impl Scanner<'_> {
@@ -112,6 +122,29 @@ impl Scanner<'_> {
     fn mark_token_start(&mut self) {
         self.token_line = self.line;
         self.token_col = (self.pos - self.line_start + 1) as u32;
+    }
+
+    /// Checks the length of every line that starts at or before the cursor and has not been
+    /// checked yet: error 11 at the first one that is too long.
+    fn check_line_lengths(&mut self) -> Result<(), Diag> {
+        while self.unchecked_start <= self.pos && self.unchecked_start < self.src.len() {
+            let rest = &self.src[self.unchecked_start..];
+            let line_length = rest.iter().position(|&c| c == b'\n').unwrap_or(rest.len());
+            let text = rest[..line_length]
+                .strip_suffix(b"\r")
+                .unwrap_or(&rest[..line_length]);
+            if text.len() > MAX_LINE_BYTES {
+                return Err(Diag {
+                    code: code::LINE_TOO_LONG,
+                    line: self.unchecked_line,
+                    col: MAX_LINE_BYTES as u32 + 1,
+                    file: 0,
+                });
+            }
+            self.unchecked_line += 1;
+            self.unchecked_start += line_length + 1;
+        }
+        Ok(())
     }
 
     /// Records that the byte at `newline_at` ends a line.
@@ -379,6 +412,8 @@ impl<'a> Lexer<'a> {
             line_start: 0,
             token_line: 1,
             token_col: 1,
+            unchecked_line: 1,
+            unchecked_start: 0,
         };
         Lexer {
             scanner,
@@ -416,11 +451,13 @@ impl<'a> Lexer<'a> {
                 _ => Some(scanner.symbol()?),
             };
             if let Some(token) = token {
+                scanner.check_line_lengths()?;
                 self.finished = ends_program(self.previous.as_ref(), &token);
                 self.previous = Some(token.clone());
                 return Ok(token);
             }
         }
+        scanner.check_line_lengths()?;
         scanner.mark_token_start();
         Ok(scanner.token(Tk::Eof, Vec::new()))
     }
@@ -428,7 +465,7 @@ impl<'a> Lexer<'a> {
     /// The next directive of skipped text, or `Eof`. A string ends at its closing quote or at the
     /// end of the line, so an unterminated one is no error; an unterminated comment swallows
     /// the rest of the text.
-    pub fn next_skipped(&mut self) -> Tok {
+    pub fn next_skipped(&mut self) -> Result<Tok, Diag> {
         let scanner = &mut self.scanner;
         while scanner.pos < scanner.src.len() {
             scanner.mark_token_start();
@@ -440,19 +477,22 @@ impl<'a> Lexer<'a> {
                 b'\'' => scanner.skip_string(),
                 b'{' => {
                     if let Some(directive) = scanner.skip_comment(1, b"}") {
-                        return directive;
+                        scanner.check_line_lengths()?;
+                        return Ok(directive);
                     }
                 }
                 b'(' if scanner.peek(1) == b'*' => {
                     if let Some(directive) = scanner.skip_comment(2, b"*)") {
-                        return directive;
+                        scanner.check_line_lengths()?;
+                        return Ok(directive);
                     }
                 }
                 _ => scanner.pos += 1,
             }
         }
+        scanner.check_line_lengths()?;
         scanner.mark_token_start();
-        scanner.token(Tk::Eof, Vec::new())
+        Ok(scanner.token(Tk::Eof, Vec::new()))
     }
 }
 

@@ -122,9 +122,8 @@ fn strings_may_hold_high_and_control_bytes() {
 
 #[test]
 fn long_string() {
-    let body = "x".repeat(255);
-    assert_eq!(string(&format!("'{body}'")), body.as_bytes());
-    let body = "y".repeat(1000);
+    // A whole source line is at most 127 bytes, quotes included.
+    let body = "x".repeat(125);
     assert_eq!(string(&format!("'{body}'")), body.as_bytes());
 }
 

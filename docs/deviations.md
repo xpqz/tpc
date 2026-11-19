@@ -111,3 +111,9 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
 | D37 | `Exp`, `Ln`, `Sin`, `Cos`, `ArcTan` in 64-bit arithmetic | 48-bit Real (11 to 12 significant digits); `Exp(x)` overflows (205) above about 88.7; `Sin` and `Cos` lose accuracy for large arguments in their own way | Results are accurate to about 1E-15 for moderate arguments (decision 19); `Exp` overflows (205) above 709.78; `Sin` and `Cos` are accurate while the argument is below about 1E9; the zero or negative argument of `Ln` is error 207 as in TP5 | Tests print at most the digits both representations agree on. System also declares helper names (`ExpReal`, `Reduce`, `Ln2`, ...) that a program can see, as it can the other System helpers |
+
+## Compiler switches (SWAG sweep)
+
+| # | Deviation | TP5 | This compiler | Notes |
+|---|---|---|---|---|
+| D38 | `{$A B D F L O S V}` switches and `{$M stack,heapmin,heapmax}` | Change code generation, the stack and the heap | Checked as TP checks them (stack 1024 to 65520, heap sizes 0 to 655360) and ignored | `{$N}` and `{$E}`, which TP accepts, stay error 200 (8087 code is omitted); other letters are error 17 as in TP. Odd forms TP tolerates (`{$A++}`, `{$A+B-}`, a `;` between the `$M` numbers) are error 17 here |
