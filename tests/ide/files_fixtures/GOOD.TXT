@@ -1,0 +1,4 @@
+program Good;
+begin
+  WriteLn(1);
+end.

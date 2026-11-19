@@ -20,6 +20,11 @@ procedure SetMessage(Text: string);
 procedure SetInsertMode(Insert: Boolean);
 procedure Paint;
 
+{ Reads a line on the status line: Enter accepts (True), Esc cancels (False), Backspace edits;
+  extended keys are ignored; at most MaxPromptText characters. Paints itself while it waits and
+  clears the message at the end. }
+function ReadPrompt(Prompt: string; var Text: string): Boolean;
+
 implementation
 
 uses Crt, Buffer;
@@ -36,6 +41,10 @@ const
   MenuText = ' File  Edit  Run  Compile  Options';
   InsertTextColumn = 14;
   MessageColumn = 25;
+  MaxPromptText = 40;
+  BackspaceKey = #8;
+  EnterKey = #13;
+  EscKey = #27;
 
 var
   TopLine: LongInt;
@@ -174,6 +183,40 @@ begin
   GotoXY(1, StatusRow);
   Write(Padded(StatusText, ScreenWidth - 1));
   GotoXY(ScreenColumnOf(Cursor) - LeftColumn + 1, LineOf(Cursor) - TopLine + FirstEditRow);
+end;
+
+function ReadPrompt(Prompt: string; var Text: string): Boolean;
+var
+  Key: Char;
+  Finished, Accepted: Boolean;
+begin
+  Finished := False;
+  Accepted := False;
+  Text := '';
+  while not Finished do
+  begin
+    SetMessage(Prompt + Text);
+    Paint;
+    Key := ReadKey;
+    if Key = EnterKey then
+    begin
+      Finished := True;
+      Accepted := True;
+    end
+    else if Key = EscKey then
+      Finished := True
+    else if Key = #0 then
+      Key := ReadKey
+    else if Key = BackspaceKey then
+    begin
+      if Length(Text) > 0 then
+        Text := Copy(Text, 1, Length(Text) - 1);
+    end
+    else if (Key >= ' ') and (Length(Text) < MaxPromptText) then
+      Text := Text + Key;
+  end;
+  SetMessage('');
+  ReadPrompt := Accepted;
 end;
 
 end.
