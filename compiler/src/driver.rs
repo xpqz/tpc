@@ -22,6 +22,10 @@ const EMBEDDED_UNITS: &[EmbeddedUnit] = &[
         source: include_bytes!("../../runtime/dos.pas"),
     },
     EmbeddedUnit {
+        name: "UTILS",
+        source: include_bytes!("../../runtime/utils.pas"),
+    },
+    EmbeddedUnit {
         name: "IDEHOST",
         source: include_bytes!("../../runtime/idehost.pas"),
     },

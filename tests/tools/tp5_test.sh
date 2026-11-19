@@ -30,6 +30,7 @@ check "circular interface uses" circular_interface 1 "CB.PAS(3): Error 68: Circu
 check "shared directory units are found, the fixture's own unit wins" dirs_use 0 \
     "base unit from a shared directory${NL}the fixture's own stub"
 check "NAME.dirs without a NAME directory" dirs_only 0 "base unit from a shared directory"
+check "NAME.dirs line naming a file copies only that file" dirs_file 0 "base unit from a shared directory"
 
 # Crt programs: stdout and the screen dump, compared with the golden file FIXTURE.out (made
 # by this script on the real TP 5.0 and read through by hand). The address of a run-time

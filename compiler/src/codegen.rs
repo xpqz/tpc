@@ -67,6 +67,7 @@ const MAX_STRING: i32 = 255;
 /// The runtime error numbers raised by generated code.
 const ERROR_DIVISION_BY_ZERO: i32 = 200;
 const ERROR_STACK_OVERFLOW: i32 = 202;
+const ERROR_INVALID_FLOATING_POINT: i32 = 207;
 
 /// The operation selector of `SetOp` in `runtime/system.pas`.
 const SET_UNION: i32 = 0;
@@ -1771,6 +1772,19 @@ impl Gen<'_> {
         self.code.op(F64_TRUNC).op(F64_SUB);
     }
 
+    /// Pushes the square root of the f64 stored in temporary `t`; a negative value is runtime
+    /// error 207, which f64.sqrt would turn into a NaN instead.
+    fn sqrt(&mut self, t: u32) {
+        self.reload(t);
+        self.code.f64_const(0.0).op(F64_LT).if_(VOID);
+        self.code
+            .i32_const(ERROR_INVALID_FLOATING_POINT)
+            .call(self.layout.indexes.host_rterror)
+            .end();
+        self.reload(t);
+        self.code.op(F64_SQRT);
+    }
+
     /// Pushes the address of a Real argument: a designator in place (the callee copies it),
     /// any other value in a temporary.
     fn real_addr(&mut self, e: Id) {
@@ -1828,12 +1842,15 @@ impl Gen<'_> {
                 let t = self.spill(a);
                 self.frac(t);
             }
+            Kind::Unary(Op::Sqrt, a) => {
+                let t = self.spill(a);
+                self.sqrt(t);
+            }
             Kind::Unary(op, a) => {
                 self.real(a);
                 self.code.op(match op {
                     Op::Neg => F64_NEG,
                     Op::Abs => F64_ABS,
-                    Op::Sqrt => F64_SQRT,
                     _ => F64_TRUNC,
                 });
             }

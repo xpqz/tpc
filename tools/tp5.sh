@@ -9,7 +9,8 @@
 # to the program, so units and include files are found (`tpc /M` compiles used units from
 # source) and data files can be opened by the program. Files named *.PAS and *.INC are
 # given CRLF line endings, as the compiler expects; all others are copied byte for byte.
-# DIR/NAME.dirs adds shared directories (see below), for tests of units that live elsewhere.
+# DIR/NAME.dirs adds shared directories, or single files, for tests of units that live
+# elsewhere (see below).
 # If DIR/NAME.in exists, it is the program's stdin (LF is converted to CRLF); stdin and
 # stdout are both redirected, which DOSBox-X supports. Without it stdin is not redirected.
 # Crt programs (decision 37): a program whose uses clause names Crt gets ScrDump and KeyFeed
@@ -40,11 +41,16 @@ sed 's/$/\r/' "$1" > "$w/P.PAS"
 base=${1%.pas}
 # DIR/NAME.dirs lists directories (paths from the repository root, one per line) whose files
 # are copied first, so a test of the IDE's modules finds them in ide/ and its own directory
-# NAME/ can hold a stand-in for a unit (the IDE host unit) that replaces a shared file.
+# NAME/ can hold a stand-in for a unit (the IDE host unit) that replaces a shared file. A line
+# that names a file (runtime/utils.pas) copies just that file.
 if [ -f "$base.dirs" ]; then
   repo=$(cd "$(dirname "$0")/.." && pwd)
   while read -r shared; do
-    [ -z "$shared" ] || cp "$repo/$shared"/* "$w/"
+    if [ -f "$repo/$shared" ]; then
+      cp "$repo/$shared" "$w/"
+    elif [ -n "$shared" ]; then
+      cp "$repo/$shared"/* "$w/"
+    fi
   done < "$base.dirs"
 fi
 if [ -d "$base" ] || [ -f "$base.dirs" ]; then
