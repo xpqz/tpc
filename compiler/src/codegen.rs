@@ -124,38 +124,37 @@ const F64_MUL: u8 = 0xA2;
 const F64_DIV: u8 = 0xA3;
 const F64_CONVERT_I32_S: u8 = 0xB7;
 
-/// Function numbers of the imports every module has; later ones depend on what is used.
-const HOST_WRITE: u32 = 0;
-const HOST_RTERROR: u32 = 1;
-
-/// What the mark phase found: the routines to emit in the order they were reached, and the
-/// optional runtime support the program needs.
+/// What the mark phase found: the defined routines to emit and the `external` routines to
+/// import, each in the order they were reached, and whether the program divides Reals.
 struct Reached {
     routines: Vec<u32>,
-    uses_fmt_real: bool,
+    imports: Vec<u32>,
     uses_real_div: bool,
 }
 
-/// WASM function numbers: imports first (`write`, `rterror`, and `fmt_real` if used), then the
-/// defined functions: the three built-in helpers, `rdiv` if used, the reached routines, the
-/// main program and the table's trap stub.
+/// WASM function numbers: the imports first, in the order they were reached (`write` and
+/// `rterror` always lead, because the built-in functions call them), then the defined
+/// functions: the three built-in helpers, `rdiv` if used, the reached routines, the main
+/// program and the table's trap stub.
 struct Indexes {
+    host_write: u32,
+    host_rterror: u32,
     write_string: u32,
     write_integer: u32,
     quotient: u32,
-    fmt_real: Option<u32>,
     real_div: Option<u32>,
     first_routine: u32,
 }
 
 impl Indexes {
-    fn new(uses_fmt_real: bool, uses_real_div: bool) -> Self {
-        let first_defined = 2 + uses_fmt_real as u32;
+    fn new(import_count: u32, host_write: u32, host_rterror: u32, uses_real_div: bool) -> Self {
+        let first_defined = import_count;
         Indexes {
+            host_write,
+            host_rterror,
             write_string: first_defined,
             write_integer: first_defined + 1,
             quotient: first_defined + 2,
-            fmt_real: uses_fmt_real.then_some(2),
             real_div: uses_real_div.then_some(first_defined + 3),
             first_routine: first_defined + 3 + uses_real_div as u32,
         }
@@ -171,11 +170,14 @@ struct Layout {
     data_end: u32,
     /// True during the mark phase: routines are reached as the bodies mention them.
     marking: bool,
-    /// The reached routines in emission order.
+    /// The reached defined routines in emission order, and the reached `external` ones in
+    /// import order.
     reached: Vec<u32>,
-    /// Position in `reached` of each routine, once reached.
+    imports: Vec<u32>,
+    /// Position of each routine in `reached` or in `imports`, once reached.
     position: Vec<Option<u32>>,
-    uses_fmt_real: bool,
+    /// Whether each routine is `external`.
+    external: Vec<bool>,
     uses_real_div: bool,
     indexes: Indexes,
     /// WASM type of each procedural type, by `Ty` index.
@@ -193,10 +195,11 @@ impl Layout {
             data_end: info.data_end,
             marking: true,
             reached: Vec::new(),
+            imports: Vec::new(),
             position: vec![None; info.routines.len()],
-            uses_fmt_real: false,
+            external: info.routines.iter().map(|r| r.import.is_some()).collect(),
             uses_real_div: false,
-            indexes: Indexes::new(false, false),
+            indexes: Indexes::new(0, 0, 0, false),
             wasm_types: vec![0; info.types.count()],
             table_slots: vec![0; info.routines.len()],
         }
@@ -205,41 +208,56 @@ impl Layout {
     /// A layout for the emit phase: the routines and support found by marking are numbered.
     fn for_emitting(ast: &Ast, info: &Info, reached: &Reached, wasm_types: Vec<u32>) -> Self {
         let mut position = vec![None; info.routines.len()];
-        for (at, &r) in reached.routines.iter().enumerate() {
-            position[r as usize] = Some(at as u32);
+        for list in [&reached.routines, &reached.imports] {
+            for (at, &r) in list.iter().enumerate() {
+                position[r as usize] = Some(at as u32);
+            }
         }
+        let import_number =
+            |helper| position[info.helper(helper) as usize].expect("always reached");
+        let indexes = Indexes::new(
+            reached.imports.len() as u32,
+            import_number(Helper::HostWrite),
+            import_number(Helper::HostRtError),
+            reached.uses_real_div,
+        );
         Layout {
             marking: false,
             reached: reached.routines.clone(),
+            imports: reached.imports.clone(),
             position,
-            uses_fmt_real: reached.uses_fmt_real,
             uses_real_div: reached.uses_real_div,
-            indexes: Indexes::new(reached.uses_fmt_real, reached.uses_real_div),
+            indexes,
             wasm_types,
             table_slots: table_slots(info),
             ..Layout::for_marking(ast, info)
         }
     }
 
-    /// The function number of routine `r`; while marking, the first mention reaches it.
+    /// The function number of routine `r`; while marking, the first mention reaches it. An
+    /// `external` routine is an import, numbered before every defined function.
     fn routine_index(&mut self, r: u32) -> u32 {
+        let is_import = self.external[r as usize];
         let position = match self.position[r as usize] {
             Some(position) => position,
             None => {
                 assert!(self.marking, "routine {r} was not reached while marking");
-                self.reached.push(r);
-                let position = self.reached.len() as u32 - 1;
+                let list = if is_import {
+                    &mut self.imports
+                } else {
+                    &mut self.reached
+                };
+                list.push(r);
+                let position = list.len() as u32 - 1;
                 self.position[r as usize] = Some(position);
                 position
             }
         };
-        self.indexes.first_routine + position
-    }
-
-    /// The function number of the host import `fmt_real`, which marks it as needed.
-    fn fmt_real_index(&mut self) -> u32 {
-        self.uses_fmt_real = true;
-        self.indexes.fmt_real.unwrap_or_default()
+        if is_import {
+            position
+        } else {
+            self.indexes.first_routine + position
+        }
     }
 
     /// The function number of the Real division helper, which marks it as needed.
@@ -315,10 +333,13 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
 /// The mark phase: generates every body, discarding the code, to find what is reached.
 fn mark(ast: &Ast, info: &Info, root: Id) -> Reached {
     let mut layout = Layout::for_marking(ast, info);
+    // The built-in functions call `write` and `rterror`, so every module imports them, first.
+    layout.routine_index(info.helper(Helper::HostWrite));
+    layout.routine_index(info.helper(Helper::HostRtError));
     generate_bodies(ast, info, root, &mut layout);
     Reached {
         routines: layout.reached,
-        uses_fmt_real: layout.uses_fmt_real,
+        imports: layout.imports,
         uses_real_div: layout.uses_real_div,
     }
 }
@@ -361,14 +382,7 @@ fn emit(ast: &Ast, info: &Info, root: Id, reached: &Reached) -> Vec<u8> {
     let mut m = Module::new();
     let wasm_types = register_procedural_types(&mut m, info);
     let mut layout = Layout::for_emitting(ast, info, reached, wasm_types);
-    let write = m.ty(&[I32, I32, I32], &[]);
-    let rterror = m.ty(&[I32], &[]);
-    m.import_func("host", "write", write);
-    m.import_func("host", "rterror", rterror);
-    if reached.uses_fmt_real {
-        let fmt_real = m.ty(&[F64, I32, I32, I32], &[I32]);
-        m.import_func("host", "fmt_real", fmt_real);
-    }
+    emit_imports(&mut m, ast, info, reached);
     m.memory(PAGES);
     m.global_i32(true, TOP as i32);
     emit_builtin_functions(&mut m, &layout);
@@ -402,19 +416,41 @@ fn emit(ast: &Ast, info: &Info, root: Id, reached: &Reached) -> Vec<u8> {
     m.finish()
 }
 
+/// One WASM import from module `host` for each `external` routine the program reaches: a Real
+/// parameter is an f64, every other parameter and the result of a function an i32.
+fn emit_imports(m: &mut Module, ast: &Ast, info: &Info, reached: &Reached) {
+    for &r in &reached.imports {
+        let routine = &info.routines[r as usize];
+        let import_name = routine.import.expect("an external routine");
+        let params: Vec<u8> = routine
+            .params
+            .iter()
+            .map(|p| if p.ty == Ty::REAL { F64 } else { I32 })
+            .collect();
+        let results: &[u8] = if routine.is_function { &[I32] } else { &[] };
+        let ty = m.ty(&params, results);
+        let name = ast.names[import_name as usize].to_ascii_lowercase();
+        m.import_func(
+            "host",
+            std::str::from_utf8(&name).expect("an ASCII name"),
+            ty,
+        );
+    }
+}
+
 /// The functions every module defines, in function-number order: `write_string`,
 /// `write_integer`, `quotient`, and `real_quotient` if the program divides Reals.
 fn emit_builtin_functions(m: &mut Module, layout: &Layout) {
     let write = m.ty(&[I32, I32, I32], &[]);
-    m.func(write, &[], write_string());
+    m.func(write, &[], write_string(layout.indexes.host_write));
     let two_params = m.ty(&[I32, I32], &[]);
     let write_integer_code = write_integer(layout.indexes.write_string);
     m.func(two_params, &[I32, I32, I32], write_integer_code);
     let three_params = m.ty(&[I32, I32, I32], &[I32]);
-    m.func(three_params, &[], quotient());
+    m.func(three_params, &[], quotient(layout.indexes.host_rterror));
     if layout.uses_real_div {
         let real_div = m.ty(&[F64, F64], &[F64]);
-        m.func(real_div, &[], real_quotient());
+        m.func(real_div, &[], real_quotient(layout.indexes.host_rterror));
     }
 }
 
@@ -488,7 +524,7 @@ fn body(ast: &Ast, info: &Info, layout: &mut Layout, routine: Option<&Routine>, 
 
 /// `write_string(pointer, length, width)`: writes the text right-justified in `width`:
 /// `while width > length do (write a space; width := width - 1); write(pointer, length)`.
-fn write_string() -> Code {
+fn write_string(host_write: u32) -> Code {
     let (pointer, length, width) = (0, 1, 2);
     let mut c = Code::new();
     let pad = c.loop_(VOID);
@@ -496,7 +532,7 @@ fn write_string() -> Code {
     c.i32_const(STDOUT)
         .i32_const(SPACE)
         .i32_const(1)
-        .call(HOST_WRITE);
+        .call(host_write);
     c.local_get(width)
         .i32_const(1)
         .op(I32_SUB)
@@ -506,7 +542,7 @@ fn write_string() -> Code {
     c.i32_const(STDOUT)
         .local_get(pointer)
         .local_get(length)
-        .call(HOST_WRITE);
+        .call(host_write);
     c
 }
 
@@ -574,11 +610,11 @@ fn write_integer(write_string_index: u32) -> Code {
 ///     if remainder then return 0 else return 0 - a
 ///   end;
 ///   if remainder then a rem b else a div b
-fn quotient() -> Code {
+fn quotient(host_rterror: u32) -> Code {
     let (a, b, flags) = (0, 1, 2);
     let mut c = Code::new();
     c.local_get(b).op(I32_EQZ).if_(VOID);
-    c.i32_const(ERROR_DIVISION_BY_ZERO).call(HOST_RTERROR).end();
+    c.i32_const(ERROR_DIVISION_BY_ZERO).call(host_rterror).end();
     c.local_get(b).i32_const(-1).op(I32_EQ).if_(VOID);
     // `flags > 1` is true exactly when the 16-bit bit is set (flags is 0..=3).
     c.local_get(flags).i32_const(1).op(I32_GT_S);
@@ -587,7 +623,7 @@ fn quotient() -> Code {
         .op(I32_EQ)
         .op(I32_AND)
         .if_(VOID);
-    c.i32_const(ERROR_DIVISION_BY_ZERO).call(HOST_RTERROR).end();
+    c.i32_const(ERROR_DIVISION_BY_ZERO).call(host_rterror).end();
     c.local_get(flags)
         .i32_const(QUOT_REMAINDER)
         .op(I32_AND)
@@ -610,10 +646,10 @@ fn quotient() -> Code {
 }
 
 /// `real_quotient(a, b)`: `a / b`, but a zero divisor is runtime error 200.
-fn real_quotient() -> Code {
+fn real_quotient(host_rterror: u32) -> Code {
     let mut c = Code::new();
     c.local_get(1).f64_const(0.0).op(F64_EQ).if_(VOID);
-    c.i32_const(ERROR_DIVISION_BY_ZERO).call(HOST_RTERROR).end();
+    c.i32_const(ERROR_DIVISION_BY_ZERO).call(host_rterror).end();
     c.local_get(0).local_get(1).op(F64_DIV);
     c
 }
@@ -687,7 +723,7 @@ impl Gen<'_> {
         self.code.if_(VOID);
         self.code
             .i32_const(ERROR_STACK_OVERFLOW)
-            .call(HOST_RTERROR)
+            .call(self.layout.indexes.host_rterror)
             .end();
         self.code.local_get(fp).idx(GLOBAL_SET, SP);
         if routine.is_some() && self.depth > 1 {
@@ -1037,7 +1073,7 @@ impl Gen<'_> {
         self.expr(width);
         self.decimals_or_absent(decimals);
         self.temp_addr(t);
-        let fmt_real = self.layout.fmt_real_index();
+        let fmt_real = self.helper_index(Helper::FmtReal);
         self.code.i32_const(1).op(I32_ADD).call(fmt_real);
         // select(255, length, length > 255) is min(length, 255).
         self.code.local_tee(length).local_get(length);
@@ -1134,18 +1170,21 @@ impl Gen<'_> {
         if let Some(t) = result {
             self.temp_addr(t);
         }
-        self.push_args(args, &routine.params);
+        self.push_args(args, &routine.params, routine.import.is_some());
         let index = self.layout.routine_index(r);
         self.code.call(index);
         result
     }
 
-    /// Value arguments converted to the parameter types, `var` arguments as addresses.
-    fn push_args(&mut self, args: List, params: &[ParamType]) {
+    /// Value arguments converted to the parameter types, `var` arguments as addresses. A Real
+    /// goes by address, except to an import, which receives the f64 itself.
+    fn push_args(&mut self, args: List, params: &[ParamType], to_import: bool) {
         for (&arg, param) in self.ast.items(args).iter().zip(params) {
             let ty = param.ty;
             if param.by_ref || self.info.types.is_agg(ty) {
                 self.address_of(arg);
+            } else if ty == Ty::REAL && to_import {
+                self.real(arg);
             } else if ty == Ty::REAL {
                 self.real_addr(arg);
             } else if self.info.types.is_str(ty) {
@@ -1163,7 +1202,7 @@ impl Gen<'_> {
     fn indirect(&mut self, callee: Id, args: List) {
         let ty = self.ast.ty(callee);
         let (params, _) = self.info.types.sig(ty).expect("procedural callee");
-        self.push_args(args, &params);
+        self.push_args(args, &params, false);
         self.expr(callee);
         self.code
             .call_indirect(self.layout.wasm_types[ty.0 as usize]);
@@ -1221,7 +1260,7 @@ impl Gen<'_> {
             Kind::Indirect(callee, args) => self.indirect(callee, args),
             Kind::RunErr(code) => {
                 self.expr(code);
-                self.code.call(HOST_RTERROR);
+                self.code.call(self.layout.indexes.host_rterror);
             }
             Kind::Exit => {
                 self.code.br(self.exit);
@@ -1265,7 +1304,7 @@ impl Gen<'_> {
                 }
                 if newline {
                     self.code.i32_const(STDOUT).i32_const(LF).i32_const(1);
-                    self.code.call(HOST_WRITE);
+                    self.code.call(self.layout.indexes.host_write);
                 }
             }
             _ => unreachable!("checked statements"),
@@ -1453,8 +1492,10 @@ impl Gen<'_> {
         }
         self.decimals_or_absent(decimals);
         self.temp_addr(t);
-        let fmt_real = self.layout.fmt_real_index();
-        self.code.call(fmt_real).call(HOST_WRITE);
+        let fmt_real = self.helper_index(Helper::FmtReal);
+        self.code
+            .call(fmt_real)
+            .call(self.layout.indexes.host_write);
     }
 
     /// A string literal is written from its text in static data, skipping the length byte.

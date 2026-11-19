@@ -153,6 +153,24 @@ epilogue:  sp = fp + framesize
 | `time` | `() -> i32` | ticks for `Delay`, `GetTime` |
 | `compile` | IDE worker only | invokes `compiler.wasm` |
 
+### How a host import is declared
+
+A host import is a routine declared `external` in an embedded runtime source (`runtime/system.pas`
+now, Crt and Dos later): `procedure RtError(code: LongInt); external;`. `external` is
+accepted only there; in a user program it is error 200. The import is from module `host`; its
+name is the routine's name in lower case, or the string after the directive when the routine
+cannot have that name (`procedure HostWrite(...); external 'write';`, because `Write` is
+predeclared). The import is emitted only when the program reaches it. Imports are numbered
+first, in the order they are first reached (`write` and `rterror` always come first, as the
+built-in functions call them), then the defined functions.
+
+Parameter and result mapping: a `Real` parameter is an f64 passed by value; every other
+parameter (Integer, Word, LongInt, Byte, ShortInt, Boolean, Char, enumeration, pointer) is an
+i32 by value, sign- or zero-extended as for any routine. A function returns one i32; a
+procedure returns nothing. `var` parameters, strings, sets, arrays, records, a Real result and
+a nested routine are error 200 in the runtime source. Currently: `write` is `HostWrite`,
+`rterror` is `RtError`, `fmt_real` is `Fmt_Real`.
+
 Compiler API exported from `compiler.wasm` (`plan.md` §3): `alloc(n) -> ptr`,
 `compile(src_ptr, src_len, flags) -> status`, `out_ptr()`, `out_len()`, `err_line()`,
 `err_col()`, `err_code()`.

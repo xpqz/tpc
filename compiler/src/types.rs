@@ -263,6 +263,8 @@ pub struct Routine {
     pub result_ptr: bool,
     /// Its address is taken as a procedural value: it has a table slot.
     pub addressed: bool,
+    /// An `external` routine: the name of the host import that implements it.
+    pub import: Option<u32>,
 }
 
 impl Routine {
@@ -285,6 +287,7 @@ impl Routine {
             builtin,
             result_ptr,
             addressed: false,
+            import: None,
         }
     }
 

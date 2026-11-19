@@ -47,10 +47,13 @@ pub enum Helper {
     ValLong,
     ValReal,
     RangeChk,
+    HostWrite,
+    HostRtError,
+    FmtReal,
 }
 
 impl Helper {
-    const ALL: [Helper; 18] = [
+    const ALL: [Helper; 21] = [
         Helper::AbsLong,
         Helper::StrCat,
         Helper::StrCmp,
@@ -69,6 +72,9 @@ impl Helper {
         Helper::ValLong,
         Helper::ValReal,
         Helper::RangeChk,
+        Helper::HostWrite,
+        Helper::HostRtError,
+        Helper::FmtReal,
     ];
 
     /// The routine's name in `runtime/system.pas`, upper-cased.
@@ -92,6 +98,9 @@ impl Helper {
             Helper::ValLong => b"VALLONG",
             Helper::ValReal => b"VALREAL",
             Helper::RangeChk => b"RANGECHK",
+            Helper::HostWrite => b"HOSTWRITE",
+            Helper::HostRtError => b"RTERROR",
+            Helper::FmtReal => b"FMT_REAL",
         }
     }
 }
@@ -723,16 +732,38 @@ impl Cx<'_> {
             result,
             is_function,
             block,
+            external,
         } = self.ast.kind(d)
         else {
             unreachable!("routine declaration")
         };
         let signature = self.signature_of(d, params, result, is_function)?;
+        if external.is_some() {
+            self.check_import_signature(d, &signature)?;
+        }
         let index = self.declare_routine(d, name, params.is_some(), signature, block)?;
+        if external.is_some() {
+            // The host provides the body.
+            self.routines[index].import = external;
+            self.routines[index].defined = true;
+        }
         match block {
             Some(block) => self.routine_body(index, block),
             None => Ok(()),
         }
+    }
+
+    /// A host import takes only plain scalars by value (a Real is an f64, the rest i32) and
+    /// returns one i32 or nothing; it must be a top-level routine, which has no static link.
+    fn check_import_signature(&self, d: Id, signature: &Signature) -> R<()> {
+        let passed_by_value =
+            |p: &ParamType| !p.by_ref && !self.types.is_agg(p.ty) && !self.types.is_str(p.ty);
+        let nested = !self.routine_stack.is_empty();
+        let result_is_i32 = !self.types.in_memory(signature.result);
+        if nested || !result_is_i32 || !signature.params.iter().all(passed_by_value) {
+            return Err(self.err(d, code::NOT_SUPPORTED));
+        }
+        Ok(())
     }
 
     /// The parameters and result a declaration states, with their types resolved.

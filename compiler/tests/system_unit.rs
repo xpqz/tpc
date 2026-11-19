@@ -33,7 +33,8 @@ function SetCmp(var a, b: SetBuf): Integer;\nbegin\n  SetCmp := 0\nend;\n\
 function StrInt(v: LongInt; w, max: Integer): String;\nbegin\n  StrInt := ''\nend;\n\
 function ValLong(s: String; var code: Integer): LongInt;\nbegin\n  ValLong := 0\nend;\n\
 function ValReal(s: String; var code: Integer): Real;\nbegin\n  ValReal := 0\nend;\n\
-function RangeChk(v, lo, hi: LongInt): LongInt;\nbegin\n  RangeChk := v\nend;\n";
+function RangeChk(v, lo, hi: LongInt): LongInt;\nbegin\n  RangeChk := v\nend;\n\
+procedure HostWrite(fd, address, count: LongInt); external 'write';\nprocedure RtError(code: LongInt); external;\nfunction Fmt_Real(x: Real; width, decimals, buffer: LongInt): LongInt; external;\n";
 
 fn fixtures(sub: &str) -> std::path::PathBuf {
     driver::root()

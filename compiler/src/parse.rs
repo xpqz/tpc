@@ -71,6 +71,8 @@ struct Parser {
     pos: usize,
     ast: Ast,
     stops: StopWords,
+    /// Parsing the embedded runtime source, the only place `external` is allowed.
+    in_system: bool,
 }
 
 type R<T> = Result<T, Diag>;
@@ -117,7 +119,9 @@ impl Parser {
     /// System's declaration part; returns its declarations.
     fn system_declarations(&mut self, system: Vec<Tok>) -> R<Vec<Id>> {
         self.tokens = self.drop_directives(system)?;
+        self.in_system = true;
         let declarations = self.declarations()?;
+        self.in_system = false;
         if self.tok().kind != Tk::Eof {
             return Err(self.err(code::BEGIN_EXPECTED));
         }
@@ -148,6 +152,7 @@ pub fn parse(system: Vec<Tok>, toks: Vec<Tok>) -> R<(Ast, Id)> {
         pos: 0,
         ast: Ast::default(),
         stops: StopWords::default(),
+        in_system: false,
     };
     let mut declarations = parser.system_declarations(system)?;
     parser.tokens = parser.drop_directives(toks)?;
@@ -807,7 +812,8 @@ impl Parser {
         let id = self.reserve_node();
         self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
         self.unsupported(&[b"INLINE", b"INTERRUPT"])?;
-        let block = if self.kw(b"FORWARD") {
+        let external = self.external_directive(name)?;
+        let block = if external.is_some() || self.kw(b"FORWARD") {
             None
         } else {
             let (line, col) = self.pos();
@@ -823,9 +829,29 @@ impl Parser {
             result,
             is_function,
             block,
+            external,
         };
         self.fill_node(id, kind);
         Ok(id)
+    }
+
+    /// `external ['import name']` after a routine header: the routine is a WASM import of the
+    /// host. Only the runtime source may use it (TP5 links an .OBJ file instead; error 200).
+    /// Returns the import's name, which is the routine's own `name` unless a string gives it.
+    fn external_directive(&mut self, name: u32) -> R<Option<u32>> {
+        if !self.in_system {
+            self.unsupported(&[b"EXTERNAL"])?;
+            return Ok(None);
+        }
+        if !self.kw(b"EXTERNAL") {
+            return Ok(None);
+        }
+        if self.tok().kind != Tk::StrLit {
+            return Ok(Some(name));
+        }
+        let import_name = self.ast.intern(&self.tokens[self.pos].text);
+        self.advance();
+        Ok(Some(import_name))
     }
 
     /// `CONST`, `TYPE`, `VAR`, `PROCEDURE` and `FUNCTION` sections, in any order and number.
