@@ -1286,10 +1286,13 @@ impl Cx<'_> {
     /// rewritten to what codegen expects: `Invoke`, `Indirect`, `Write`, `Exit`, or the
     /// assignment of a helper's result (see the module comment).
     fn call_statement(&mut self, id: Id, callee: Id, args: List) -> R<()> {
-        if !matches!(self.ast.kind(callee), Kind::Name(_)) {
-            // `a.b;` or `a[i];`: an unknown first name is error 3, else it is no statement.
-            self.expr(callee)?;
-            return Err(self.err(callee, code::ERROR_IN_STATEMENT));
+        // A name that is a field of an enclosing `with` record hides any routine of that name.
+        let is_designator = match self.ast.kind(callee) {
+            Kind::Name(name) => self.with_field(name).is_some(),
+            _ => true,
+        };
+        if is_designator {
+            return self.designator_call_statement(id, callee, args);
         }
         let (_, symbol) = self.resolve(callee, self.ast.name_of(callee))?;
         let kind = match symbol.kind {
@@ -1336,6 +1339,18 @@ impl Cx<'_> {
             _ => return Err(self.err(callee, code::ERROR_IN_STATEMENT)),
         };
         self.ast.set_kind(id, kind);
+        Ok(())
+    }
+
+    /// `r.f(args);`, `a[i];`, `p^.f;`: a call through a procedure value held in a variable.
+    /// Any other designator is no statement: TP wants `:=` after it.
+    fn designator_call_statement(&mut self, id: Id, callee: Id, args: List) -> R<()> {
+        self.expr(callee)?;
+        let Some((params, Ty::NONE)) = self.types.sig(self.ast.ty(callee)) else {
+            return Err(self.err(id, code::ASSIGN_EXPECTED));
+        };
+        self.arguments(id, params, args, false, Origin::User)?;
+        self.ast.set_kind(id, Kind::Indirect(callee, args));
         Ok(())
     }
 
