@@ -234,6 +234,8 @@ pub struct Node {
     pub col: u32,
     /// The source file the node was read from: 0 is the main program, n the n-th registered file.
     pub file: u32,
+    /// True when `{$R+}` was in force where the node's last token stands.
+    pub range_checks: bool,
     pub ty: Ty,
 }
 
@@ -246,13 +248,13 @@ pub struct Ast {
     pub strs: Vec<Vec<u8>>,
     /// The file that `add` stamps on new nodes.
     pub file: u32,
+    /// The `{$R+}` state that `add` stamps on new nodes.
+    pub range_checks: bool,
     /// The qualified names `Unit.Name` the parser interned, for the symbol table.
     pub qualified: Vec<Qualified>,
     /// For each identifier used as an operand without arguments, the line of the token that
     /// follows it, where TP reports a missing argument list.
     pub follow: Vec<FollowLine>,
-    /// The `{$R+}` / `{$R-}` switches in source order.
-    pub range: Vec<RangeSwitch>,
 }
 
 /// A qualified name `unit.member`: `joined` is the interned name the parser used in its place.
@@ -277,14 +279,6 @@ pub struct FollowLine {
     pub line: u32,
 }
 
-/// A `{$R+}` or `{$R-}` directive and where it appears.
-pub struct RangeSwitch {
-    pub file: u32,
-    pub line: u32,
-    pub col: u32,
-    pub on: bool,
-}
-
 impl Ast {
     pub fn add(&mut self, kind: Kind, line: u32, col: u32) -> Id {
         self.nodes.push(Node {
@@ -292,6 +286,7 @@ impl Ast {
             line,
             col,
             file: self.file,
+            range_checks: self.range_checks,
             ty: Ty::NONE,
         });
         self.nodes.len() as Id - 1
@@ -302,6 +297,7 @@ impl Ast {
         let (line, col) = self.position(at);
         let id = self.add(kind, line, col);
         self.nodes[id as usize].file = self.node(at).file;
+        self.nodes[id as usize].range_checks = self.node(at).range_checks;
         self.set_ty(id, ty);
         id
     }

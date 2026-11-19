@@ -1,9 +1,9 @@
 //! Lexer: bytes to tokens in one left-to-right pass, no backtracking.
 //!
 //! Identifiers and keywords are folded to upper case. `{...}` and `(*...*)` comments are
-//! skipped, except that a comment starting with `$` is returned as a `Directive` token for the
-//! parser. `(.` and `.)` are alternative spellings of `[` and `]`. Scanning stops after the
-//! program's final `END .`.
+//! skipped, except that a comment starting with `$` is returned as a `Directive` token for
+//! `directives.rs`. `(.` and `.)` are alternative spellings of `[` and `]`. Scanning stops
+//! after the program's final `END .`.
 //!
 //! The one ambiguity is `^`: after an operand (`p^`, `a[i]^`, `f(x)^`) it dereferences, anywhere
 //! else `^M` is a control character, which may be part of a string (`'a'^M'b'`). The scanner
@@ -32,6 +32,9 @@ pub struct Tok {
     pub text: Vec<u8>,
     pub int: i64,
     pub real: f64,
+    /// The source file number and `{$R+}` state, set by `directives::expand`.
+    pub file: u32,
+    pub range_checks: bool,
 }
 
 /// The reserved words, upper case and space separated; `word` scans the list for each
@@ -83,6 +86,8 @@ impl Scanner<'_> {
             text,
             int: 0,
             real: 0.0,
+            file: 0,
+            range_checks: false,
         }
     }
 
@@ -272,6 +277,25 @@ impl Scanner<'_> {
         Ok(is_directive.then(|| self.token(Tk::Directive, self.src[body_start + 1..end].to_vec())))
     }
 
+    /// `comment` for skipped text: an unterminated comment swallows the rest of the text.
+    fn skip_comment(&mut self, open: usize, close: &[u8]) -> Option<Tok> {
+        self.comment(open, close).unwrap_or_else(|_| {
+            self.pos = self.src.len();
+            None
+        })
+    }
+
+    /// Skips `'...` up to and including the closing quote, or to the end of the line.
+    fn skip_string(&mut self) {
+        self.pos += 1;
+        while self.pos < self.src.len() && self.peek(0) != b'\n' && self.peek(0) != b'\'' {
+            self.pos += 1;
+        }
+        if self.peek(0) == b'\'' {
+            self.pos += 1;
+        }
+    }
+
     fn word(&mut self) -> Tok {
         let start = self.pos;
         while self.peek(0).is_ascii_alphanumeric() || self.peek(0) == b'_' {
@@ -312,52 +336,115 @@ fn ends_operand(previous: Option<&Tok>) -> bool {
     }
 }
 
-/// True when the last two tokens are the keyword `END` and a period.
-fn ends_program(tokens: &[Tok]) -> bool {
-    let [.., end, period] = tokens else {
-        return false;
-    };
-    end.kind == Tk::Kw && end.text == b"END" && period.kind == Tk::Sym && period.text == b"."
+/// True when `previous` is the keyword `END` and `token` is a period.
+fn ends_program(previous: Option<&Tok>, token: &Tok) -> bool {
+    let is_end = previous.is_some_and(|p| p.kind == Tk::Kw && p.text == b"END");
+    is_end && token.kind == Tk::Sym && token.text == b"."
 }
 
-pub fn lex(src: &[u8]) -> Result<Vec<Tok>, Diag> {
-    let mut scanner = Scanner {
-        src,
-        pos: 0,
-        line: 1,
-        line_start: 0,
-        token_line: 1,
-        token_col: 1,
-    };
-    let mut tokens: Vec<Tok> = Vec::new();
-    while scanner.pos < src.len() {
-        let c = src[scanner.pos];
-        if c == b'\n' {
-            scanner.newline(scanner.pos);
-        }
-        if c <= b' ' {
-            scanner.pos += 1;
-            continue;
-        }
-        scanner.mark_token_start();
-        let is_dereference = ends_operand(tokens.last());
-        let token = match c {
-            b'a'..=b'z' | b'A'..=b'Z' | b'_' => Some(scanner.word()),
-            b'0'..=b'9' | b'$' => Some(scanner.number()?),
-            b'\'' | b'#' => Some(scanner.string()?),
-            b'^' if !is_dereference && scanner.control_char(0).is_some() => {
-                Some(scanner.control_char_token_or_string()?)
-            }
-            b'{' => scanner.comment(1, b"}")?,
-            b'(' if scanner.peek(1) == b'*' => scanner.comment(2, b"*)")?,
-            _ => Some(scanner.symbol()?),
+/// Produces the tokens of one source text on demand. `next_token` reads Pascal;
+/// `next_skipped` reads text that conditional compilation skips, where only strings, comments
+/// and directives matter.
+pub struct Lexer<'a> {
+    scanner: Scanner<'a>,
+    previous: Option<Tok>,
+    /// Set after the program's final `END .`; everything after it is never read.
+    finished: bool,
+}
+
+impl<'a> Lexer<'a> {
+    pub fn new(src: &'a [u8]) -> Lexer<'a> {
+        let scanner = Scanner {
+            src,
+            pos: 0,
+            line: 1,
+            line_start: 0,
+            token_line: 1,
+            token_col: 1,
         };
-        tokens.extend(token);
-        if ends_program(&tokens) {
-            break;
+        Lexer {
+            scanner,
+            previous: None,
+            finished: false,
         }
     }
-    scanner.mark_token_start();
-    tokens.push(scanner.token(Tk::Eof, Vec::new()));
-    Ok(tokens)
+
+    /// The next token; `Eof` at the end of the text and after the final `END .`.
+    pub fn next_token(&mut self) -> Result<Tok, Diag> {
+        let scanner = &mut self.scanner;
+        while !self.finished && scanner.pos < scanner.src.len() {
+            let c = scanner.src[scanner.pos];
+            if c == b'\n' {
+                scanner.newline(scanner.pos);
+            }
+            if c <= b' ' {
+                scanner.pos += 1;
+                continue;
+            }
+            scanner.mark_token_start();
+            let is_dereference = ends_operand(self.previous.as_ref());
+            let token = match c {
+                b'a'..=b'z' | b'A'..=b'Z' | b'_' => Some(scanner.word()),
+                b'0'..=b'9' | b'$' => Some(scanner.number()?),
+                b'\'' | b'#' => Some(scanner.string()?),
+                b'^' if !is_dereference && scanner.control_char(0).is_some() => {
+                    Some(scanner.control_char_token_or_string()?)
+                }
+                b'{' => scanner.comment(1, b"}")?,
+                b'(' if scanner.peek(1) == b'*' => scanner.comment(2, b"*)")?,
+                _ => Some(scanner.symbol()?),
+            };
+            if let Some(token) = token {
+                self.finished = ends_program(self.previous.as_ref(), &token);
+                self.previous = Some(token.clone());
+                return Ok(token);
+            }
+        }
+        scanner.mark_token_start();
+        Ok(scanner.token(Tk::Eof, Vec::new()))
+    }
+
+    /// The next directive of skipped text, or `Eof`. A string ends at its closing quote or at the
+    /// end of the line, so an unterminated one is no error; an unterminated comment swallows
+    /// the rest of the text.
+    pub fn next_skipped(&mut self) -> Tok {
+        let scanner = &mut self.scanner;
+        while scanner.pos < scanner.src.len() {
+            scanner.mark_token_start();
+            match scanner.src[scanner.pos] {
+                b'\n' => {
+                    scanner.newline(scanner.pos);
+                    scanner.pos += 1;
+                }
+                b'\'' => scanner.skip_string(),
+                b'{' => {
+                    if let Some(directive) = scanner.skip_comment(1, b"}") {
+                        return directive;
+                    }
+                }
+                b'(' if scanner.peek(1) == b'*' => {
+                    if let Some(directive) = scanner.skip_comment(2, b"*)") {
+                        return directive;
+                    }
+                }
+                _ => scanner.pos += 1,
+            }
+        }
+        scanner.mark_token_start();
+        scanner.token(Tk::Eof, Vec::new())
+    }
+}
+
+/// All tokens of `src`, ending with `Eof`.
+pub fn lex(src: &[u8]) -> Result<Vec<Tok>, Diag> {
+    let mut lexer = Lexer::new(src);
+    let mut tokens = Vec::new();
+    loop {
+        let token = lexer.next_token()?;
+        let at_end = token.kind == Tk::Eof;
+        tokens.push(token);
+        if at_end {
+            return Ok(tokens);
+        }
+    }
 }

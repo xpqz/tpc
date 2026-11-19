@@ -183,7 +183,9 @@ buffer, else 0). A unit `U` is the registered file `U.PAS`, any case; registerin
 replaces the file and keeps its number. Registered files stay registered across `compile`
 calls. After a failed `compile`, `err_file()` is 0 for the main program (and System), else the
 file's number: its position in registration order, counting from 1. The native CLI registers
-the `.pas` files beside the input, then those of `--dir AUXDIR`, which win on a name clash.
+the `.pas` and `.inc` files beside the input, then those of `--dir AUXDIR`, which win on a name
+clash. Include files (`{$I name}`) are looked up in the same table, `name` or `name.PAS` when it
+has no extension; the CLI registers only `.PAS` and `.INC` files, `add_file` takes any name.
 
 ### File and console input contract
 

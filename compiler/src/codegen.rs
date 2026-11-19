@@ -25,7 +25,7 @@
 //! address is taken. Function numbers are then assigned (imports first, then the defined
 //! functions) and the emit phase runs the generator again to produce the module with the
 //! final numbers. A routine that is never reached is never emitted.
-use crate::ast::{Ast, Id, Kind, List, Op, RangeSwitch};
+use crate::ast::{Ast, Id, Kind, List, Op};
 use crate::check::Info;
 use crate::symbols::Helper;
 use crate::types::{FrameCopy, ParamType, Routine, SymKind, Symbol, Tag, Ty, Type};
@@ -898,21 +898,11 @@ impl Gen<'_> {
         }
     }
 
-    /// True when `{$R+}` is in effect at the position of node `e`: the last range switch
-    /// before it decides.
-    fn range_checking_at(&self, e: Id) -> bool {
-        let node = self.ast.node(e);
-        let at = (node.line, node.col);
-        let in_file = |s: &&RangeSwitch| s.file == node.file && (s.line, s.col) <= at;
-        let switch = self.ast.range.iter().rev().find(in_file);
-        switch.is_some_and(|s| s.on)
-    }
-
     /// Under `{$R+}` at the node `e`, checks the i32 that `e` pushed against `lo..hi`: runtime
     /// error 201 outside. Skipped for constants and when the type of `e` already fits.
     fn check(&mut self, e: Id, lo: i64, hi: i64) {
         let node = self.ast.node(e);
-        if !self.range_checking_at(e) || matches!(node.kind, Kind::IntLit(_)) {
+        if !node.range_checks || matches!(node.kind, Kind::IntLit(_)) {
             return;
         }
         if self.info.types.tag(node.ty).is_some() {

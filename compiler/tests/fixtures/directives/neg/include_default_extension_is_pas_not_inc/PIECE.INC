@@ -1,0 +1,1 @@
+const Piece = 1;

@@ -30,15 +30,16 @@ fn build(system: &[u8], src: &[u8], files: &[SourceFile]) -> Result<Vec<u8>, Dia
     Ok(gen(&ast, &info, plan.program))
 }
 
-/// The `.pas` files of directory `dir`, by name; `skip` is left out.
+/// The `.pas` and `.inc` files (units and include files) of directory `dir`, by name; `skip` is
+/// left out.
 fn read_sources(dir: &Path, skip: Option<&std::ffi::OsStr>) -> std::io::Result<Vec<SourceFile>> {
     let mut paths = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         let path = entry?.path();
-        let is_pas = path
+        let is_source = path
             .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("pas"));
-        if is_pas && path.is_file() && path.file_name() != skip {
+            .is_some_and(|e| e.eq_ignore_ascii_case("pas") || e.eq_ignore_ascii_case("inc"));
+        if is_source && path.is_file() && path.file_name() != skip {
             paths.push(path);
         }
     }
