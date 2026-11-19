@@ -1,7 +1,7 @@
 CARGO_TARGET_DIR := $(shell scripts/cargo-target.sh)
 export CARGO_TARGET_DIR
 
-.PHONY: build test test-browser fmt clippy check wasm loc hooks oracle oracle-tables
+.PHONY: no-conflict-markers build test test-browser fmt clippy check wasm loc hooks oracle oracle-tables
 
 build:
 	cargo build
@@ -22,7 +22,7 @@ fmt:
 clippy:
 	cargo clippy --all-targets -- -D warnings
 
-check:
+check: no-conflict-markers
 	cargo fmt --check
 	cargo clippy --all-targets -- -D warnings
 	$(MAKE) test
@@ -42,3 +42,7 @@ oracle: oracle-tables
 
 oracle-tables:
 	cargo test -- --ignored oracle_agrees
+
+# A merge conflict left in any tracked file fails the gate.
+no-conflict-markers:
+	@! git grep -nE '^(<<<<<<<|>>>>>>>) |^=======$$' -- . ':!*.out'
