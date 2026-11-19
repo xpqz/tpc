@@ -361,3 +361,50 @@ estimate, with negatives pruned there.
 reading. Supersedes plan §4.9's `time() -> i32` (an i32 of seconds overflows in 2038, of
 milliseconds within weeks; separate readings could straddle a second). The runner's clock
 is fixed by `TP5_NOW_MS` for tests. Crt's `Delay` gets its own contract in Phase 6.
+
+## 36. Host runtime lives in host/ behind injected sources (#59)
+
+**Decision.** The `host` imports are implemented once, in `host/runtime.js` (class `Host`) and
+`host/vfs.js` (`Vfs`, `LineInput`), in plain ES modules over `Uint8Array`. Everything outside
+is injected: `write(fd, bytes)` (output sink), `input.readLine(max)` (line source), `files`
+(name -> bytes snapshot) and `nowMs()` (clock). `tests/run.mjs` is the Node adapter: it wires
+the aux directory, stdin and `TP5_NOW_MS`, collects stdout and maps `HostError` to
+`RunnerError`. Stack exhaustion (RangeError) is runtime error 202 inside `Host.runMain`.
+**Measured.** The host part of `tests/run.mjs` (about 95 lines) plus `tests/vfs.mjs` (109)
+became 238 lines in `host/` (runtime 131, vfs 107); the Node adapters are 56 lines in
+`tests/vfs.mjs`. Host glue budget: 24 -> 207 of 500, leaving 293 for Phases 6 and 7.
+
+## 37. Crt oracle probes (proposed, #59)
+
+Measured under headless DOSBox-X with TP 5.0 (`tools/crt/`):
+- A unit can read the text screen at `Mem[$B800:0]` (char at offset `row*160+col*2`,
+  attribute at +1), the cursor from `Mem[$40:$50/$51]`, and `ExitCode`/`ErrorAddr`; an
+  `ExitProc` installed in its initialisation runs when the program ends, also on a runtime
+  error, and writes `SCREEN.TXT`. Works with `-silent -nogui`.
+- Under Crt, `Write` goes to the screen even with `> RUN.TXT`, and `Input`/`ReadLn` read the
+  keyboard even with `< P.IN` (a Crt program that reads stdin hangs). So Crt tests need the
+  dump, and key injection is separate.
+- `ReadKey`, `KeyPressed` and `ReadLn` under Crt go through BIOS INT 16h. A unit that
+  replaces INT 16h with an `interrupt` procedure feeds scripted keys (tested with 45 keys;
+  prefilling the 15-entry BIOS ring also works for short scripts).
+**Proposal.** `tools/tp5.sh` runs `cls` first (else the screen starts with the DOS command
+echo), and for a Crt test (marker: `DIR/NAME.crt` or `uses Crt`) inserts `ScrDump` (and
+`KeyFeed` with keys from `DIR/NAME.keys`) as the first units of the program's uses clause
+(first = exit procedure runs last), copies them from `tools/crt/`, and prints the dump after
+the program output. Dump format: 25 lines of 80-column text with trailing blanks cut, then
+`cursor COL ROW` (1-based), `exit CODE [error SEG:OFS]`, and `attr ROW COL LEN HEX` runs for
+cells whose attribute is not `$07`. The runner prints the same from its screen model, so
+`.out` files for Crt programs hold this dump. Open: the DOS "Runtime error N at" line is
+printed after exit procedures, so it is not on the dump; the `exit`/`error` line stands for it
+(ErrorAddr is a TP-internal address and must not be compared). Exhausted keys should halt
+with a marker instead of repeating Enter.
+
+## 38. Virtual clock for Delay (proposed, #59)
+
+**Proposal.** `Host` takes a clock object `{ nowMs(), advance(ms) }` instead of `nowMs`. The
+runner's clock is virtual: it starts at `TP5_NOW_MS` (or a fixed epoch) and moves only
+through `advance`. Crt's `Delay(ms)` calls a host import `sleep(ms)`: the runner advances the
+virtual clock and returns at once; the browser waits (`Atomics.wait`) and also advances. So
+programs that measure `Delay` with `GetTime` see the elapsed time, tests never wait and never
+observe real time. `KeyPressed`/`ReadKey` take their keys from the scripted source, not the
+clock.
