@@ -243,6 +243,8 @@ export const KEYS = {
   f3: { key: "F3", vk: 114, w3c: "\uE033" },
   f9: { key: "F9", vk: 120, w3c: "\uE039" },
   enter: { key: "Enter", vk: 13, w3c: "\uE007" },
+  backspace: { key: "Backspace", vk: 8, w3c: "\uE003" },
+  space: { key: " ", text: " ", vk: 32, w3c: " " },
   dot: { key: ".", text: ".", vk: 190, w3c: "." },
 };
 

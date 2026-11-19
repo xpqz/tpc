@@ -39,13 +39,15 @@ export async function runProgram({ bytes, files, keys, grid, post, compiler, cel
   const screen = new Screen(grid);
   const host = new Host({
     write: (_fd, bytes) => screen.print(bytes),
-    input: { readLine: () => null },
+    input: null, // the browser has no stdin
     files,
     clock: { nowMs: localNowMs, advance: (ms) => Atomics.wait(pause, 0, 0, ms) },
     keys: { available: () => keyPressed(keys), next: () => readKey(keys) },
     screen,
     onWritten: compiler ? (name, bytes) => post({ saved: { name, bytes } }) : undefined,
   });
+  // No stdin: -2 tells System to edit the console line from `readkey` (docs/abi.md section 8).
+  host.imports.readline = () => -2;
   try {
     if (compiler) {
       const { instance: compilerInstance } = await WebAssembly.instantiate(compiler, {});

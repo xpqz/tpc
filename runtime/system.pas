@@ -39,6 +39,7 @@ function Fs_Read(handle, address, count: LongInt): LongInt; external;
 function Fs_Write(handle, address, count: LongInt): LongInt; external;
 function Fs_Close(handle: LongInt): LongInt; external;
 function ReadLine(address, max: LongInt): LongInt; external;
+function HostKey: LongInt; external 'readkey';
 
 var
   ExitCode: Integer;
@@ -500,8 +501,11 @@ const
   ModeOutput = 3;
   ModeConsoleInput = 4;
   ModeConsoleOutput = 5;
+  Backspace = 8;
   CarriageReturn = 13;
   LineFeed = 10;
+  Escape = 27;
+  Blank = 32;
   EndOfFile = 26;
   BufferSize = 256;
   { TP I/O error numbers, as IOResult reports them. }
@@ -517,6 +521,7 @@ const
   HostAppend = 2;
   StdOut = 1;
   ConsoleLineMax = 254; { room in the buffer for the CR LF that end a console line }
+  NoLineInput = -2; { what `readline` returns where the host has no stdin: the browser }
 
 type
   Text = record
@@ -699,12 +704,72 @@ begin
   else if f.Mode < ModeConsoleInput then InOutRes := IoNotOpen
 end;
 
+procedure EchoKey(ch: Char);
+begin
+  ConsoleWrite(LongInt(@ch), 1)
+end;
+
+{ The line editor of a host without stdin (the browser, decision 46; Crt's EditLine does the
+  same with its own screen): reads keys until Enter, echoing them on the console, and stores
+  the line at `address`, at most `max` characters. Backspace erases the last character, Esc
+  the whole line; any other control key, an extended key (0, then its scan code) and any key
+  beyond `max` are ignored. Returns the length of the line. }
+function EditConsoleLine(address, max: LongInt): LongInt;
+var key: Char; count: LongInt; entered: Boolean;
+
+  procedure EraseLast;
+  begin
+    count := count - 1;
+    EchoKey(Chr(Backspace));
+    EchoKey(Chr(Blank));
+    EchoKey(Chr(Backspace))
+  end;
+
+begin
+  count := 0;
+  entered := False;
+  repeat
+    key := Chr(HostKey);
+    if Ord(key) = 0 then key := Chr(HostKey)
+    else if Ord(key) = CarriageReturn then entered := True
+    else if Ord(key) = Backspace then
+    begin
+      if count > 0 then EraseLast
+    end
+    else if Ord(key) = Escape then
+    begin
+      while count > 0 do EraseLast
+    end
+    else if (Ord(key) >= Blank) and (count < max) then
+    begin
+      POutputBytes(address)^[count] := key;
+      count := count + 1;
+      EchoKey(key)
+    end
+  until entered;
+  EchoKey(Chr(CarriageReturn));
+  EchoKey(Chr(LineFeed));
+  EditConsoleLine := count
+end;
+
+{ The line of a console read: Crt's hook, else the host's `readline`, else the line editor. }
+function ReadConsoleLine(address, max: LongInt): LongInt;
+var count: LongInt;
+begin
+  if ConsoleHooked then ReadConsoleLine := ConsoleLine(address, max)
+  else
+  begin
+    count := ReadLine(address, max);
+    if count = NoLineInput then count := EditConsoleLine(address, max);
+    ReadConsoleLine := count
+  end
+end;
+
 { The buffer of a console file holds one line and the CR LF the host does not deliver. }
 procedure FillFromConsole(var f: Text);
 var count: LongInt;
 begin
-  if ConsoleHooked then count := ConsoleLine(LongInt(@f.Buffer[0]), ConsoleLineMax)
-  else count := ReadLine(LongInt(@f.Buffer[0]), ConsoleLineMax);
+  count := ReadConsoleLine(LongInt(@f.Buffer[0]), ConsoleLineMax);
   if count < 0 then f.Ended := True
   else
   begin
