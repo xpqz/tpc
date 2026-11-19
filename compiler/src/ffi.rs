@@ -58,6 +58,8 @@ pub extern "C" fn add_file(
             name: String::from_utf8_lossy(name).into_owned(),
             text: text.to_vec(),
         };
+        // Replacing in place keeps every file number stable, so the "later file wins" rule of
+        // `units::find_file` never has two files of one name to choose from.
         match s
             .files
             .iter_mut()

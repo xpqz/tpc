@@ -1,10 +1,15 @@
-//! Types, symbols and the operator typing rules (decisions 5 and 10).
+//! Types, the plain `Symbol` and `Routine` records, and the operator typing rules.
 //!
 //! `Types` is a table of `Type` values; a `Ty` is an index into it, and the predefined types
 //! have fixed indexes (`Ty::INTEGER`, ...). Types compare by identity (name equivalence),
 //! except that `compat` decides which ordinal, pointer and set types may be mixed. A
 //! subrange or enumeration keeps the predefined type that decides its arithmetic as its
-//! `base`. Symbols record what each declared name stands for and where it is stored.
+//! `base`. Symbols record what each declared name stands for and where it is stored; the scope
+//! stack that finds them is in `symbols.rs`.
+//!
+//! A text file variable is a record declared in System (`Types::text`), but every other source
+//! treats it as a file: `is_file` tells the checker to apply the file rules. A `TypedConst` is a
+//! static variable with an initial memory image that codegen builds.
 use crate::ast::{Id, Op};
 use crate::diag::code;
 
@@ -37,6 +42,16 @@ pub enum Tag {
     Char,
     /// Enumerated types (and their subranges) are compatible only with the same enumeration.
     Enum,
+}
+
+/// What `Types::array_of` tells about an array: its index type, the bounds of that type and
+/// the element type.
+#[derive(Clone, Copy)]
+pub struct ArrayInfo {
+    pub index: Ty,
+    pub lo: i64,
+    pub hi: i64,
+    pub elem: Ty,
 }
 
 /// A record field and its byte offset.
@@ -474,7 +489,7 @@ impl Types {
 
     /// An array of Char that is not a String (it has no length byte).
     pub fn is_char_array(&self, t: Ty) -> bool {
-        let elem = self.array_of(t).map(|(_, _, _, elem)| elem);
+        let elem = self.array_of(t).map(|array| array.elem);
         !self.is_str(t) && elem.is_some_and(|e| self.tag(e) == Some(Tag::Char))
     }
 
@@ -508,15 +523,25 @@ impl Types {
         self.add(Type::Array { index, elem, size })
     }
 
-    /// (index type, lower bound, upper bound, element type) of an array type; a string is
-    /// an array of Char from 0 (the length byte).
-    pub fn array_of(&self, t: Ty) -> Option<(Ty, i64, i64, Ty)> {
+    /// The index type, bounds and element type of an array type; a string is an array of Char
+    /// from 0 (the length byte).
+    pub fn array_of(&self, t: Ty) -> Option<ArrayInfo> {
         match self.get(t) {
             Type::Array { index, elem, .. } => {
-                let info = self.ord(*index);
-                Some((*index, info.lo, info.hi, *elem))
+                let bounds = self.ord(*index);
+                Some(ArrayInfo {
+                    index: *index,
+                    lo: bounds.lo,
+                    hi: bounds.hi,
+                    elem: *elem,
+                })
             }
-            Type::Str(n) => Some((Ty::INTEGER, 0, *n as i64, Ty::CHAR)),
+            Type::Str(n) => Some(ArrayInfo {
+                index: Ty::INTEGER,
+                lo: 0,
+                hi: *n as i64,
+                elem: Ty::CHAR,
+            }),
             _ => None,
         }
     }

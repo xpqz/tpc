@@ -1,4 +1,8 @@
 //! The compiler pipeline (load, check, codegen) and the native command line.
+//!
+//! Unit files come from the files beside the input, then from `--dir`; both are the `.pas` and
+//! `.inc` files of a directory, and a later file of the same name wins. The units of the
+//! runtime (`EMBEDDED_UNITS`) are found first and need no file.
 use crate::check::check;
 use crate::codegen::gen;
 use crate::diag::Diag;
@@ -7,7 +11,7 @@ use std::path::Path;
 
 const USAGE: &str = "usage: tp5c in.pas -o out.wasm [--dir AUXDIR]";
 
-/// The units of the runtime that `uses` finds without a file (decision 11).
+/// The units of the runtime that `uses` finds without a file (docs/decisions.md).
 const EMBEDDED_UNITS: &[EmbeddedUnit] = &[EmbeddedUnit {
     name: "DOS",
     source: include_bytes!("../../runtime/dos.pas"),
@@ -65,17 +69,18 @@ fn read_sources(dir: &Path, skip: Option<&std::ffi::OsStr>) -> std::io::Result<V
     Ok(files)
 }
 
-/// `tp5c in.pas -o out.wasm [--dir AUXDIR]`; returns the process exit code. Units are looked up
-/// in the files beside the input, then in AUXDIR, whose files win on a name clash.
-pub fn run(args: &[String]) -> i32 {
-    let (input, output, aux) = match args {
-        [input, o, output] if o == "-o" => (input, output, None),
-        [input, o, output, d, dir] if o == "-o" && d == "--dir" => (input, output, Some(dir)),
-        _ => return fail(USAGE, 2),
-    };
-    let Ok(src) = std::fs::read(input) else {
-        return fail(&["tp5c: cannot read ", input].concat(), 2);
-    };
+/// The input, output and optional auxiliary directory named by the command line.
+fn parse_args(args: &[String]) -> Option<(&String, &String, Option<&String>)> {
+    match args {
+        [input, o, output] if o == "-o" => Some((input, output, None)),
+        [input, o, output, d, dir] if o == "-o" && d == "--dir" => Some((input, output, Some(dir))),
+        _ => None,
+    }
+}
+
+/// The unit and include files of a compilation of `input`: the files beside it, then those of
+/// `aux`, which win on a name clash. An unreadable `aux` is an error message.
+fn unit_files(input: &str, aux: Option<&String>) -> Result<Vec<SourceFile>, String> {
     let input_path = Path::new(input);
     let beside = match input_path.parent() {
         Some(dir) if !dir.as_os_str().is_empty() => dir,
@@ -84,23 +89,40 @@ pub fn run(args: &[String]) -> i32 {
     // A directory that cannot be read just has no units.
     let mut files = read_sources(beside, input_path.file_name()).unwrap_or_default();
     if let Some(dir) = aux {
-        match read_sources(Path::new(dir), None) {
-            Ok(aux_files) => files.extend(aux_files),
-            Err(_) => return fail(&["tp5c: cannot read ", dir].concat(), 2),
-        }
+        let aux_files = read_sources(Path::new(dir), None);
+        files.extend(aux_files.map_err(|_| ["tp5c: cannot read ", dir].concat())?);
     }
+    Ok(files)
+}
+
+/// The diagnostic line for `d`, naming the file it is in: the input, or a registered file.
+fn describe(d: &Diag, input: &str, files: &[SourceFile]) -> String {
+    let name = match d.file {
+        0 => input,
+        n => &files[n as usize - 1].name,
+    };
+    crate::diag::render(name, d)
+}
+
+/// `tp5c in.pas -o out.wasm [--dir AUXDIR]`; returns the process exit code. Units are looked up
+/// in the files beside the input, then in AUXDIR, whose files win on a name clash.
+pub fn run(args: &[String]) -> i32 {
+    let Some((input, output, aux)) = parse_args(args) else {
+        return fail(USAGE, 2);
+    };
+    let Ok(src) = std::fs::read(input) else {
+        return fail(&["tp5c: cannot read ", input].concat(), 2);
+    };
+    let files = match unit_files(input, aux) {
+        Ok(files) => files,
+        Err(message) => return fail(&message, 2),
+    };
     match compile_files(&src, &files) {
         Ok(wasm) => match std::fs::write(output, wasm) {
             Ok(()) => 0,
             Err(_) => fail(&["tp5c: cannot write ", output].concat(), 2),
         },
-        Err(d) => {
-            let name = match d.file {
-                0 => input,
-                n => &files[n as usize - 1].name,
-            };
-            fail(&crate::diag::render(name, &d), 1)
-        }
+        Err(d) => fail(&describe(&d, input, &files), 1),
     }
 }
 

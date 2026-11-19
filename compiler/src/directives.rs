@@ -18,8 +18,8 @@
 //!   is on by default. Other switches are not implemented (error 200); a malformed directive
 //!   is error 17.
 use crate::diag::{code, Diag};
-use crate::lex::{Lexer, Tk, Tok};
-use crate::units::{find_file, SourceFile};
+use crate::lex::{is_ident_byte, is_ident_start, Lexer, Tk, Tok};
+use crate::units::{file_number, find_file, SourceFile};
 
 /// Includes nest this deep, counting the include itself but not the including program or unit.
 const MAX_INCLUDE_DEPTH: u32 = 14;
@@ -35,9 +35,9 @@ enum Directive {
     IfNotDef(Vec<u8>),
     Else,
     EndIf,
-    /// `{$R+}`, `{$R-}` and the switches that are accepted and ignored.
     /// The new `{$R}` and `{$I}` states, each `None` when the directive does not set it.
     Switches(Option<bool>, Option<bool>),
+    /// A directive in malformed skipped text, which is not an error there.
     Ignored,
 }
 
@@ -52,13 +52,14 @@ struct Frame {
 /// TP reports end of file on the last line of the file, not after its final newline.
 fn last_line(text: &[u8]) -> u32 {
     let newlines = text.iter().filter(|&&c| c == b'\n').count() as u32;
-    let unterminated = !text.ends_with(b"\n") as u32;
-    (newlines + unterminated).max(1)
+    let unterminated_last_line = if text.ends_with(b"\n") { 0 } else { 1 };
+    // An empty file still has a line 1.
+    (newlines + unterminated_last_line).max(1)
 }
 
 /// A diagnostic of file number `file` whose text is `text`. System's own diagnostics stay at
 /// line 0, as its tokens are.
-pub fn in_file(d: Diag, file: u32, text: &[u8]) -> Diag {
+pub fn locate_in_file(d: Diag, file: u32, text: &[u8]) -> Diag {
     let end_of_file = d.code == code::UNEXPECTED_END_OF_FILE && d.line != 0;
     let line = if end_of_file { last_line(text) } else { d.line };
     Diag { line, file, ..d }
@@ -76,7 +77,7 @@ struct StatementPart {
 }
 
 impl StatementPart {
-    fn after(&mut self, token: &Tok) {
+    fn observe(&mut self, token: &Tok) {
         if self.closing {
             self.inside = false;
             self.closing = false;
@@ -89,9 +90,11 @@ impl StatementPart {
                 self.inside = true;
                 self.depth = 1;
             }
+            // Outside a statement part `end` closes a record (or the unit's own `end`).
             (false, b"RECORD") => self.depth += 1,
             (false, b"END") => self.depth = self.depth.saturating_sub(1),
             (true, b"BEGIN" | b"CASE") => self.depth += 1,
+            // The `end` that brings the depth to 0 closes the statement part.
             (true, b"END") => {
                 self.depth -= 1;
                 self.closing = self.depth == 0;
@@ -113,15 +116,13 @@ fn first_word(text: &[u8]) -> &[u8] {
 /// the identifier is ignored.
 fn symbol(text: &[u8]) -> Result<Vec<u8>, u16> {
     let word = first_word(text);
-    let is_identifier = word
-        .first()
-        .is_some_and(|c| c.is_ascii_alphabetic() || *c == b'_');
+    let is_identifier = word.first().is_some_and(|&c| is_ident_start(c));
     if !is_identifier {
         return Err(code::IDENTIFIER_EXPECTED);
     }
     let length = word
         .iter()
-        .position(|c| !(c.is_ascii_alphanumeric() || *c == b'_'))
+        .position(|&c| !is_ident_byte(c))
         .unwrap_or(word.len());
     Ok(word[..length].to_ascii_uppercase())
 }
@@ -194,7 +195,7 @@ impl Expander<'_> {
         token.file = file;
         token.range_checks = self.range_checks;
         token.io_checks = self.io_checks;
-        self.statement_part.after(&token);
+        self.statement_part.observe(&token);
         self.tokens.push(token);
     }
 
@@ -203,30 +204,32 @@ impl Expander<'_> {
         let mut lexer = Lexer::new(text);
         let mut frames: Vec<Frame> = Vec::new();
         loop {
-            let skipping = frames.last().is_some_and(|f| !f.active);
+            let skipping = is_skipping(&frames);
             let token = if skipping {
                 lexer.next_skipped()
             } else {
-                lexer.next_token().map_err(|d| in_file(d, file, text))?
+                lexer
+                    .next_token()
+                    .map_err(|d| locate_in_file(d, file, text))?
             };
             match token.kind {
                 Tk::Directive => {
-                    let at = Diag {
+                    let position = Diag {
                         line: token.line,
                         col: token.col,
                         file,
                         code: 0,
                     };
-                    self.directive(&token.text, at, depth, &mut frames)?
+                    self.directive(&token.text, position, depth, &mut frames)?
                 }
                 Tk::Eof => {
-                    let at = Diag {
+                    let position = Diag {
                         line: last_line(text),
                         col: 1,
                         file,
                         code: 0,
                     };
-                    return self.end_of_file(token, at, depth, &frames);
+                    return self.end_of_file(token, position, depth, &frames);
                 }
                 _ => self.push(token, file),
             }
@@ -236,56 +239,51 @@ impl Expander<'_> {
     /// The text of a file ended: a conditional must have closed in the file that opened it, and
     /// an include may not end inside a statement part. A program or unit stops at its final
     /// `end.`, so a conditional still open there is fine unless the text ran out while skipping.
-    fn end_of_file(&self, eof: Tok, at: Diag, depth: u32, frames: &[Frame]) -> Result<Tok, Diag> {
-        let skipping = frames.last().is_some_and(|f| !f.active);
+    fn end_of_file(
+        &self,
+        eof: Tok,
+        position: Diag,
+        depth: u32,
+        frames: &[Frame],
+    ) -> Result<Tok, Diag> {
+        let skipping = is_skipping(frames);
         if !frames.is_empty() && (skipping || depth > 0) {
-            return Err(Diag {
-                code: code::ENDIF_MISSING,
-                ..at
-            });
+            return Err(position.with_code(code::ENDIF_MISSING));
         }
         if depth > 0 && self.statement_part.inside {
-            return Err(Diag {
-                code: code::UNEXPECTED_END_OF_FILE,
-                ..at
-            });
+            return Err(position.with_code(code::UNEXPECTED_END_OF_FILE));
         }
         Ok(eof)
     }
 
-    /// Acts on one directive. `at` is its position and file. In skipped text only conditional
+    /// Acts on one directive. `position` is a diagnostic with code 0 that holds the directive's
+    /// line, column and file; an error adds its code. In skipped text only conditional
     /// directives count; a malformed directive there is ignored.
     fn directive(
         &mut self,
         text: &[u8],
-        at: Diag,
+        position: Diag,
         depth: u32,
         frames: &mut Vec<Frame>,
     ) -> Result<(), Diag> {
-        let skipping = frames.last().is_some_and(|f| !f.active);
+        let skipping = is_skipping(frames);
         let directive = match parse_directive(text) {
             Ok(directive) => directive,
             Err(_) if skipping => Directive::Ignored,
-            Err(code) => return Err(Diag { code, ..at }),
+            Err(code) => return Err(position.with_code(code)),
         };
+        // Conditional directives act even in skipped text; every other directive is ignored
+        // while skipping, which the `_ if skipping` arm does.
         match directive {
             Directive::IfDef(name) => open_conditional(frames, self.symbols.contains(&name)),
             Directive::IfNotDef(name) => open_conditional(frames, !self.symbols.contains(&name)),
             Directive::Else => match frames.last_mut() {
                 Some(frame) => frame.active = frame.enclosing_active && !frame.active,
-                None => {
-                    return Err(Diag {
-                        code: code::MISPLACED_CONDITIONAL,
-                        ..at
-                    })
-                }
+                None => return Err(position.with_code(code::MISPLACED_CONDITIONAL)),
             },
             Directive::EndIf => {
                 if frames.pop().is_none() {
-                    return Err(Diag {
-                        code: code::MISPLACED_CONDITIONAL,
-                        ..at
-                    });
+                    return Err(position.with_code(code::MISPLACED_CONDITIONAL));
                 }
             }
             _ if skipping => {}
@@ -299,42 +297,37 @@ impl Expander<'_> {
                 self.range_checks = range.unwrap_or(self.range_checks);
                 self.io_checks = io.unwrap_or(self.io_checks);
             }
-            Directive::Include(name) => self.include(&name, at, depth)?,
+            Directive::Include(name) => self.include(&name, position, depth)?,
             Directive::Ignored => {}
         }
         Ok(())
     }
 
     /// `{$I name}`: the file `name`, or `name.PAS` when it has no extension, spliced in here.
-    fn include(&mut self, name: &[u8], at: Diag, depth: u32) -> Result<(), Diag> {
+    fn include(&mut self, name: &[u8], position: Diag, depth: u32) -> Result<(), Diag> {
         if self.statement_part.inside {
-            return Err(Diag {
-                code: code::INCLUDE_NOT_ALLOWED,
-                ..at
-            });
+            return Err(position.with_code(code::INCLUDE_NOT_ALLOWED));
         }
         if depth >= MAX_INCLUDE_DEPTH {
-            return Err(Diag {
-                code: code::TOO_MANY_NESTED_FILES,
-                ..at
-            });
+            return Err(position.with_code(code::TOO_MANY_NESTED_FILES));
         }
         let mut wanted = name.to_vec();
         if !name.contains(&b'.') {
             wanted.extend_from_slice(b".PAS");
         }
         let Some(position) = find_file(self.files, &wanted) else {
-            return Err(Diag {
-                code: code::FILE_NOT_FOUND,
-                ..at
-            });
+            return Err(position.with_code(code::FILE_NOT_FOUND));
         };
-        // The file table numbers files from 1; 0 is the main program.
-        let file = position as u32 + 1;
+        let file = file_number(position);
         let text = &self.files[position].text;
         self.read(file, text, depth + 1)?;
         Ok(())
     }
+}
+
+/// True while the innermost open conditional is in a branch that is not taken.
+fn is_skipping(frames: &[Frame]) -> bool {
+    frames.last().is_some_and(|f| !f.active)
 }
 
 /// Opens a conditional whose condition is `taken`; inside skipped text it is never taken.

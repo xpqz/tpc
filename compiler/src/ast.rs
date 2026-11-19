@@ -5,6 +5,14 @@
 //! `Call`, `Index` and similar unresolved nodes; the checker then rewrites them in place into
 //! resolved ones (`Name` becomes `Var`, `IntLit`, `Invoke`, ...) and fills in each node's type,
 //! so codegen only ever sees checked nodes.
+//!
+//! Every node is stamped with the source file it came from and the `{$R+}` and `{$I+}` state in
+//! force there (`file`, `range_checks`, `io_checks`). `Ast::add` copies the stamps from the
+//! `Ast` fields of the same names, which the parser sets from each token it consumes and the
+//! checker clears; `Ast::typed` copies them from the node it stands in for, so a node made
+//! by the checker behaves like its source node. `Qualified` records the one interned name
+//! `Unit.Name` that the parser uses for a qualified name, and `Plan` the unit orders that
+//! `units.rs` computes.
 use crate::types::{Sym, Ty};
 
 pub type Id = u32;
@@ -154,9 +162,12 @@ pub enum Kind {
     /// A unit's initialisation part (made by the checker): `Exit` inside leaves only this part.
     InitPart(Id),
     ConstDecl(u32, Id),
-    /// `name: type = init`: constant name, type name, initialiser (an expression, `ArrayInit`
-    /// or `RecordInit`).
-    TypedConst(u32, u32, Id),
+    /// `name: type = init`: `init` is an expression, `ArrayInit` or `RecordInit`.
+    TypedConst {
+        name: u32,
+        type_name: u32,
+        init: Id,
+    },
     /// `(a, b, c)`, stamped at the closing parenthesis, where TP reports a list that is too short.
     ArrayInit(List),
     /// `(f: a; g: b)`: `FieldInit` entries, stamped at the closing parenthesis.
@@ -248,7 +259,8 @@ pub struct Ast {
     /// Interned identifiers, uppercase.
     pub names: Vec<Vec<u8>>,
     pub strs: Vec<Vec<u8>>,
-    /// The file that `add` stamps on new nodes.
+    /// The file that `add` stamps on new nodes: set from each token the parser consumes, and
+    /// by the checker to the file of the unit it is checking.
     pub file: u32,
     /// The `{$R+}` and `{$I+}` state that `add` stamps on new nodes.
     pub range_checks: bool,
@@ -300,9 +312,11 @@ impl Ast {
     pub fn typed(&mut self, kind: Kind, ty: Ty, at: Id) -> Id {
         let (line, col) = self.position(at);
         let id = self.add(kind, line, col);
-        self.nodes[id as usize].file = self.node(at).file;
-        self.nodes[id as usize].range_checks = self.node(at).range_checks;
-        self.nodes[id as usize].io_checks = self.node(at).io_checks;
+        let source = self.node(at);
+        let node = &mut self.nodes[id as usize];
+        node.file = source.file;
+        node.range_checks = source.range_checks;
+        node.io_checks = source.io_checks;
         self.set_ty(id, ty);
         id
     }
@@ -338,12 +352,24 @@ impl Ast {
         self.nodes[id as usize].kind
     }
 
+    /// The interned name of a `Name` node.
+    pub fn name_of(&self, id: Id) -> u32 {
+        match self.kind(id) {
+            Kind::Name(name) => name,
+            _ => unreachable!("the parser names it"),
+        }
+    }
+
     pub fn ty(&self, id: Id) -> Ty {
         self.nodes[id as usize].ty
     }
 
     pub fn set_kind(&mut self, id: Id, kind: Kind) {
         self.nodes[id as usize].kind = kind;
+    }
+
+    pub fn set_range_checks(&mut self, id: Id, on: bool) {
+        self.nodes[id as usize].range_checks = on;
     }
 
     pub fn set_ty(&mut self, id: Id, ty: Ty) {
