@@ -11,6 +11,7 @@ test:
 	sh tests/tools/loc_test.sh
 	sh tests/tools/tp5_test.sh
 	sh tests/tools/oracle_test.sh
+	node tests/tools/abi_imports_test.mjs
 
 # Drives the installed Chrome headless; needs a machine that can run it, so not part of `check`.
 test-browser:

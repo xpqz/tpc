@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
+const port = Number(process.argv[2] ?? 8080);
 const types = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".wasm": "application/wasm" };
 const headers = { "Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp" };
 
@@ -16,4 +17,4 @@ http.createServer((req, res) => {
   }
   res.writeHead(200, { ...headers, "Content-Type": types[path.extname(file)] ?? "application/octet-stream" });
   fs.createReadStream(file).pipe(res);
-}).listen(Number(process.argv[2] ?? 8080), () => console.log("http://localhost:8080/host/index.html"));
+}).listen(port, () => console.log(`http://localhost:${port}/host/index.html`));
