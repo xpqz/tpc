@@ -331,3 +331,13 @@ nothing until `IOResult` is read. `Read(c)` returns CR then LF at a line end and
 true before the CR, also for console input (the runtime synthesises CR LF after
 `readline`). `{$I+/-}` and conditional symbols are local to their source file; an `$IF`
 must close in the file that opened it (129).
+
+## 33. Budget after the readability review
+
+The readability review (#47) cost +1,053 lines (checker 1,844, codegen 1,417, Rust 6,035,
+total 6,430). Readability stays first (decision 31). Remaining allowances: checker ~356
+lines for Phases 5-8 (Phase 5 ~300 per decision 30, so Phase 5 must be lean and Phase 8's
+error-table work goes in data, not checker logic); codegen ~1,080; Rust compiler subtotal
+~3,965 under the 10,000. If the checker would pass 2,200, cut Phase 5 scope (candidates:
+`{$I-}` file-local tracking, qualified names `U.X` beyond the plan, typed-constant edge
+cases) before compressing code.
