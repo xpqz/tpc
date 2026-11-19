@@ -34,7 +34,7 @@ function StrInt(v: LongInt; w, max: Integer): String;\nbegin\n  StrInt := ''\nen
 function ValLong(s: String; var code: Integer): LongInt;\nbegin\n  ValLong := 0\nend;\n\
 function ValReal(s: String; var code: Integer): Real;\nbegin\n  ValReal := 0\nend;\n\
 function RangeChk(v, lo, hi: LongInt): LongInt;\nbegin\n  RangeChk := v\nend;\n\
-procedure HostWrite(fd, address, count: LongInt); external 'write';\nprocedure RtError(code: LongInt); external;\nfunction Fmt_Real(x: Real; width, decimals, buffer: LongInt): LongInt; external;\n\
+procedure HostWrite(fd, address, count: LongInt); external 'write';\nprocedure RtError(code: LongInt); external;\nprocedure HostHalt(code: LongInt); external 'halt';\nfunction Fmt_Real(x: Real; width, decimals, buffer: LongInt): LongInt; external;\n\
 type Text = record handle: LongInt; end;\nconst Input: Text = (handle: 0);\nprocedure TextOut(target, address, count: LongInt);\nbegin\n  HostWrite(1, address, count)\nend;\nprocedure TextNewLine(target: LongInt);\nvar c: Char;\nbegin\n  c := Chr(10);\n  HostWrite(1, LongInt(@c), 1)\nend;\nprocedure TextFlush;\nbegin\nend;\nprocedure CheckIo;\nbegin\nend;\nprocedure Assign(var f: Text; name: String);\nbegin\nend;\nfunction Eof(var f: Text): Boolean;\nbegin\n  Eof := True\nend;\nfunction Eoln(var f: Text): Boolean;\nbegin\n  Eoln := True\nend;\nfunction ReadChar(var f: Text): Char;\nbegin\n  ReadChar := 'x'\nend;\nfunction ReadLong(var f: Text): LongInt;\nbegin\n  ReadLong := 0\nend;\nfunction ReadReal(var f: Text): Real;\nbegin\n  ReadReal := 0\nend;\nfunction ReadStr(var f: Text; max: Integer): String;\nbegin\n  ReadStr := ''\nend;\nprocedure ReadLnEnd(var f: Text);\nbegin\nend;\n";
 
 fn fixtures(sub: &str) -> std::path::PathBuf {

@@ -1286,12 +1286,7 @@ impl Cx<'_> {
     /// rewritten to what codegen expects: `Invoke`, `Indirect`, `Write`, `Exit`, or the
     /// assignment of a helper's result (see the module comment).
     fn call_statement(&mut self, id: Id, callee: Id, args: List) -> R<()> {
-        // A name that is a field of an enclosing `with` record hides any routine of that name.
-        let is_designator = match self.ast.kind(callee) {
-            Kind::Name(name) => self.with_field(name).is_some(),
-            _ => true,
-        };
-        if is_designator {
+        if self.is_designator(callee) {
             return self.designator_call_statement(id, callee, args);
         }
         let (_, symbol) = self.resolve(callee, self.ast.name_of(callee))?;
@@ -1317,6 +1312,7 @@ impl Cx<'_> {
             SymKind::Intrinsic(i @ (Intrinsic::Inc | Intrinsic::Dec)) => {
                 self.inc_dec(id, i, args)?
             }
+            SymKind::Intrinsic(Intrinsic::Halt) => self.halt_call(id, args)?,
             SymKind::Intrinsic(Intrinsic::Str) => self.str_call(id, args)?,
             SymKind::Intrinsic(Intrinsic::Val) => self.val_call(id, args)?,
             SymKind::Intrinsic(Intrinsic::Exit) => {
@@ -1340,6 +1336,16 @@ impl Cx<'_> {
         };
         self.ast.set_kind(id, kind);
         Ok(())
+    }
+
+    /// Whether a callee is a value to evaluate rather than a routine to look up: anything but
+    /// a plain name, and a plain name that is a field of an enclosing `with` record, which
+    /// hides any routine of that name.
+    fn is_designator(&self, callee: Id) -> bool {
+        match self.ast.kind(callee) {
+            Kind::Name(name) => self.with_field(name).is_some(),
+            _ => true,
+        }
     }
 
     /// `r.f(args);`, `a[i];`, `p^.f;`: a call through a procedure value held in a variable.
@@ -1704,7 +1710,7 @@ impl Cx<'_> {
     /// `name(args)` in an expression: a function, a procedural variable, an intrinsic, or a
     /// type cast.
     fn call_expr(&mut self, e: Id, callee: Id, args: List) -> R<(Kind, Ty)> {
-        if !matches!(self.ast.kind(callee), Kind::Name(_)) {
+        if self.is_designator(callee) {
             return self.designator_call(e, callee, args);
         }
         let (_, symbol) = self.resolve(callee, self.ast.name_of(callee))?;
@@ -2210,6 +2216,23 @@ impl Cx<'_> {
         };
         let call = self.helper_call(at, helper, &[source, error_code], result);
         Ok(Kind::Assign(target, call))
+    }
+
+    /// `Halt` and `Halt(code)`: a call of System's `HostHalt` with the exit code, 0 without
+    /// an argument. TP types the code as a Word.
+    fn halt_call(&mut self, at: Id, args: List) -> R<Kind> {
+        let items = self.ast.items_vec(args);
+        self.expect_arg_count(at, items.len(), 0, 1)?;
+        let exit_code = match items.first() {
+            Some(&arg) => {
+                self.expr(arg)?;
+                self.argument_assignable(at, Ty::WORD, arg, Origin::System)?;
+                arg
+            }
+            None => self.ast.typed(Kind::IntLit(0), Ty::INTEGER, at),
+        };
+        let list = self.ast.list(&[exit_code]);
+        Ok(Kind::Invoke(self.helpers[Helper::HostHalt as usize], list))
     }
 
     /// `New`, `Dispose`, `GetMem`, `FreeMem`, `Mark`, `Release` and `RunError`: calls of the
