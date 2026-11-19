@@ -19,8 +19,8 @@ await withPage(async (page) => {
   await page.key(KEYS.letter("b"));
   await page.until("echo of b", async () => (await page.row(0)) === "a Mb");
 
-  // Negative: a key with no ReadKey byte (F12) reaches the page but not the program.
-  await page.key(KEYS.f12);
+  // Negative: a key with no ReadKey byte (Shift alone) reaches the page but not the program.
+  await page.key(KEYS.shift);
   await page.key(KEYS.letter("c"));
   await page.until("echo of c", async () => (await page.row(0)) === "a Mbc");
 });

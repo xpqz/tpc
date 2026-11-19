@@ -221,6 +221,7 @@ export const KEYS = {
   down: { key: "ArrowDown", vk: 40, w3c: "\uE015" },
   right: { key: "ArrowRight", vk: 39, w3c: "\uE014" },
   f12: { key: "F12", vk: 123, w3c: "\uE03C" },
+  shift: { key: "Shift", vk: 16, w3c: "\uE008" },
   f2: { key: "F2", vk: 113, w3c: "\uE032" },
   f3: { key: "F3", vk: 114, w3c: "\uE033" },
   f9: { key: "F9", vk: 120, w3c: "\uE039" },

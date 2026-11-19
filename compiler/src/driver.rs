@@ -21,6 +21,10 @@ const EMBEDDED_UNITS: &[EmbeddedUnit] = &[
         name: "DOS",
         source: include_bytes!("../../runtime/dos.pas"),
     },
+    EmbeddedUnit {
+        name: "IDEHOST",
+        source: include_bytes!("../../runtime/idehost.pas"),
+    },
 ];
 
 /// Compiles the program `src` with no unit files.

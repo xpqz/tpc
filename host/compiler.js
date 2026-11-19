@@ -1,4 +1,4 @@
-// Draft of host/compiler.js: the JS side of the compiler's wasm exports (plan section 3,
+// The JS side of the compiler's wasm exports (plan section 3,
 // decisions 27 and 28). It keeps the compiler instance, registers the unit and include files
 // before each compile and turns the result into a plain object.
 
