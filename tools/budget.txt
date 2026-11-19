@@ -7,7 +7,7 @@ Checker|2600|compiler/src/check.rs
 Codegen|2100|compiler/src/codegen.rs
 Units, directives, driver, diagnostics, native CLI|1100|compiler/src/lib.rs compiler/src/main.rs compiler/src/driver.rs compiler/src/diag.rs compiler/src/ffi.rs compiler/src/units.rs compiler/src/directives.rs compiler/build.rs
 System, Crt, Dos subset|1700|runtime
-IDE|2270|ide
-Host glue|630|host
+IDE|2240|ide
+Host glue|660|host
 ROOTS|compiler/src compiler/build.rs runtime ide host
 TOTAL|15000

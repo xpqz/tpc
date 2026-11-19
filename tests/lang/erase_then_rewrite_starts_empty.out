@@ -1,0 +1,4 @@
+erase: 0
+rewrite: 0
+reset: 0
+eof TRUE

@@ -38,6 +38,8 @@ function Fs_Open(name, count, mode: LongInt): LongInt; external;
 function Fs_Read(handle, address, count: LongInt): LongInt; external;
 function Fs_Write(handle, address, count: LongInt): LongInt; external;
 function Fs_Close(handle: LongInt): LongInt; external;
+function Fs_Delete(name, count: LongInt): LongInt; external;
+function Fs_Rename(oldName, oldCount, newName, newCount: LongInt): LongInt; external;
 function ReadLine(address, max: LongInt): LongInt; external;
 function HostKey: LongInt; external 'readkey';
 function HostTime(what: LongInt): LongInt; external 'time';
@@ -971,6 +973,25 @@ begin
     if status < 0 then InOutRes := Integer(-status)
   end
   else if f.Mode < ModeConsoleInput then InOutRes := IoNotOpen
+end;
+
+{ Erase and Rename act on the name given by Assign, whatever state the file is in (an
+  unassigned file has the empty name, which the host reports as not found). An open file may be
+  erased or renamed; it stays open. Success leaves a pending error alone. }
+procedure Erase(var f: Text);
+var status: LongInt;
+begin
+  status := Fs_Delete(LongInt(@f.Name[1]), Ord(f.Name[0]));
+  if status < 0 then InOutRes := Integer(-status)
+end;
+
+{ The file variable takes the new name only when the rename worked. }
+procedure Rename(var f: Text; newName: String);
+var status: LongInt;
+begin
+  status := Fs_Rename(LongInt(@f.Name[1]), Ord(f.Name[0]), LongInt(@newName[1]), Ord(newName[0]));
+  if status < 0 then InOutRes := Integer(-status)
+  else f.Name := newName
 end;
 
 { Output is never buffered here (docs/deviations.md D31), so Flush has nothing to write; it only

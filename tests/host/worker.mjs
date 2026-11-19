@@ -36,10 +36,15 @@ async function until(what, condition, ms = 3000) {
 
 test("a program reads queued keys, sleeps at least its delay, and peeks without consuming", async () => {
   const { worker, grid, keys } = launch(echoProgram());
+  await sleepMs(200); // the worker is blocked in readkey, so its start-up is not in the measure
+  const pushed = Date.now();
   pushKeys(keys, [97, 98]);
-  const echoed = await until("echo", () => rowText(grid, 0).startsWith("a"));
+  await until("echo", () => rowText(grid, 0).startsWith("a"));
   const peeked = await until("peek result", () => rowText(grid, 0) === "a1");
-  assert.ok(peeked - echoed >= 40, `slept ${peeked - echoed} ms for sleep(50)`);
+  // The program starts its sleep(50) only after reading the pushed key, so the sleep begins after
+  // `pushed` and the peek result appears after it ends. A late poll only makes the gap longer, so
+  // the bound holds however loaded the machine is, and a sleep that returns early breaks it.
+  assert.ok(peeked - pushed >= 50, `sleep(50) and the key read took ${peeked - pushed} ms`);
   await worker.terminate();
 });
 
