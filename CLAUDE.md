@@ -70,6 +70,8 @@ two files' worth of knowledge is split, not placed in the nearer one.
   storage.
 - `wasm.rs`: the binary format only: sections, LEB128, validated structured control.
 - `diag.rs`: error codes, messages and rendering.
+- `units.rs`: finds the unit files a program uses, parses them, and orders them (interface
+  order, initialisation order, cycles). No scoping and no types.
 - `driver.rs`: runs the stages and the native command line. `ffi.rs`: the wasm32 exports.
   `lib.rs`: the module list and pipeline map. `main.rs`: the process entry point.
 

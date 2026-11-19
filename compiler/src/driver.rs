@@ -1,60 +1,99 @@
-//! The compiler pipeline (lex, parse, check, codegen) and the native command line.
+//! The compiler pipeline (load, check, codegen) and the native command line.
 use crate::check::check;
 use crate::codegen::gen;
-use crate::diag::{code, Diag};
-use crate::lex::lex;
-use crate::parse::parse;
+use crate::diag::Diag;
+use crate::units::{load, SourceFile};
+use std::path::Path;
 
-/// lex, parse, check, codegen.
+const USAGE: &str = "usage: tp5c in.pas -o out.wasm [--dir AUXDIR]";
+
+/// Compiles the program `src` with no unit files.
 pub fn compile(src: &[u8]) -> Result<Vec<u8>, Diag> {
-    compile_with(include_bytes!("../../runtime/system.pas"), src)
+    compile_files(src, &[])
 }
 
-/// TP reports end of file on the last line of the file, not after its final newline.
-fn last_line(src: &[u8]) -> u32 {
-    let newlines = src.iter().filter(|&&c| c == b'\n').count() as u32;
-    let unterminated = !src.ends_with(b"\n") as u32;
-    (newlines + unterminated).max(1)
+/// Compiles the program `src`; `files` are the registered source files, whose n-th entry is
+/// file number n + 1 in diagnostics.
+pub fn compile_files(src: &[u8], files: &[SourceFile]) -> Result<Vec<u8>, Diag> {
+    build(include_bytes!("../../runtime/system.pas"), src, files)
 }
 
 /// `compile` with `system` as the source of the System declaration part.
 pub fn compile_with(system: &[u8], src: &[u8]) -> Result<Vec<u8>, Diag> {
-    let last_line = last_line(src);
-    let at_last_line = |d: Diag| {
-        let eof_in_user_source = d.code == code::UNEXPECTED_END_OF_FILE && d.line != 0;
-        let line = if eof_in_user_source {
-            last_line
-        } else {
-            d.line
-        };
-        Diag { line, ..d }
-    };
-    // Every token of System is at line 0, so its diagnostics never carry a user line.
-    let mut system_tokens = lex(system).map_err(|d| Diag { line: 0, ..d })?;
-    system_tokens.iter_mut().for_each(|t| t.line = 0);
-    let user_tokens = lex(src).map_err(at_last_line)?;
-    let (mut ast, root) = parse(system_tokens, user_tokens).map_err(at_last_line)?;
-    let info = check(&mut ast, root)?;
-    Ok(gen(&ast, &info, root))
+    build(system, src, &[])
 }
 
-/// `tp5c in.pas -o out.wasm`; returns the process exit code.
-pub fn run(args: &[String]) -> i32 {
-    let [input, flag, output] = args else {
-        return fail("usage: tp5c in.pas -o out.wasm", 2);
-    };
-    if flag != "-o" {
-        return fail("usage: tp5c in.pas -o out.wasm", 2);
+/// load (lex and parse every file), check, codegen.
+fn build(system: &[u8], src: &[u8], files: &[SourceFile]) -> Result<Vec<u8>, Diag> {
+    let (mut ast, plan) = load(system, src, files)?;
+    let info = check(&mut ast, &plan)?;
+    Ok(gen(&ast, &info, plan.program))
+}
+
+/// The `.pas` files of directory `dir`, by name; `skip` is left out.
+fn read_sources(dir: &Path, skip: Option<&std::ffi::OsStr>) -> std::io::Result<Vec<SourceFile>> {
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        let is_pas = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("pas"));
+        if is_pas && path.is_file() && path.file_name() != skip {
+            paths.push(path);
+        }
     }
+    paths.sort();
+    let mut files = Vec::new();
+    for path in paths {
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        files.push(SourceFile {
+            name,
+            text: std::fs::read(&path)?,
+        });
+    }
+    Ok(files)
+}
+
+/// `tp5c in.pas -o out.wasm [--dir AUXDIR]`; returns the process exit code. Units are looked up
+/// in the files beside the input, then in AUXDIR, whose files win on a name clash.
+pub fn run(args: &[String]) -> i32 {
+    let (input, output, aux) = match args {
+        [input, o, output] if o == "-o" => (input, output, None),
+        [input, o, output, d, dir] if o == "-o" && d == "--dir" => (input, output, Some(dir)),
+        _ => return fail(USAGE, 2),
+    };
     let Ok(src) = std::fs::read(input) else {
         return fail(&["tp5c: cannot read ", input].concat(), 2);
     };
-    match compile(&src) {
+    let input_path = Path::new(input);
+    let beside = match input_path.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => Path::new("."),
+    };
+    // A directory that cannot be read just has no units.
+    let mut files = read_sources(beside, input_path.file_name()).unwrap_or_default();
+    if let Some(dir) = aux {
+        match read_sources(Path::new(dir), None) {
+            Ok(aux_files) => files.extend(aux_files),
+            Err(_) => return fail(&["tp5c: cannot read ", dir].concat(), 2),
+        }
+    }
+    match compile_files(&src, &files) {
         Ok(wasm) => match std::fs::write(output, wasm) {
             Ok(()) => 0,
             Err(_) => fail(&["tp5c: cannot write ", output].concat(), 2),
         },
-        Err(d) => fail(&crate::diag::render(input, &d), 1),
+        Err(d) => {
+            let name = match d.file {
+                0 => input,
+                n => &files[n as usize - 1].name,
+            };
+            fail(&crate::diag::render(name, &d), 1)
+        }
     }
 }
 

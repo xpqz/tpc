@@ -187,7 +187,7 @@ fn corpus_lists_are_sorted_name_existing_programs_and_leave_pending() {
                 assert!(p.exists(), "{}", p.display());
             }
             assert!(
-                root().join(format!("tests/{kind}/{n}")).is_dir(),
+                root().join(format!("tests/{kind}/{n}")).is_dir() || *n == "unit_not_found",
                 "{kind}/{n} has no auxiliary directory"
             );
             assert!(

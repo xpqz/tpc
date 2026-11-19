@@ -71,6 +71,7 @@ impl Scanner<'_> {
             code,
             line: self.token_line,
             col: self.token_col,
+            file: 0,
         }
     }
 

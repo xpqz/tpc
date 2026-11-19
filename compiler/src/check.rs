@@ -18,7 +18,7 @@
 //! `Inc(x, n)` is `x := Ord(x) + n`, `New(p)` is `p := HeapGet(size)`, `Delete(s, i, n)` is
 //! `s := StrDelete(s, i, n)`, `Str`, `Val`, `Insert`, `GetMem`, `Mark` likewise; `Concat` is
 //! a chain of `+`. Codegen then needs no knowledge of them.
-use crate::ast::{Ast, Id, Kind, List, Op, NO_NAME};
+use crate::ast::{Ast, Id, Kind, List, Op, Plan, NO_NAME};
 use crate::diag::{code, Diag};
 use crate::symbols::{name_of, Helper, SymbolError, Symbols, MAX_DATA};
 use crate::types::{
@@ -68,9 +68,14 @@ struct Cx<'a> {
     helpers: [u32; Helper::ALL.len()],
     /// Pointer types whose target is declared later in the same type section.
     forward: Vec<(Ty, u32)>,
+    /// The `InitPart` of each unit checked so far, in initialisation order.
+    init_parts: Vec<Id>,
 }
 
-pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
+/// Checks System, the interface of every unit, then every implementation, then the program.
+/// Two phases, because a unit's implementation may use a unit whose interface completes
+/// later (`Plan` has the orders).
+pub fn check(ast: &mut Ast, plan: &Plan) -> R<Info> {
     let symbols = Symbols::new(ast);
     let mut cx = Cx {
         ast,
@@ -81,33 +86,16 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
         withs: Vec::new(),
         helpers: [0; Helper::ALL.len()],
         forward: Vec::new(),
+        init_parts: Vec::new(),
     };
-    let Kind::Program {
-        name,
-        declarations,
-        body,
-    } = cx.ast.kind(root)
-    else {
-        unreachable!("the parser's root is a program")
-    };
-    let declarations = cx.ast.items_vec(declarations);
-    let (system, program) = declarations.split_at(cx.ast.system);
-    for &d in system {
-        cx.decl(d)?;
+    let heap = cx.system(plan.system)?;
+    for &unit in &plan.interface_order {
+        cx.unit_interface(unit)?;
     }
-    let heap = cx.bind_system_names()?;
-    cx.symbols.start_user_region();
-    if name != NO_NAME {
-        cx.declare(root, name, Symbol::new(SymKind::Prog, Ty::NONE))?;
+    for &unit in &plan.init_order {
+        cx.unit_implementation(unit)?;
     }
-    for &d in program {
-        cx.decl(d)?;
-    }
-    cx.resolve_forward(body)?;
-    if cx.routines.iter().any(|r| !r.defined) {
-        return Err(cx.err(root, code::UNDEFINED_FORWARD));
-    }
-    cx.stmt(body)?;
+    cx.program(plan.program)?;
     Ok(Info {
         types: cx.types,
         data_end: cx.symbols.data_end(),
@@ -164,6 +152,7 @@ impl Cx<'_> {
             code: code::UNKNOWN_IDENTIFIER,
             line: 0,
             col: 0,
+            file: 0,
         };
         let names = self
             .symbols
@@ -180,8 +169,134 @@ impl Cx<'_> {
     }
 
     fn err(&self, id: Id, code: u16) -> Diag {
-        let (line, col) = self.ast.position(id);
-        Diag { code, line, col }
+        let node = self.ast.node(id);
+        Diag {
+            code,
+            line: node.line,
+            col: node.col,
+            file: node.file,
+        }
+    }
+
+    // ---- Units and the program ----
+
+    /// System: its declarations, then the names the compiler relies on. Returns `HeapOrg`.
+    fn system(&mut self, unit: Id) -> R<u32> {
+        let Kind::Unit {
+            name, interface, ..
+        } = self.ast.kind(unit)
+        else {
+            unreachable!("System is a unit")
+        };
+        for d in self.ast.items_vec(interface) {
+            self.decl(d)?;
+        }
+        let heap = self.bind_system_names()?;
+        self.symbols.end_system(name);
+        Ok(heap)
+    }
+
+    /// Makes the exports of each unit in a `uses` list visible.
+    fn import_uses(&mut self, uses: List) {
+        for &entry in self.ast.items(uses) {
+            self.symbols.import(name_of(self.ast, entry));
+        }
+    }
+
+    /// A unit's interface part: its declarations become the unit's exports. Interface routine
+    /// headings have no body here, so they are forwards that the implementation completes.
+    fn unit_interface(&mut self, unit: Id) -> R<()> {
+        let Kind::Unit {
+            name,
+            interface_uses,
+            interface,
+            ..
+        } = self.ast.kind(unit)
+        else {
+            unreachable!("a unit")
+        };
+        self.ast.file = self.ast.node(unit).file;
+        self.symbols.begin_unit(name);
+        self.import_uses(interface_uses);
+        for d in self.ast.items_vec(interface) {
+            self.decl(d)?;
+        }
+        self.resolve_forward(unit)?;
+        self.symbols.end_interface();
+        Ok(())
+    }
+
+    /// A unit's implementation part and its initialisation, which becomes an `InitPart`. A
+    /// routine of the unit that is still undefined is error 59 at the unit's `end`.
+    fn unit_implementation(&mut self, unit: Id) -> R<()> {
+        let Kind::Unit {
+            name,
+            implementation_uses,
+            implementation,
+            body,
+            ..
+        } = self.ast.kind(unit)
+        else {
+            unreachable!("a unit")
+        };
+        self.ast.file = self.ast.node(unit).file;
+        self.symbols.resume_unit(name);
+        self.import_uses(implementation_uses);
+        for d in self.ast.items_vec(implementation) {
+            self.decl(d)?;
+        }
+        self.resolve_forward(unit)?;
+        let undefined =
+            |s: Symbol| matches!(s.kind, SymKind::Routine(r) if !self.routines[r as usize].defined);
+        if self.symbols.own_symbols().any(undefined) {
+            return Err(self.err(unit, code::UNDEFINED_FORWARD));
+        }
+        self.stmt(body)?;
+        let (line, col) = self.ast.position(body);
+        let part = self.ast.add(Kind::InitPart(body), line, col);
+        self.init_parts.push(part);
+        Ok(())
+    }
+
+    /// The program. Its body becomes the unit initialisation parts followed by its own
+    /// statements, so code generation sees one body.
+    fn program(&mut self, root: Id) -> R<()> {
+        let Kind::Program {
+            name,
+            uses,
+            declarations,
+            body,
+        } = self.ast.kind(root)
+        else {
+            unreachable!("the root is a program")
+        };
+        self.ast.file = self.ast.node(root).file;
+        self.symbols.begin_program();
+        self.import_uses(uses);
+        if name != NO_NAME {
+            self.declare(root, name, Symbol::new(SymKind::Prog, Ty::NONE))?;
+        }
+        for d in self.ast.items_vec(declarations) {
+            self.decl(d)?;
+        }
+        self.resolve_forward(body)?;
+        if self.routines.iter().any(|r| !r.defined) {
+            return Err(self.err(root, code::UNDEFINED_FORWARD));
+        }
+        self.stmt(body)?;
+        let mut statements = std::mem::take(&mut self.init_parts);
+        statements.push(body);
+        let (line, col) = self.ast.position(body);
+        let statements = self.ast.list(&statements);
+        let whole = self.ast.add(Kind::Compound(statements), line, col);
+        let program = Kind::Program {
+            name,
+            uses,
+            declarations,
+            body: whole,
+        };
+        self.ast.set_kind(root, program);
+        Ok(())
     }
 
     /// Declares `name` in the current region; a second declaration in the same region is an
@@ -1330,7 +1445,8 @@ impl Cx<'_> {
         }
         self.expr(value)?;
         let ty = self.ast.ty(value);
-        let is_text_or_real = self.types.is_str(ty) || ty == Ty::REAL;
+        let is_text_or_real =
+            self.types.is_str(ty) || self.types.is_char_array(ty) || ty == Ty::REAL;
         let is_enum = self.types.tag(ty) == Some(Tag::Enum);
         if is_enum || (!is_text_or_real && self.types.tag(ty).is_none()) {
             return Err(self.err(value, code::CANNOT_READ_OR_WRITE));
@@ -1495,6 +1611,9 @@ impl Cx<'_> {
     /// `name(args)` in an expression: a function, a procedural variable, an intrinsic, or a
     /// type cast.
     fn call_expr(&mut self, e: Id, callee: Id, args: List) -> R<(Kind, Ty)> {
+        if !matches!(self.ast.kind(callee), Kind::Name(_)) {
+            return self.designator_call(e, callee, args);
+        }
         let (_, symbol) = self.resolve(callee, name_of(self.ast, callee))?;
         Ok(match symbol.kind {
             SymKind::Routine(r) => {
@@ -1521,6 +1640,19 @@ impl Cx<'_> {
             SymKind::Intrinsic(_) => return Err(self.err(callee, code::ERROR_IN_EXPRESSION)),
             _ => return Err(self.err(e, code::RIGHT_PAREN_EXPECTED)),
         })
+    }
+
+    /// `r.f(args)`, `a[i](args)`: a call through a function value held in a variable.
+    fn designator_call(&mut self, e: Id, callee: Id, args: List) -> R<(Kind, Ty)> {
+        self.expr(callee)?;
+        let Some((params, result)) = self.types.sig(self.ast.ty(callee)) else {
+            return Err(self.err(e, code::RIGHT_PAREN_EXPECTED));
+        };
+        if result == Ty::NONE {
+            return Err(self.err(callee, code::INVALID_PROCEDURE_REFERENCE));
+        }
+        self.arguments(e, params, args, true, false)?;
+        Ok((Kind::Indirect(callee, args), result))
     }
 
     /// System's `Length` of a string constant is a constant.

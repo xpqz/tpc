@@ -2,12 +2,14 @@
 //! There is no `format!`: messages come from a static table and numbers are printed by
 //! `push_dec`.
 
-/// A compile error: TP error number and the source position TP reports it at.
+/// A compile error: TP error number and the source position TP reports it at. `file` is 0 for
+/// the main program (and System), n for the n-th registered file.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Diag {
     pub code: u16,
     pub line: u32,
     pub col: u32,
+    pub file: u32,
 }
 
 /// Names for the TP error numbers the compiler reports (see `docs/tp-errors.md`).
@@ -21,6 +23,7 @@ pub mod code {
     pub const STRING_EXCEEDS_LINE: u16 = 8;
     pub const UNEXPECTED_END_OF_FILE: u16 = 10;
     pub const TYPE_IDENTIFIER_EXPECTED: u16 = 12;
+    pub const FILE_NOT_FOUND: u16 = 15;
     pub const INVALID_DIRECTIVE: u16 = 17;
     pub const UNDEFINED_POINTER_TARGET: u16 = 19;
     pub const VARIABLE_EXPECTED: u16 = 20;
@@ -33,6 +36,7 @@ pub mod code {
     pub const ORDINAL_TYPE_EXPECTED: u16 = 29;
     pub const INVALID_RESULT_TYPE: u16 = 34;
     pub const BEGIN_EXPECTED: u16 = 36;
+    pub const END_EXPECTED: u16 = 37;
     pub const INTEGER_EXPRESSION_EXPECTED: u16 = 38;
     pub const ORDINAL_EXPRESSION_EXPECTED: u16 = 39;
     pub const BOOLEAN_EXPRESSION_EXPECTED: u16 = 40;
@@ -49,10 +53,14 @@ pub mod code {
     pub const POINTER_VARIABLE_EXPECTED: u16 = 65;
     pub const STRING_VARIABLE_EXPECTED: u16 = 66;
     pub const STRING_EXPRESSION_EXPECTED: u16 = 67;
+    pub const INTERFACE_EXPECTED: u16 = 55;
+    pub const CIRCULAR_UNIT_REFERENCE: u16 = 68;
+    pub const UNIT_NAME_MISMATCH: u16 = 69;
     pub const CASE_TYPES_MISMATCH: u16 = 74;
     pub const RECORD_VARIABLE_EXPECTED: u16 = 75;
     pub const CONSTANT_OUT_OF_RANGE: u16 = 76;
     pub const INTEGER_OR_REAL_EXPRESSION_EXPECTED: u16 = 79;
+    pub const UNIT_EXPECTED: u16 = 84;
     pub const SEMICOLON_EXPECTED: u16 = 85;
     pub const COLON_EXPECTED: u16 = 86;
     pub const COMMA_EXPECTED: u16 = 87;
@@ -72,6 +80,7 @@ pub mod code {
     pub const ERROR_IN_STATEMENT: u16 = 113;
     pub const INVALID_QUALIFIER: u16 = 121;
     pub const INVALID_VARIABLE_REFERENCE: u16 = 122;
+    pub const IMPLEMENTATION_EXPECTED: u16 = 73;
     pub const HEADER_MISMATCH: u16 = 131;
     pub const PROCEDURE_TYPE_NOT_ALLOWED: u16 = 99;
     pub const STRING_LENGTH_MISMATCH: u16 = 100;
@@ -92,6 +101,7 @@ pub const TABLE: &[(u16, &str)] = &[
     (8, "String constant exceeds line"),
     (10, "Unexpected end of file"),
     (12, "Type identifier expected"),
+    (15, "File not found"),
     (17, "Invalid compiler directive"),
     (19, "Undefined type in pointer definition"),
     (20, "Variable identifier expected"),
@@ -117,14 +127,19 @@ pub const TABLE: &[(u16, &str)] = &[
     (44, "Field identifier expected"),
     (50, "DO expected"),
     (54, "OF expected"),
+    (55, "INTERFACE expected"),
     (57, "THEN expected"),
     (58, "TO or DOWNTO expected"),
     (59, "Undefined forward"),
     (62, "Division by zero"),
     (64, "Cannot Read or Write variables of this type"),
+    (68, "Circular unit reference"),
+    (69, "Unit name mismatch"),
+    (73, "IMPLEMENTATION expected"),
     (74, "Constant and case types do not match"),
     (75, "Record variable expected"),
     (76, "Constant out of range"),
+    (84, "UNIT expected"),
     (85, "\";\" expected"),
     (86, "\":\" expected"),
     (87, "\",\" expected"),
