@@ -424,7 +424,7 @@ unchanged.
 **Rejected.** A terminal model with window and attribute state in JS (does not fit; would
 duplicate state Crt needs anyway for `WhereX`/`WhereY`).
 
-## 40. IDE oracle pattern (proposed, #67)
+## 40. IDE oracle pattern (accepted, #67)
 
 **Proposal.** An IDE module is differential-tested like any Crt program: a fixture
 `NAME.pas` (`uses Crt, <module>`), a key script `NAME.keys` that ends with a Quit key (Alt-X)
@@ -453,7 +453,7 @@ text with loops or System gains a `Move`), `Halt` unknown (Error 3), untyped `va
 scriptable host); a Pascal-side fake for both runs (it would not exercise the embedded
 unit's imports).
 
-## 41. Key chords: table, browser mapping, reachable bindings (proposed, #67)
+## 41. Key chords: table, browser mapping, reachable bindings (accepted, #67)
 
 **Decision (done in #67).** `tools/crt/KEYS.TBL` holds the Reference Guide's Table C.2
 (Appendix C, Extended Key Codes, page 424) and the control codes: `^A`..`^Z` (Ctrl+letter,
@@ -493,7 +493,7 @@ Keys):** Alt-K and Alt-Q as synonyms of ^K and ^Q; every F-key command also in t
 for Ctrl-Left/Right. Out of Phase 7 scope and unreachable in normal Win/Linux windows: ^W,
 ^N, ^T.
 
-## 42. IDE host unit and the compile/run contract (proposed, #67)
+## 42. IDE host unit and the compile/run contract (accepted, #67)
 
 **Proposal.** `IdeHost` is a runtime unit embedded in the compiler beside Crt (decision 29),
 with the interface the oracle stand-in has (decision 40):
@@ -549,7 +549,7 @@ a Crt program run starts on a cleared screen, reads the shared keys and ends wit
 prints, a bad pointer is a host error. Not exercised: a real IDE program (no embedded unit
 yet), the browser path (drafted, not built), Stop.
 
-## 43. Host budget transfer (proposed, #67)
+## 43. Host budget transfer (accepted, #67)
 
 Host glue is 471 of 500. Estimated need for decisions 41 and 42. Counted with the `tools/loc.sh` rules on working
 drafts: `compiler.js` 42, `ide.js` 25, chord mapping +20. Estimated from sketches, not built:
@@ -563,7 +563,7 @@ glue budget to 600 and lower the margin from 500 to 400 (`tools/budget.txt`, pla
 total still 15,000. The embedded `IdeHost` unit (about 20 lines of Pascal in `runtime/`, 1020
 of 1500) and its `EMBEDDED_UNITS` entry (4 lines of Rust, 861 of 1100) fit their budgets.
 
-## 44. Limits for a 64 KB gap buffer, measured on TP 5.0 (proposed, #67)
+## 44. Limits for a 64 KB gap buffer, measured on TP 5.0 (accepted, #67)
 
 Probes in `tests/ide/limits/` (outputs from `tools/tp5.sh`; the two shared with this compiler
 run in `compiler/tests/ide_tooling.rs`):
@@ -588,3 +588,11 @@ gap end, text length, cursor offset, line starts), `Integer` only for screen coo
 small counts, never `Word` for arithmetic (a decrement at 0 gives 65535 silently), and a
 capacity of 65521 (`MaxText = 65521`, which is also all TP can allocate in one block). Gap shifting without `Move` is a `for` loop over
 `Char`; ask for a `Move` in System if the loop shows in a profile.
+
+## 45. Margin transfer to host glue (accepts 43)
+
+The Host glue component goes from 500 to 600 lines; the plan's unallocated margin goes from
+500 to 400 (components now sum to 14,600 under the unchanged 15,000 total). Plan §1 makes
+the margin available from Phase 7. Reason: moving the host runtime into host/ (decision
+36) for one tested implementation cost ~180 lines the plan did not foresee, and the IDE
+needs compile, run handoff and persistence (~130 lines measured from working drafts).

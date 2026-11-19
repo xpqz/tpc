@@ -193,12 +193,12 @@ $ACTUAL"; fi
     if grep -Fxq 'TOTAL|15000' "$B"; then pass "budget.txt: total is 15000"
     else fail "budget.txt: total is 15000" "no 'TOTAL|15000' line"; fi
     sum=$(grep -v '^[[:space:]]*#' "$B" | grep -v '^TOTAL|' | grep -v '^ROOTS|' | awk -F'|' 'NF >= 3 { s += $2 } END { print s + 0 }')
-    if [ "$sum" -eq 14500 ]; then pass "budget.txt: component limits sum to 14500"
-    else fail "budget.txt: component limits sum to 14500" "sum $sum"; fi
+    if [ "$sum" -eq 14600 ]; then pass "budget.txt: component limits sum to 14600"
+    else fail "budget.txt: component limits sum to 14600" "sum $sum"; fi
 else
     fail "budget.txt: components, limits and paths match plan" "$B missing"
     fail "budget.txt: total is 15000" "$B missing"
-    fail "budget.txt: component limits sum to 14500" "$B missing"
+    fail "budget.txt: component limits sum to 14600" "$B missing"
 fi
 
 echo "$PASSES passed, $FAILS failed"
