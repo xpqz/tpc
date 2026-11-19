@@ -706,3 +706,11 @@ files and are ordinary TP routines.
 Amended at #101's review: the plain implementation needed 55 lines (Vfs delete and rename
 with open handles following the file, the two imports, IDE persistence of erases), so the IDE
 gives 60: IDE 2,240, host glue 660. Compressing the host code to fit 30 was rejected.
+
+## 56. Differential tests live in tests/lang
+
+plan.md section 6 and CLAUDE.md name a `tests/diff/` directory. Every program in `tests/lang/`
+already has its expected output from the real TP 5.0 (tools/tp5.sh), so each one is a
+differential test, and a second directory would hold the same kind of file. `tests/diff/` is
+therefore not created; `tests/lang/` is the differential corpus. Rejected: moving the larger
+programs (the SWAG-derived ones) into `tests/diff/`, which would split one kind of test by size.
