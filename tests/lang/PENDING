@@ -1,6 +1,5 @@
 swag_assign_empty_name_is_stdin
 swag_crt_lastmode
-swag_dos_types
 swag_hex_literal_above_longint
 swag_random_seeded
 swag_val_into_word_variables

@@ -117,3 +117,9 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
 | D38 | `{$A B D F L O S V}` switches and `{$M stack,heapmin,heapmax}` | Change code generation, the stack and the heap | Checked as TP checks them (stack 1024 to 65520, heap sizes 0 to 655360) and ignored | `{$N}` and `{$E}`, which TP accepts, stay error 200 (8087 code is omitted); other letters are error 17 as in TP. Odd forms TP tolerates (`{$A++}`, `{$A+B-}`, a `;` between the `$M` numbers) are error 17 here |
+
+## Dos file names (#88)
+
+| # | Deviation | TP5 | This compiler | Notes |
+|---|---|---|---|---|
+| D39 | `FExpand`, `GetDir`, `DosError` on a flat virtual file system | `FExpand` and `GetDir` use the real current directory of each drive (the oracle runs with `C:\` current, so the corpus cannot tell); `DosError` holds whatever the unit data held at start | The current directory of every drive is its root; `GetDir(d)` is the letter `Chr(64 + d)` (0 is `C`) and `:\`, with no check that the drive exists; `DosError` is 0 and nothing sets it. `FExpand` upper-cases ASCII only | `FindFirst`, `FindNext`, `FSearch`, `DiskSize`, `DiskFree`, `ChDir`, `GetFAttr`, `GetFTime` are omitted (see subset.md) |
