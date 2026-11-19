@@ -8,6 +8,11 @@
 //! The one ambiguity is `^`: after an operand (`p^`, `a[i]^`, `f(x)^`) it dereferences, anywhere
 //! else `^M` is a control character, which may be part of a string (`'a'^M'b'`). The scanner
 //! decides by looking at the previous token only.
+//!
+//! `Scanner` reads each kind of token. `Lexer` adds that one token of context and the stop after
+//! `END .`, and hands tokens out one at a time: `directives::expand` pulls them with
+//! `next_token`, and with `next_skipped` inside text that conditional compilation skips.
+//! `lex` collects them all at once and is used by the lexer tests.
 use crate::diag::{code, Diag};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +75,7 @@ impl Scanner<'_> {
         *self.src.get(self.pos + ahead).unwrap_or(&0)
     }
 
+    /// An error at the start of the token being scanned; `file` is filled in by the caller.
     fn error(&self, code: u16) -> Diag {
         Diag {
             code,

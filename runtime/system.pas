@@ -3,7 +3,7 @@
 
   Two kinds of routine live here. Some are standard Pascal and Turbo Pascal routines (Length,
   Copy, Pos, UpCase, ...). The others are helpers that the compiler calls on its own, found by
-  name after this part is checked (compiler/src/check.rs, `Helper`): AbsLong, RangeChk, StrCat,
+  name after this part is checked (compiler/src/symbols.rs, `Helper`): AbsLong, RangeChk, StrCat,
   StrCmp, StrAssign, StrInt, ValLong, ValReal, StrDelete, StrInsert, SetOp, SetAdd, SetIn,
   SetCmp, HeapGet, HeapPut, HeapMark, HeapRelease, HostWrite, RtError, Fmt_Real, TextOut,
   TextNewLine, CheckIo, Assign, Eof, Eoln, ReadChar, ReadLong, ReadReal, ReadStr, ReadLnEnd.
@@ -23,7 +23,9 @@
 { System is compiled with I/O checking off: its own calls never raise a pending error; the
   compiler adds the check after the calls of a program (CheckIo). }
 
-{ Host imports. HostWrite cannot be called Write, a predeclared name, so it names its import. }
+{ Host imports. HostWrite cannot be called Write, a predeclared name, so it names its import.
+  The Fs_ routines return a handle or a count, or a negative number: the negated TP I/O error
+  number. }
 procedure HostWrite(fd, address, count: LongInt); external 'write';
 procedure RtError(code: LongInt); external;
 function Fmt_Real(x: Real; width, decimals, buffer: LongInt): LongInt; external;
@@ -662,7 +664,9 @@ begin
   end
 end;
 
-{ True when an unread byte is in the buffer; an empty buffer is refilled first. }
+{ True when an unread byte is in the buffer; an empty buffer is refilled first. Fill has that
+  side effect, so the readers below always put it first in an `and`: Boolean expressions stop
+  at the first False operand. }
 function Fill(var f: Text): Boolean;
 begin
   if f.Pos >= f.Len then

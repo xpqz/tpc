@@ -35,9 +35,9 @@ enum Directive {
     IfNotDef(Vec<u8>),
     Else,
     EndIf,
-    /// `{$R+}`, `{$R-}` and the switches that are accepted and ignored.
     /// The new `{$R}` and `{$I}` states, each `None` when the directive does not set it.
     Switches(Option<bool>, Option<bool>),
+    /// A directive in malformed skipped text, which is not an error there.
     Ignored,
 }
 
@@ -76,7 +76,7 @@ struct StatementPart {
 }
 
 impl StatementPart {
-    fn after(&mut self, token: &Tok) {
+    fn observe(&mut self, token: &Tok) {
         if self.closing {
             self.inside = false;
             self.closing = false;
@@ -89,9 +89,11 @@ impl StatementPart {
                 self.inside = true;
                 self.depth = 1;
             }
+            // Outside a statement part `end` closes a record (or the unit's own `end`).
             (false, b"RECORD") => self.depth += 1,
             (false, b"END") => self.depth = self.depth.saturating_sub(1),
             (true, b"BEGIN" | b"CASE") => self.depth += 1,
+            // The `end` that brings the depth to 0 closes the statement part.
             (true, b"END") => {
                 self.depth -= 1;
                 self.closing = self.depth == 0;
@@ -194,7 +196,7 @@ impl Expander<'_> {
         token.file = file;
         token.range_checks = self.range_checks;
         token.io_checks = self.io_checks;
-        self.statement_part.after(&token);
+        self.statement_part.observe(&token);
         self.tokens.push(token);
     }
 
@@ -268,6 +270,8 @@ impl Expander<'_> {
             Err(_) if skipping => Directive::Ignored,
             Err(code) => return Err(Diag { code, ..at }),
         };
+        // Conditional directives act even in skipped text; every other directive is ignored
+        // while skipping, which the `_ if skipping` arm does.
         match directive {
             Directive::IfDef(name) => open_conditional(frames, self.symbols.contains(&name)),
             Directive::IfNotDef(name) => open_conditional(frames, !self.symbols.contains(&name)),

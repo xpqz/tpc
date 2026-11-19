@@ -1007,7 +1007,8 @@ impl Parser<'_> {
 
     /// The value of a typed constant: an expression, or a parenthesised list. A `(` may also
     /// start an expression such as `(1 + 2) * 3`, so the list is tried first and the parser
-    /// goes back to the `(` when what follows the `)` does not end the initialiser.
+    /// goes back to the `(` when what follows the `)` does not end the initialiser. The nodes and
+    /// `ast.follow` entries of the abandoned attempt stay in the arena, unused.
     fn initialiser(&mut self) -> R<Id> {
         if self.is(Tk::Sym, b"(") {
             let start = self.pos;

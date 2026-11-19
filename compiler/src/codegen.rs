@@ -13,6 +13,12 @@
 //! as a static link (local 0); a variable of an enclosing routine is reached by following
 //! the links, each stored at offset 0 of its frame.
 //!
+//! A routine declared `external` is a WASM import, numbered before every defined function and
+//! present only if reached (`Layout::imports`). A typed constant is a data segment at its
+//! variable's address, emitted only if a live body names it (`static_image`). Every output
+//! call carries the file it writes to, an address with 0 for the console, so `write_string`
+//! and `write_integer` take it as their first parameter.
+//!
 //! Temporaries: a String value lives in memory, so an expression that produces one (a
 //! concatenation, a Char converted to String, a function result, a formatted Real) gets a
 //! 256-byte slot in the current frame. Slots are not reused within a statement; the next
@@ -1111,7 +1117,7 @@ impl Gen<'_> {
     // ---- Strings, sets and Reals in memory ----
 
     /// Pushes the address of the string value of `e`, which the caller must not modify:
-    /// literals and variables in place, everything else in a temporary (decision 13).
+    /// literals and variables in place, everything else in a temporary (docs/decisions.md).
     fn str(&mut self, e: Id) {
         match self.ast.kind(e) {
             Kind::StrLit(s) => {

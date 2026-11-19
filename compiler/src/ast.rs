@@ -5,6 +5,14 @@
 //! `Call`, `Index` and similar unresolved nodes; the checker then rewrites them in place into
 //! resolved ones (`Name` becomes `Var`, `IntLit`, `Invoke`, ...) and fills in each node's type,
 //! so codegen only ever sees checked nodes.
+//!
+//! Every node is stamped with the source file it came from and the `{$R+}` and `{$I+}` state in
+//! force there (`file`, `range_checks`, `io_checks`). `Ast::add` copies the stamps from the
+//! `Ast` fields of the same names, which the parser sets from each token it consumes and the
+//! checker clears; `Ast::typed` copies them from the node it stands in for, so a node made
+//! by the checker behaves like its source node. `Qualified` records the one interned name
+//! `Unit.Name` that the parser uses for a qualified name, and `Plan` the unit orders that
+//! `units.rs` computes.
 use crate::types::{Sym, Ty};
 
 pub type Id = u32;
@@ -248,7 +256,8 @@ pub struct Ast {
     /// Interned identifiers, uppercase.
     pub names: Vec<Vec<u8>>,
     pub strs: Vec<Vec<u8>>,
-    /// The file that `add` stamps on new nodes.
+    /// The file that `add` stamps on new nodes: set from each token the parser consumes, and
+    /// by the checker to the file of the unit it is checking.
     pub file: u32,
     /// The `{$R+}` and `{$I+}` state that `add` stamps on new nodes.
     pub range_checks: bool,

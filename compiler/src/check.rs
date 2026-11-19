@@ -2,17 +2,24 @@
 //!
 //! The checker walks the parser's tree once and rewrites it in place: a `Name` becomes a
 //! `Var`, a constant, or a call; every expression node gets its type; constant expressions
-//! are folded. It also decides where each variable lives, which is the central technique:
+//! are folded.
 //!
-//! - A variable is first a WASM local (`SymKind::Local`), or a global at a fixed address
-//!   (`Var`). A `var` parameter is a local holding an address (`Ref`).
-//! - A local that must have an address (passed as a `var` argument, `@x`, or an in-memory
-//!   type such as a record) or that a nested routine uses is marked `needs_frame_slot` by
-//!   `capture`. When the routine has been checked, `place_frame` moves those locals into the
-//!   routine's frame in linear memory (`Frame`, `FrameRef`) and lays the frame out.
-//! - A routine nested in another receives the enclosing frame pointer as a hidden first
-//!   parameter, the static link; a function returning a String receives the address of its
-//!   result as a further hidden parameter (see `Routine::hidden_params`).
+//! Where each variable lives is decided by `symbols.rs`, which the checker asks: a variable is
+//! first a WASM local, or a global at a fixed address; `capture` marks a local that needs an
+//! address, and `place_frame` moves those into the routine's frame in linear memory once its
+//! body is checked. A routine nested in another receives the enclosing frame pointer as a
+//! hidden first parameter, the static link; a function returning a String receives the address
+//! of its result as a further hidden parameter (see `Routine::hidden_params`).
+//!
+//! Units are checked in two phases: System, then every unit's interface in `Plan` order, then
+//! every implementation, then the program. A unit's initialisation part becomes an `InitPart`,
+//! and the program body is rewritten to run those first.
+//!
+//! A typed constant is a static variable. Its initialiser is checked here (`initial_value`);
+//! codegen lays out its bytes (`static_image`). A routine declared `external` (runtime
+//! sources only) is a host import: it has no body. `Write` and `Read` get an explicit file
+//! argument (the console when none is given) and `Read` becomes one helper call per item
+//! (`ReadChar`, `ReadLong`, ...).
 //!
 //! Several intrinsics are rewritten into an assignment of a System helper's result:
 //! `Inc(x, n)` is `x := Ord(x) + n`, `New(p)` is `p := HeapGet(size)`, `Delete(s, i, n)` is
@@ -230,6 +237,7 @@ impl Cx<'_> {
         else {
             unreachable!("a unit")
         };
+        // Nodes made while checking this file carry its number.
         self.ast.file = self.ast.node(unit).file;
         self.symbols.begin_unit(name);
         self.import_uses(interface_uses);
@@ -405,6 +413,8 @@ impl Cx<'_> {
 
     /// Checks that `init` is a constant of type `ty`, following the shape of the type.
     fn initial_value(&mut self, ty: Ty, init: Id) -> R<()> {
+        // A record initialiser for another type is rejected here: the array and scalar paths
+        // below would read it as an expression.
         if matches!(self.ast.kind(init), Kind::RecordInit(_)) && !self.types.is_record(ty) {
             return Err(self.err(init, code::TYPE_MISMATCH));
         }
@@ -412,6 +422,7 @@ impl Cx<'_> {
             return self.record_initialiser(ty, init);
         }
         match self.types.array_of(ty) {
+            // `array_of` also describes a String; a String initialiser is a scalar one.
             Some((_, lo, hi, elem)) if !self.types.is_str(ty) => {
                 self.array_initialiser(init, (hi - lo + 1) as usize, elem)
             }

@@ -56,14 +56,16 @@ budgets are in `plan.md` §1. The 500-line margin is not spent before Phase 7.
 One line per file of `compiler/src/`. Code goes where its line says; a function that needs
 two files' worth of knowledge is split, not placed in the nearer one.
 
-- `lex.rs`: bytes to tokens. No knowledge of grammar.
+- `lex.rs`: bytes to tokens, with one token of context (`^`, the final `END .`). No other
+  grammar.
 - `ast.rs`: the node arena, handles and name interning. No semantics.
 - `parse.rs`: tokens to nodes with TP's error positions. No name resolution or types.
 - `types.rs`: the type table, compatibility, operator typing, and the plain records the
-  checker produces (`Symbol`, `Routine`). Pure data and rules; no scopes, no diagnostics
+  checker produces (`Symbol`, `Routine`, `Intrinsic`, `TypedConst`). Pure data and rules; no scopes, no diagnostics
   about constructs.
 - `symbols.rs`: scope stack, declaration, lookup, predefined and System names, storage choice
-  and frame layout. Never imports `check`, never builds a `Diag`, never rewrites nodes.
+  and frame layout, and `Helper`, the System routines the compiler calls by name. Never imports
+  `check`, never builds a `Diag`, never reads or rewrites nodes beyond interning names.
 - `check.rs`: walks the tree: construct rules, typing, constant folding, desugaring, and every
   construct-specific error. Asks `symbols.rs` where things live.
 - `codegen.rs`: checked tree to WASM instructions and the memory map. Never re-decides types or
@@ -71,7 +73,7 @@ two files' worth of knowledge is split, not placed in the nearer one.
 - `wasm.rs`: the binary format only: sections, LEB128, validated structured control.
 - `diag.rs`: error codes, messages and rendering.
 - `directives.rs`: expands compiler directives between lexing and parsing: `{$I file}`
-  includes, conditional compilation, and the switch state (`{$R}`) carried on each token.
+  includes, conditional compilation, and the switch state (`{$R}`, `{$I}`) carried on each token.
 - `units.rs`: finds the unit files a program uses, parses them, and orders them (interface
   order, initialisation order, cycles). No scoping and no types.
 - `driver.rs`: runs the stages and the native command line. `ffi.rs`: the wasm32 exports.

@@ -1,10 +1,15 @@
-//! Types, symbols and the operator typing rules (decisions 5 and 10).
+//! Types, the plain `Symbol` and `Routine` records, and the operator typing rules.
 //!
 //! `Types` is a table of `Type` values; a `Ty` is an index into it, and the predefined types
 //! have fixed indexes (`Ty::INTEGER`, ...). Types compare by identity (name equivalence),
 //! except that `compat` decides which ordinal, pointer and set types may be mixed. A
 //! subrange or enumeration keeps the predefined type that decides its arithmetic as its
-//! `base`. Symbols record what each declared name stands for and where it is stored.
+//! `base`. Symbols record what each declared name stands for and where it is stored; the scope
+//! stack that finds them is in `symbols.rs`.
+//!
+//! A text file variable is a record declared in System (`Types::text`), but every other source
+//! treats it as a file: `is_file` tells the checker to apply the file rules. A `TypedConst` is a
+//! static variable with an initial memory image that codegen builds.
 use crate::ast::{Id, Op};
 use crate::diag::code;
 

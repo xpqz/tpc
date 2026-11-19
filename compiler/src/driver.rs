@@ -1,4 +1,8 @@
 //! The compiler pipeline (load, check, codegen) and the native command line.
+//!
+//! Unit files come from the files beside the input, then from `--dir`; both are the `.pas` and
+//! `.inc` files of a directory, and a later file of the same name wins. The units of the
+//! runtime (`EMBEDDED_UNITS`) are found first and need no file.
 use crate::check::check;
 use crate::codegen::gen;
 use crate::diag::Diag;
@@ -7,7 +11,7 @@ use std::path::Path;
 
 const USAGE: &str = "usage: tp5c in.pas -o out.wasm [--dir AUXDIR]";
 
-/// The units of the runtime that `uses` finds without a file (decision 11).
+/// The units of the runtime that `uses` finds without a file (docs/decisions.md).
 const EMBEDDED_UNITS: &[EmbeddedUnit] = &[EmbeddedUnit {
     name: "DOS",
     source: include_bytes!("../../runtime/dos.pas"),

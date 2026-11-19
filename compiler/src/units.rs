@@ -1,13 +1,14 @@
 //! Unit loading: finds the source of every unit a program uses, parses it, and orders the units.
 //!
-//! The host registers every source file by name before compiling (decision 27), so a unit is
-//! the file `NAME.PAS` of that table, any case; of two files with the same name the later
-//! registration wins. Only the units a program reaches are lexed and parsed.
+//! The host registers every source file by name before compiling (docs/decisions.md), so a
+//! unit is the file `NAME.PAS` of that table, any case; of two files with the same name the
+//! later registration wins. Only the units a program reaches are lexed and parsed.
 //!
 //! The units of the runtime (Dos) are embedded in the compiler and sit outside that table, like
 //! System: they are looked up first, so a registered `DOS.PAS` never replaces one (TP 5.0 takes
 //! its own units from TURBO.TPL whatever is in the directory). They are file 0 with every token
-//! at line 0, so no diagnostic of theirs carries a user line.
+//! at line 0, so no diagnostic of theirs carries a user line. File number 0 is therefore three
+//! things: the main program, System, and the embedded units; registered files are 1 and up.
 //!
 //! One depth-first walk of the `uses` clauses, in the order they are written, produces both
 //! orders the checker needs. A unit is visited when it is first named:

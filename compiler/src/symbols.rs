@@ -46,7 +46,7 @@ use crate::types::{ConstValue, Intrinsic};
 use crate::types::{FrameCopy, Routine, Sym, SymKind, Symbol, Ty, Types};
 
 /// The System routines that the compiler calls on its own behalf, bound by name right after
-/// System is loaded (decision 11).
+/// System is loaded (docs/decisions.md).
 #[derive(Clone, Copy)]
 pub enum Helper {
     AbsLong,
@@ -703,6 +703,8 @@ impl Symbols {
             };
             size += types.size(ty);
         }
+        // A routine with nested routines needs a frame even without captured locals: the
+        // nested ones receive its frame pointer as their static link.
         routine.framed = size > first_slot || routine.has_children;
         routine.frame = size;
         routine.copies = copies;

@@ -1,6 +1,6 @@
 //! Diagnostics: the error type, TP error numbers with their messages, and rendering.
 //! There is no `format!`: messages come from a static table and numbers are printed by
-//! `push_dec`.
+//! `push_dec`. The numbers appear only in `code`, which is kept in ascending order.
 
 /// A compile error: TP error number and the source position TP reports it at. `file` is 0 for
 /// the main program (and System), n for the n-th registered file.
