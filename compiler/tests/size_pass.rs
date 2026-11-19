@@ -162,9 +162,9 @@ fn real_division_adds_its_helper_and_the_rterror_import() {
 
 #[test]
 fn hello_world_stays_under_the_size_after_the_size_pass() {
-    // Before the pass it was 875 bytes.
+    // 875 bytes before the pass, 697 after; the limit is 5% above that.
     let module = compile(HELLO);
-    assert!(module.len() <= 760, "hello-world is {} bytes", module.len());
+    assert!(module.len() <= 732, "hello-world is {} bytes", module.len());
 }
 
 #[test]
