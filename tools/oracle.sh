@@ -13,6 +13,8 @@
 tools=$(cd "$(dirname "$0")" && pwd)
 cd "${ORACLE_ROOT:-$tools/..}" || exit 2
 mkdir -p tmp
+# Programs that move a 64 KB gap buffer take ~50 s on the emulated 8086.
+export TP5_TIMEOUT="${TP5_TIMEOUT:-180}"
 scratch=$(mktemp "${TMPDIR:-/tmp}/oracle.XXXXXX")
 trap 'rm -f "$scratch"' EXIT
 bad=0
