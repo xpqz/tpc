@@ -79,12 +79,14 @@ fn render_format() {
         code: 5,
         line: 3,
         col: 7,
+        file: 0,
     };
     assert_eq!(render("a.pas", &d), "a.pas(3,7): Error 5: Syntax error");
     let d = Diag {
         code: 200,
         line: 1,
         col: 1,
+        file: 0,
     };
     assert_eq!(
         render("dir/x.pas", &d),
@@ -94,6 +96,7 @@ fn render_format() {
         code: 85,
         line: 12345,
         col: 80,
+        file: 0,
     };
     assert_eq!(
         render("p.pas", &d),
@@ -107,6 +110,7 @@ fn render_unknown_code_still_has_a_message() {
         code: 999,
         line: 2,
         col: 4,
+        file: 0,
     };
     assert_eq!(render("p.pas", &d), "p.pas(2,4): Error 999: Unknown error");
 }
@@ -117,6 +121,7 @@ fn compile_reports_diagnostic_position() {
         code: 3,
         line: 1,
         col: 7,
+        file: 0,
     });
     assert_eq!(compile(b"begin Foo end."), want);
     assert!(compile(b"program p; begin end.").is_ok());

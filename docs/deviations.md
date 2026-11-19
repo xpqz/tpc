@@ -79,3 +79,10 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | D23 | Line of the error for a list with too many elements | Error 89 is reported at the comma before the first extra element | Reported at the first extra element | Differs only when the element starts a new line; `neg/typedconst_too_many_elements` and the own tests keep the list on one line |
 | D24 | A number for a `string[n]` constant | `n: string[5] = 42` is error 102 (String constant expected) | Error 26 (Type mismatch) | Still rejected; no test |
 | D25 | Fields after a record prefix | `(x: 1)` for a record with more fields is accepted and the rest is undefined | The remaining fields are zero | No test reads them |
+
+## Units (Phase 5)
+
+| # | Deviation | TP5 | This compiler | Notes |
+|---|---|---|---|---|
+| D26 | A variable with the name of a used unit | Error 4 in the same scope; in a nested routine the variable hides the unit name | A unit name followed by `.` and an identifier is always the qualified name, so `U.x` in a routine that declares its own `U` reads the unit's `x` | Needs a local named like a used unit; no test |
+| D27 | A variable named like a used unit, in the same scope | Error 4 | Accepted | Not tested |

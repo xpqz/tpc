@@ -1,8 +1,8 @@
 #![deny(unsafe_code)]
 //! A Turbo Pascal 5.0 compiler to WebAssembly. The pipeline, in reading order:
 //!
-//! - `lex`: bytes to tokens.
-//! - `parse`: tokens to the syntax tree (`ast`), an arena of nodes.
+//! - `units`: finds and orders the units a program uses; per file, `lex` turns bytes to tokens and
+//!   `parse` tokens to the syntax tree (`ast`), an arena of nodes shared by all files.
 //! - `check`: names, types and constants resolved, the tree rewritten in place; `types` holds
 //!   the type table and the operator typing rules, `symbols` the scopes, storage and frame
 //!   layout, `diag` the errors.
@@ -20,7 +20,9 @@ pub mod lex;
 pub mod parse;
 pub mod symbols;
 pub mod types;
+pub mod units;
 pub mod wasm;
 
 pub use diag::Diag;
-pub use driver::{compile, compile_with};
+pub use driver::{compile, compile_files, compile_with};
+pub use units::SourceFile;

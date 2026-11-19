@@ -25,7 +25,7 @@
 //! address is taken. Function numbers are then assigned (imports first, then the defined
 //! functions) and the emit phase runs the generator again to produce the module with the
 //! final numbers. A routine that is never reached is never emitted.
-use crate::ast::{Ast, Id, Kind, List, Op};
+use crate::ast::{Ast, Id, Kind, List, Op, RangeSwitch};
 use crate::check::Info;
 use crate::symbols::Helper;
 use crate::types::{FrameCopy, ParamType, Routine, SymKind, Symbol, Tag, Ty, Type};
@@ -901,8 +901,10 @@ impl Gen<'_> {
     /// True when `{$R+}` is in effect at the position of node `e`: the last range switch
     /// before it decides.
     fn range_checking_at(&self, e: Id) -> bool {
-        let at = self.ast.position(e);
-        let switch = self.ast.range.iter().rev().find(|s| (s.line, s.col) <= at);
+        let node = self.ast.node(e);
+        let at = (node.line, node.col);
+        let in_file = |s: &&RangeSwitch| s.file == node.file && (s.line, s.col) <= at;
+        let switch = self.ast.range.iter().rev().find(in_file);
         switch.is_some_and(|s| s.on)
     }
 
@@ -1351,6 +1353,14 @@ impl Gen<'_> {
                 self.expr(code);
                 self.code.call(self.layout.indexes.host_rterror);
             }
+            Kind::InitPart(body) => {
+                // `Exit` in a unit's initialisation leaves that part only.
+                let enclosing = self.exit;
+                self.exit = self.code.block(VOID);
+                self.stmt(body);
+                self.code.end();
+                self.exit = enclosing;
+            }
             Kind::Exit => {
                 self.code.br(self.exit);
             }
@@ -1556,6 +1566,9 @@ impl Gen<'_> {
             (None, _) if node.ty == Ty::REAL => self.write_real(value, width, decimals),
             (None, Kind::StrLit(s)) => self.write_literal(s, width),
             (None, _) if self.info.types.is_str(node.ty) => self.write_string_value(value, width),
+            (None, _) if self.info.types.is_char_array(node.ty) => {
+                self.write_char_array(value, node.ty, width)
+            }
             (Some(Tag::Int), _) => {
                 self.expr(value);
                 self.width(width);
@@ -1605,6 +1618,15 @@ impl Gen<'_> {
         self.code.local_set(address);
         self.code.local_get(address).i32_const(1).op(I32_ADD);
         self.code.local_get(address).mem(I32_LOAD8_U, 0, 0);
+        self.width(width);
+        self.code.call(self.layout.indexes.write_string);
+    }
+
+    /// An array of Char is written from its address: every element.
+    fn write_char_array(&mut self, value: Id, ty: Ty, width: Option<Id>) {
+        let (_, low, high, _) = self.info.types.array_of(ty).expect("an array");
+        self.address_of(value);
+        self.code.i32_const((high - low + 1) as i32);
         self.width(width);
         self.code.call(self.layout.indexes.write_string);
     }

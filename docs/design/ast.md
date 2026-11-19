@@ -38,7 +38,7 @@ operators, `Neg`, `Not` and the unary intrinsics `Ord Chr Succ Pred Odd Abs Sqr`
 
 Node kinds, by group:
 
-- **Declarations.** `Program(name, decls, body)`, `ConstDecl`, `TypedConst(name, type name, init)` (initialisers: an expression, `ArrayInit(items)`, `RecordInit(FieldInit(name, value)...)`, the lists stamped at their `)`), `VarDecl(name, type name)`,
+- **Declarations.** `Program(name, uses, decls, body)`, `Unit(name, interface uses, interface decls, implementation uses, implementation decls, body)` (System is a unit with only interface declarations), `InitPart(body)` (made by the checker for each unit body), `ConstDecl`, `TypedConst(name, type name, init)` (initialisers: an expression, `ArrayInit(items)`, `RecordInit(FieldInit(name, value)...)`, the lists stamped at their `)`), `VarDecl(name, type name)`,
   `TypeDecl(name, def)`, `Routine(name, params, result type, is_func, block)` (block `None` for
   `forward`), `Param(name, type name, by_ref)`, `Block(decls, body)`.
 - **Type definitions** (the `def` of a `TypeDecl`, or a type position): `Name`, `Range`, `Enum`,

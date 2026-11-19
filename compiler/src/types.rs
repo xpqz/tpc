@@ -462,6 +462,12 @@ impl Types {
         }
     }
 
+    /// An array of Char that is not a String (it has no length byte).
+    pub fn is_char_array(&self, t: Ty) -> bool {
+        let elem = self.array_of(t).map(|(_, _, _, elem)| elem);
+        !self.is_str(t) && elem.is_some_and(|e| self.tag(e) == Some(Tag::Char))
+    }
+
     pub fn is_str(&self, t: Ty) -> bool {
         matches!(self.get(t), Type::Str(_))
     }

@@ -1,0 +1,3 @@
+unit Bare;
+implementation
+end.

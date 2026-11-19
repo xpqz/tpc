@@ -173,7 +173,17 @@ a nested routine are error 200 in the runtime source. Currently: `write` is `Hos
 
 Compiler API exported from `compiler.wasm` (`plan.md` §3): `alloc(n) -> ptr`,
 `compile(src_ptr, src_len, flags) -> status`, `out_ptr()`, `out_len()`, `err_line()`,
-`err_col()`, `err_code()`.
+`err_col()`, `err_code()`, `err_file()`, `add_file(name_ptr, name_len, src_ptr, src_len) -> status`.
+
+Units (decision 27): the host registers every unit source before `compile`, and the compiler
+never calls back. `alloc` hands out one buffer that the next `alloc` invalidates, so the host
+allocates the name and the source together, writes the name and then the source into that
+buffer, and calls `add_file` with both ranges inside it (status 1 if a range is outside the
+buffer, else 0). A unit `U` is the registered file `U.PAS`, any case; registering a name again
+replaces the file and keeps its number. Registered files stay registered across `compile`
+calls. After a failed `compile`, `err_file()` is 0 for the main program (and System), else the
+file's number: its position in registration order, counting from 1. The native CLI registers
+the `.pas` files beside the input, then those of `--dir AUXDIR`, which win on a name clash.
 
 ### File and console input contract
 

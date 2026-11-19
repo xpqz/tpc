@@ -8,9 +8,13 @@
 //! yet read is reserved first (`reserve_node`) and filled in (`fill_node`) when its children
 //! are parsed.
 //!
-//! The parser runs twice, over System's declaration part and then over the user's program,
-//! into one `Ast`; the program's declaration list starts with System's.
-use crate::ast::{Ast, FollowLine, Id, Kind, List, Op, RangeSwitch, NO_NAME};
+//! One parser run reads one source file: System's declaration part, a unit, or the program.
+//! All runs add to the same `Ast`, so names and nodes are shared between files.
+//!
+//! A unit name (System, the unit itself, each name in a `uses` clause) followed by `.` and an
+//! identifier is a qualified name. The parser replaces the pair by one interned name `U.X`
+//! and records it in `Ast::qualified`; the symbol table resolves it in the unit's exports.
+use crate::ast::{Ast, FollowLine, Id, Kind, List, Op, Qualified, RangeSwitch, NO_NAME};
 use crate::diag::{code, Diag};
 use crate::lex::{Tk, Tok};
 
@@ -66,13 +70,18 @@ enum Switch {
     RangeChecks(bool),
 }
 
-struct Parser {
+struct Parser<'a> {
     tokens: Vec<Tok>,
     pos: usize,
-    ast: Ast,
+    ast: &'a mut Ast,
     stops: StopWords,
     /// Parsing the embedded runtime source, the only place `external` is allowed.
     in_system: bool,
+    /// Parsing a unit's interface part: a routine heading stands alone, as a forward.
+    in_interface: bool,
+    /// Names of the units this file may qualify names with: System, the unit itself, and
+    /// every unit named in a `uses` clause so far. A unit name is declared once per file.
+    unit_names: Vec<u32>,
 }
 
 type R<T> = Result<T, Diag>;
@@ -88,7 +97,7 @@ fn parse_switch(item: &[u8]) -> Result<Switch, u16> {
     }
 }
 
-impl Parser {
+impl Parser<'_> {
     /// Removes the directive tokens, recording the range-check switches with their position.
     fn drop_directives(&mut self, tokens: Vec<Tok>) -> R<Vec<Tok>> {
         for directive in tokens.iter().filter(|t| t.kind == Tk::Directive) {
@@ -96,6 +105,7 @@ impl Parser {
                 match parse_switch(item) {
                     Ok(Switch::Ignored) => {}
                     Ok(Switch::RangeChecks(on)) => self.ast.range.push(RangeSwitch {
+                        file: self.ast.file,
                         line: directive.line,
                         col: directive.col,
                         on,
@@ -105,6 +115,7 @@ impl Parser {
                             code,
                             line: directive.line,
                             col: directive.col,
+                            file: 0,
                         })
                     }
                 }
@@ -114,19 +125,6 @@ impl Parser {
             .into_iter()
             .filter(|t| t.kind != Tk::Directive)
             .collect())
-    }
-
-    /// System's declaration part; returns its declarations.
-    fn system_declarations(&mut self, system: Vec<Tok>) -> R<Vec<Id>> {
-        self.tokens = self.drop_directives(system)?;
-        self.in_system = true;
-        let declarations = self.declarations()?;
-        self.in_system = false;
-        if self.tok().kind != Tk::Eof {
-            return Err(self.err(code::BEGIN_EXPECTED));
-        }
-        self.ast.system = declarations.len();
-        Ok(declarations)
     }
 
     /// `[program Name [(files)];]`; returns the name, `NO_NAME` when there is no header.
@@ -142,34 +140,129 @@ impl Parser {
         self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
         Ok(name)
     }
+
+    /// `[uses A, B;]`: the unit names as `Name` nodes. A unit name may be declared only once
+    /// in a file, so a repeated one, `System` or the unit's own name is error 4.
+    fn uses_clause(&mut self) -> R<List> {
+        let mut entries = Vec::new();
+        if self.kw(b"USES") {
+            loop {
+                let (line, col) = self.pos();
+                let name = self.ident()?;
+                if self.unit_names.contains(&name) {
+                    return Err(Diag {
+                        code: code::DUPLICATE_IDENTIFIER,
+                        line,
+                        col,
+                        file: 0,
+                    });
+                }
+                self.unit_names.push(name);
+                entries.push(self.ast.add(Kind::Name(name), line, col));
+                if !self.sym(b",") {
+                    break;
+                }
+            }
+            self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
+        }
+        Ok(self.ast.list(&entries))
+    }
+
+    /// `unit Name; interface [uses] declarations implementation [uses] declarations
+    /// [begin statements] end .` A file that starts with `program` is not a unit.
+    fn unit(&mut self) -> R<Id> {
+        self.expect_kw(b"UNIT", code::UNIT_EXPECTED)?;
+        let name = self.ident()?;
+        self.unit_names.push(name);
+        self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
+        self.expect_kw(b"INTERFACE", code::INTERFACE_EXPECTED)?;
+        let interface_uses = self.uses_clause()?;
+        self.in_interface = true;
+        let interface = self.declarations()?;
+        self.in_interface = false;
+        self.expect_kw(b"IMPLEMENTATION", code::IMPLEMENTATION_EXPECTED)?;
+        let implementation_uses = self.uses_clause()?;
+        let implementation = self.declarations()?;
+        let (line, col) = self.pos();
+        let body = if self.kw(b"BEGIN") {
+            self.compound()?
+        } else {
+            self.expect_kw(b"END", code::END_EXPECTED)?;
+            let nothing = self.ast.list(&[]);
+            self.ast.add(Kind::Compound(nothing), line, col)
+        };
+        self.expect_sym(b".", code::PERIOD_EXPECTED)?;
+        let unit = Kind::Unit {
+            name,
+            interface_uses,
+            interface: self.ast.list(&interface),
+            implementation_uses,
+            implementation: self.ast.list(&implementation),
+            body,
+        };
+        Ok(self.ast.add(unit, line, col))
+    }
 }
 
-/// The System declaration part `system`, then the program `toks`; the program's declaration list
-/// starts with System's (`Ast::system` of them).
-pub fn parse(system: Vec<Tok>, toks: Vec<Tok>) -> R<(Ast, Id)> {
+/// A parser over `toks` that adds to `ast`.
+fn parser<'a>(ast: &'a mut Ast, toks: Vec<Tok>) -> R<Parser<'a>> {
+    let system = ast.intern(b"SYSTEM");
     let mut parser = Parser {
         tokens: Vec::new(),
         pos: 0,
-        ast: Ast::default(),
+        ast,
         stops: StopWords::default(),
         in_system: false,
+        in_interface: false,
+        unit_names: vec![system],
     };
-    let mut declarations = parser.system_declarations(system)?;
     parser.tokens = parser.drop_directives(toks)?;
-    parser.pos = 0;
+    Ok(parser)
+}
+
+/// System's declaration part, as a unit whose declarations are all in its interface.
+pub fn parse_system(ast: &mut Ast, toks: Vec<Tok>) -> R<Id> {
+    let mut parser = parser(ast, toks)?;
+    parser.in_system = true;
+    let declarations = parser.declarations()?;
+    if parser.tok().kind != Tk::Eof {
+        return Err(parser.err(code::BEGIN_EXPECTED));
+    }
+    let nothing = parser.ast.list(&[]);
+    let body = parser.ast.add(Kind::Compound(nothing), 0, 0);
+    let unit = Kind::Unit {
+        name: parser.unit_names[0],
+        interface_uses: nothing,
+        interface: parser.ast.list(&declarations),
+        implementation_uses: nothing,
+        implementation: nothing,
+        body,
+    };
+    Ok(parser.ast.add(unit, 0, 0))
+}
+
+/// The unit in `toks`.
+pub fn parse_unit(ast: &mut Ast, toks: Vec<Tok>) -> R<Id> {
+    parser(ast, toks)?.unit()
+}
+
+/// The program in `toks`.
+pub fn parse_program(ast: &mut Ast, toks: Vec<Tok>) -> R<Id> {
+    let mut parser = parser(ast, toks)?;
     let name = parser.program_header()?;
-    declarations.extend(parser.declarations()?);
+    let uses = parser.uses_clause()?;
+    let declarations = parser.declarations()?;
     let (line, col) = parser.pos();
     let body = parser.begin()?;
     parser.expect_sym(b".", code::PERIOD_EXPECTED)?;
     let declarations = parser.ast.list(&declarations);
     let program = Kind::Program {
         name,
+        uses,
         declarations,
         body,
     };
-    let root = parser.ast.add(program, line, col);
-    Ok((parser.ast, root))
+    Ok(parser.ast.add(program, line, col))
 }
 
 const ADD: &[(&[u8], Op)] = &[
@@ -197,7 +290,7 @@ const REL: &[(&[u8], Op)] = &[
     (b"IN", Op::In),
 ];
 
-impl Parser {
+impl Parser<'_> {
     fn tok(&self) -> &Tok {
         &self.tokens[self.pos]
     }
@@ -233,6 +326,7 @@ impl Parser {
             code,
             line: t.line,
             col: t.col,
+            file: 0,
         }
     }
 
@@ -281,6 +375,34 @@ impl Parser {
         let name = self.ast.intern(&self.tokens[self.pos].text);
         self.advance();
         Ok(name)
+    }
+
+    /// An identifier that names something declared elsewhere. A unit name followed by `.` and an
+    /// identifier is the qualified name of that unit's member.
+    fn name_reference(&mut self) -> R<u32> {
+        let name = self.ident()?;
+        let qualifies = self.unit_names.contains(&name)
+            && self.is(Tk::Sym, b".")
+            && self.peek(1).kind == Tk::Ident;
+        if !qualifies {
+            return Ok(name);
+        }
+        self.advance();
+        let member = self.ident()?;
+        let mut joined = self.ast.names[name as usize].clone();
+        joined.push(b'.');
+        joined.extend_from_slice(&self.ast.names[member as usize]);
+        let joined = self.ast.intern(&joined);
+        let known = self.ast.qualified.iter().any(|q| q.joined == joined);
+        if !known {
+            let qualified = Qualified {
+                joined,
+                unit: name,
+                member,
+            };
+            self.ast.qualified.push(qualified);
+        }
+        Ok(joined)
     }
 
     /// `ident {, ident}` with the position of each.
@@ -577,7 +699,7 @@ impl Parser {
         if self.is(Tk::Kw, b"ARRAY") || self.is(Tk::Kw, b"RECORD") || self.is(Tk::Kw, b"PACKED") {
             return Err(self.err(code::TYPE_IDENTIFIER_EXPECTED));
         }
-        self.ident()
+        self.name_reference()
     }
 
     /// An optional parenthesised parameter list, as `Param` nodes.
@@ -815,7 +937,9 @@ impl Parser {
         self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
         self.unsupported(&[b"INLINE", b"INTERRUPT"])?;
         let external = self.external_directive(name)?;
-        let block = if external.is_some() || self.kw(b"FORWARD") {
+        // An interface heading is complete at its `;`: the definition comes later.
+        let heading_only = self.in_interface;
+        let block = if heading_only || external.is_some() || self.kw(b"FORWARD") {
             None
         } else {
             let (line, col) = self.pos();
@@ -824,7 +948,9 @@ impl Parser {
             let declarations = self.ast.list(&declarations);
             Some(self.ast.add(Kind::Block(declarations, body), line, col))
         };
-        self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
+        if !heading_only {
+            self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
+        }
         let kind = Kind::Routine {
             name,
             params,
@@ -1071,7 +1197,7 @@ impl Parser {
     /// A variable with selectors.
     fn designator(&mut self) -> R<Id> {
         let (line, col) = self.pos();
-        let name = self.ident()?;
+        let name = self.name_reference()?;
         let base = self.ast.add(Kind::Name(name), line, col);
         self.selectors(base)
     }
@@ -1186,7 +1312,7 @@ impl Parser {
 
     /// A variable, a constant, or a call `f(args)`, with selectors.
     fn identifier_factor(&mut self, line: u32, col: u32) -> R<Id> {
-        let name = self.ident()?;
+        let name = self.name_reference()?;
         let callee = self.ast.add(Kind::Name(name), line, col);
         if !self.sym(b"(") {
             let follow = FollowLine {
@@ -1194,7 +1320,8 @@ impl Parser {
                 line: self.tok().line,
             };
             self.ast.follow.push(follow);
-            return self.selectors(callee);
+            let designator = self.selectors(callee)?;
+            return self.call_of_designator(designator);
         }
         let (args, call_at) = self.arguments()?;
         let list = self.ast.list(&args);
@@ -1204,6 +1331,19 @@ impl Parser {
         } else {
             Ok(call)
         }
+    }
+
+    /// `r.f(args)` or `a[i](args)`: after the selectors, a call through the procedural value
+    /// that the variable holds.
+    fn call_of_designator(&mut self, designator: Id) -> R<Id> {
+        if !self.sym(b"(") {
+            return Ok(designator);
+        }
+        let (args, call_at) = self.arguments()?;
+        let list = self.ast.list(&args);
+        Ok(self
+            .ast
+            .add(Kind::Call(designator, list), call_at.0, call_at.1))
     }
 
     /// `[a, b..c]`: a set constructor.

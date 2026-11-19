@@ -17,4 +17,3 @@ file_reset_of_unassigned_file
 file_rewrite_in_missing_directory
 file_write_after_close
 file_write_to_file_open_for_input
-unit_initialization_runtime_error

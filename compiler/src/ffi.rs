@@ -7,6 +7,8 @@ use std::cell::RefCell;
 #[derive(Default)]
 struct State {
     src: Vec<u8>,
+    /// Registered source files; they stay registered across `compile` calls.
+    files: Vec<crate::SourceFile>,
     out: Vec<u8>,
     err: crate::Diag,
 }
@@ -29,6 +31,45 @@ pub extern "C" fn alloc(n: usize) -> *const u8 {
     })
 }
 
+/// The `len` bytes at `ptr` if they lie inside `buffer`; only offsets are computed.
+fn within(buffer: &[u8], ptr: *const u8, len: usize) -> Option<&[u8]> {
+    let start = (ptr as usize).checked_sub(buffer.as_ptr() as usize)?;
+    buffer.get(start..start.checked_add(len)?)
+}
+
+/// Registers a source file (a unit) under `name`, replacing an earlier one of that name (any
+/// case). Both ranges must lie inside the buffer of the last `alloc`, so the host allocates
+/// the name and the source in one buffer. Returns 0, or 1 if a range is outside the buffer.
+/// The file's number in `err_file` is its position in registration order, counting from 1.
+#[no_mangle]
+pub extern "C" fn add_file(
+    name_ptr: *const u8,
+    name_len: usize,
+    src_ptr: *const u8,
+    src_len: usize,
+) -> u32 {
+    with(|s| {
+        let name = within(&s.src, name_ptr, name_len);
+        let text = within(&s.src, src_ptr, src_len);
+        let (Some(name), Some(text)) = (name, text) else {
+            return 1;
+        };
+        let file = crate::SourceFile {
+            name: String::from_utf8_lossy(name).into_owned(),
+            text: text.to_vec(),
+        };
+        match s
+            .files
+            .iter_mut()
+            .find(|f| f.name.eq_ignore_ascii_case(&file.name))
+        {
+            Some(existing) => *existing = file,
+            None => s.files.push(file),
+        }
+        0
+    })
+}
+
 /// Compiles the buffer from the last `alloc`: 0 on success (output via `out_ptr`/`out_len`),
 /// 1 on error (position via `err_*`) or if `src_ptr`/`src_len` is not that buffer.
 #[no_mangle]
@@ -36,7 +77,7 @@ pub extern "C" fn compile(src_ptr: *const u8, src_len: usize, _flags: u32) -> u3
     with(|s| {
         let valid = src_ptr == s.src.as_ptr() && src_len <= s.src.len();
         let res = if valid {
-            crate::compile(&s.src[..src_len])
+            crate::compile_files(&s.src[..src_len], &s.files)
         } else {
             Err(crate::Diag::default())
         };
@@ -76,4 +117,10 @@ pub extern "C" fn err_line() -> u32 {
 #[no_mangle]
 pub extern "C" fn err_col() -> u32 {
     with(|s| s.err.col)
+}
+
+/// The file of the last error: 0 for the main program, else the number `add_file` gave.
+#[no_mangle]
+pub extern "C" fn err_file() -> u32 {
+    with(|s| s.err.file)
 }

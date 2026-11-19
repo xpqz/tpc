@@ -44,13 +44,16 @@ fn res(o: std::process::Output) -> Res {
     }
 }
 
+/// Runs `tp5c`; a directory `STEM/` next to the source `STEM.pas` is passed as the auxiliary
+/// directory that holds its units (decision 26).
 pub fn real_compile(src: &Path, out: &Path) -> Res {
-    let o = Command::new(env!("CARGO_BIN_EXE_tp5c"))
-        .arg(src)
-        .arg("-o")
-        .arg(out)
-        .output();
-    res(o.unwrap())
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tp5c"));
+    cmd.arg(src).arg("-o").arg(out);
+    let aux = src.with_extension("");
+    if aux.is_dir() {
+        cmd.arg("--dir").arg(aux);
+    }
+    res(cmd.output().unwrap())
 }
 
 /// Stand-in compiler for driver fixtures. A source starting `#error N LINE COL [FILE]` fails

@@ -133,12 +133,26 @@ pub enum Kind {
     },
     /// `Write` / `WriteLn` (true) with its arguments.
     Write(List, bool),
-    /// `name` is `NO_NAME` when the program has no header.
+    /// `name` is `NO_NAME` when the program has no header. `uses` is a list of `Name` nodes.
     Program {
         name: u32,
+        uses: List,
         declarations: List,
         body: Id,
     },
+    /// A unit, stamped at the `begin` or `end` of its initialisation part. System is a unit
+    /// whose declarations are all in `interface`. `body` is a `Compound`, empty without a
+    /// `begin` part.
+    Unit {
+        name: u32,
+        interface_uses: List,
+        interface: List,
+        implementation_uses: List,
+        implementation: List,
+        body: Id,
+    },
+    /// A unit's initialisation part (made by the checker): `Exit` inside leaves only this part.
+    InitPart(Id),
     ConstDecl(u32, Id),
     /// `name: type = init`: constant name, type name, initialiser (an expression, `ArrayInit`
     /// or `RecordInit`).
@@ -218,6 +232,8 @@ pub struct Node {
     pub kind: Kind,
     pub line: u32,
     pub col: u32,
+    /// The source file the node was read from: 0 is the main program, n the n-th registered file.
+    pub file: u32,
     pub ty: Ty,
 }
 
@@ -228,13 +244,32 @@ pub struct Ast {
     /// Interned identifiers, uppercase.
     pub names: Vec<Vec<u8>>,
     pub strs: Vec<Vec<u8>>,
-    /// Number of leading declarations of the program that come from System.
-    pub system: usize,
+    /// The file that `add` stamps on new nodes.
+    pub file: u32,
+    /// The qualified names `Unit.Name` the parser interned, for the symbol table.
+    pub qualified: Vec<Qualified>,
     /// For each identifier used as an operand without arguments, the line of the token that
     /// follows it, where TP reports a missing argument list.
     pub follow: Vec<FollowLine>,
     /// The `{$R+}` / `{$R-}` switches in source order.
     pub range: Vec<RangeSwitch>,
+}
+
+/// A qualified name `unit.member`: `joined` is the interned name the parser used in its place.
+pub struct Qualified {
+    pub joined: u32,
+    pub unit: u32,
+    pub member: u32,
+}
+
+/// The loaded units in the orders the checker needs them (built by `units.rs`).
+pub struct Plan {
+    pub system: Id,
+    /// Units in the order their interfaces complete: each after the interfaces it uses.
+    pub interface_order: Vec<Id>,
+    /// Units in initialisation order: each after every unit it uses.
+    pub init_order: Vec<Id>,
+    pub program: Id,
 }
 
 pub struct FollowLine {
@@ -244,6 +279,7 @@ pub struct FollowLine {
 
 /// A `{$R+}` or `{$R-}` directive and where it appears.
 pub struct RangeSwitch {
+    pub file: u32,
     pub line: u32,
     pub col: u32,
     pub on: bool,
@@ -255,6 +291,7 @@ impl Ast {
             kind,
             line,
             col,
+            file: self.file,
             ty: Ty::NONE,
         });
         self.nodes.len() as Id - 1
@@ -264,6 +301,7 @@ impl Ast {
     pub fn typed(&mut self, kind: Kind, ty: Ty, at: Id) -> Id {
         let (line, col) = self.position(at);
         let id = self.add(kind, line, col);
+        self.nodes[id as usize].file = self.node(at).file;
         self.set_ty(id, ty);
         id
     }

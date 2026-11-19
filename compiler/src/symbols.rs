@@ -25,23 +25,23 @@
 //! frame in linear memory: declaration order, no padding, the static link first. Codegen reads
 //! the final kinds, so no node of the tree is touched.
 //!
-//! # Shape for units
+//! # Units
 //!
-//! The scope stack is already a list of regions: System's names, then the program's, then one
-//! per routine, each starting at a `region_start`. A unit is one more region, with these
-//! additions (implemented with the units, not here):
+//! System and each unit own a region of the stack above `base`, the stack length after System.
+//! A unit is checked in two phases (its `uses` may need a unit that is checked later):
 //!
-//! - Each region records `interface_end`, the stack length where its `interface` part ends;
-//!   entries after it are the implementation part, visible only inside the unit.
-//! - A `uses` clause makes only the interface entries of the named unit visible: it re-pushes
-//!   those `(name, Sym)` entries into the user's region, so lookup stays a single backward scan
-//!   and a later declaration hides them, as in TP.
-//! - A qualified name `U.X` is `lookup_qualified(unit, name)`, a scan of the unit's region up to
-//!   its `interface_end` that ignores everything declared since. `U` itself is a name bound to
-//!   the unit's region.
-//! - `System` is the first unit region, with every entry visible; the predefined names sit below
-//!   it. `region_start` is the floor for the duplicate check of the region being declared.
-use crate::ast::{Ast, Id, Kind};
+//! - Interface: `begin_unit` truncates the stack to `base`, `import` pushes the exports of each
+//!   used unit as `imported` entries, the interface declarations follow, and `end_interface`
+//!   records them as the unit's exports and saves the whole region.
+//! - Implementation: `resume_unit` restores the saved region, the implementation `uses` and
+//!   declarations follow.
+//!
+//! Imported entries do not count for the duplicate check, so a declaration may hide an imported
+//! name; they are never exported, so a unit does not re-export what it uses. A later import
+//! hides an earlier one: the unit named last in `uses` wins. The program is one more region.
+//! A qualified name `U.X` (the parser interns it as one name, see `Ast::qualified`) is looked up
+//! in U's exports only. System's exports are everything visible after it is declared.
+use crate::ast::{Ast, Id, Kind, Qualified};
 use crate::types::{ConstValue, Intrinsic};
 use crate::types::{FrameCopy, Routine, Sym, SymKind, Symbol, Ty, Types};
 
@@ -227,10 +227,31 @@ pub struct SavedScope {
     local_bytes: u32,
 }
 
+/// A visible name. `imported` marks a name that a `uses` clause made visible.
+#[derive(Clone, Copy)]
+struct Entry {
+    name: u32,
+    sym: Sym,
+    imported: bool,
+}
+
+/// What the symbol table keeps of a unit between its two checking phases.
+struct UnitScope {
+    name: u32,
+    /// The unit's interface declarations, as `(name, symbol)`.
+    exports: Vec<(u32, Sym)>,
+    /// The unit's region after its interface part, restored for the implementation part.
+    saved: Vec<Entry>,
+}
+
 pub struct Symbols {
     syms: Vec<Symbol>,
     /// Visible names, innermost last.
-    scope: Vec<(u32, Sym)>,
+    scope: Vec<Entry>,
+    /// The stack length after System: every unit and the program start from it.
+    base: usize,
+    units: Vec<UnitScope>,
+    qualified: Vec<Qualified>,
     /// Scope entries below this index may be hidden but not duplicated by a declaration.
     region_start: usize,
     /// First address after the globals declared so far.
@@ -249,6 +270,9 @@ impl Symbols {
         let mut symbols = Symbols {
             syms: Vec::new(),
             scope: Vec::new(),
+            base: 0,
+            units: Vec::new(),
+            qualified: std::mem::take(&mut ast.qualified),
             region_start: 0,
             data_end: GLOBALS,
             routine_stack: Vec::new(),
@@ -294,9 +318,74 @@ impl Symbols {
         Ok(SystemNames { helpers, heap })
     }
 
-    /// Starts the program's region: the names declared so far may now be redeclared.
-    pub fn start_user_region(&mut self) {
-        self.region_start = self.scope.len();
+    /// System is declared: its names, with the predefined ones, are the unit `name`'s exports,
+    /// and may now be redeclared.
+    pub fn end_system(&mut self, name: u32) {
+        self.base = self.scope.len();
+        self.region_start = self.base;
+        let exports = self.scope.iter().map(|e| (e.name, e.sym)).collect();
+        self.units.push(UnitScope {
+            name,
+            exports,
+            saved: Vec::new(),
+        });
+    }
+
+    /// Starts the region of the unit `name`, with only System's names visible.
+    pub fn begin_unit(&mut self, name: u32) {
+        self.scope.truncate(self.base);
+        self.region_start = self.base;
+        self.units.push(UnitScope {
+            name,
+            exports: Vec::new(),
+            saved: Vec::new(),
+        });
+    }
+
+    /// The interface part of the unit begun last is done: its own declarations are its exports.
+    pub fn end_interface(&mut self) {
+        let own = self.scope[self.region_start..]
+            .iter()
+            .filter(|e| !e.imported);
+        let exports = own.map(|e| (e.name, e.sym)).collect();
+        let unit = self.units.last_mut().expect("a unit was begun");
+        unit.exports = exports;
+        unit.saved = self.scope[self.base..].to_vec();
+    }
+
+    /// Returns to the region of the unit `name` as its interface part left it.
+    pub fn resume_unit(&mut self, name: u32) {
+        let unit = self.units.iter().find(|u| u.name == name);
+        let saved = &unit.expect("its interface was checked").saved;
+        self.scope.truncate(self.base);
+        self.scope.extend_from_slice(saved);
+        self.region_start = self.base;
+    }
+
+    /// Starts the program's region with only System's names visible.
+    pub fn begin_program(&mut self) {
+        self.scope.truncate(self.base);
+        self.region_start = self.base;
+    }
+
+    /// Makes the exports of the unit `name` visible, hiding earlier names of the same spelling.
+    pub fn import(&mut self, name: u32) {
+        let unit = self.units.iter().find(|u| u.name == name);
+        let exports = &unit.expect("the loader found every used unit").exports;
+        let entries = exports.iter().map(|&(name, sym)| Entry {
+            name,
+            sym,
+            imported: true,
+        });
+        self.scope.extend(entries);
+    }
+
+    /// The symbols declared in the current region, not imported.
+    pub fn own_symbols(&self) -> impl Iterator<Item = Symbol> + '_ {
+        let own = self.scope[self.region_start..]
+            .iter()
+            .filter(|e| !e.imported);
+        own.map(|e| self.symbol(e.sym))
     }
 
     /// True while System's own declarations (and the predefined names) are being declared.
@@ -307,7 +396,11 @@ impl Symbols {
     /// Adds a symbol and makes `name` refer to it from here on. Depth is the current one.
     fn bind(&mut self, name: u32, symbol: Symbol) -> Sym {
         let sym = self.add_unnamed(symbol);
-        self.scope.push((name, sym));
+        self.scope.push(Entry {
+            name,
+            sym,
+            imported: false,
+        });
         sym
     }
 
@@ -330,7 +423,24 @@ impl Symbols {
     }
 
     pub fn lookup(&self, name: u32) -> Option<Sym> {
-        self.scope.iter().rev().find(|e| e.0 == name).map(|e| e.1)
+        if let Some(q) = self.qualified.iter().find(|q| q.joined == name) {
+            return self.exported(q.unit, q.member);
+        }
+        self.scope
+            .iter()
+            .rev()
+            .find(|e| e.name == name)
+            .map(|e| e.sym)
+    }
+
+    /// What the unit `unit` exports under `member`.
+    fn exported(&self, unit: u32, member: u32) -> Option<Sym> {
+        let unit = self.units.iter().find(|u| u.name == unit)?;
+        unit.exports
+            .iter()
+            .rev()
+            .find(|e| e.0 == member)
+            .map(|e| e.1)
     }
 
     pub fn symbol(&self, sym: Sym) -> Symbol {
@@ -344,15 +454,16 @@ impl Symbols {
 
     /// The symbol `name` has in the current region, ignoring outer regions.
     pub fn lookup_in_region(&self, name: u32) -> Option<Symbol> {
-        let entry = self.scope[self.region_start..].iter().find(|e| e.0 == name);
-        entry.map(|e| self.symbol(e.1))
+        let own = self.scope[self.region_start..].iter();
+        let entry = own.filter(|e| !e.imported).find(|e| e.name == name);
+        entry.map(|e| self.symbol(e.sym))
     }
 
     /// The symbols declared by name since `saved` was taken, that is, in the routine entered.
     pub fn declared_since(&self, saved: &SavedScope) -> impl Iterator<Item = Symbol> + '_ {
         self.scope[saved.scope_len..]
             .iter()
-            .map(|e| self.symbol(e.1))
+            .map(|e| self.symbol(e.sym))
     }
 
     /// The number of symbols created so far; the next symbol's index.
