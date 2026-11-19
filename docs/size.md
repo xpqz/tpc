@@ -22,3 +22,4 @@ Measured stripped (custom sections removed) at phase-4: compiler 160,907 B, hell
 | Compiler WASM, stripped | 250 KB | 250 KB (kept) | 161 KB with Phases 5-7 still to add; no evidence to move it |
 | Hello-world output WASM | 20 KB | 2 KB | DCE keeps it at 0.4 KB; a tighter target catches regressions |
 | IDE WASM | 120 KB | 120 KB (kept) | not yet measurable |
+| phase-5 | 8340 | 264704 B unstripped / 210655 B stripped | 683 B | units, includes, conditionals, typed consts, text files, Dos; checker 1887 / 2200 |
