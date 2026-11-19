@@ -224,7 +224,7 @@ fn compile(src: &str) -> Vec<u8> {
 #[test]
 fn string_helpers_are_emitted_only_when_used() {
     let hello = compile("program Hello;\nbegin\n  WriteLn('hello')\nend.");
-    assert!(hello.len() <= 430, "hello-world is {} bytes", hello.len());
+    common::assert_hello_fits(&hello);
     let with = |body: &str| {
         compile(&format!(
             "program P;\nvar s: String;\nbegin\n  s := 'abc';\n  {body}\nend."

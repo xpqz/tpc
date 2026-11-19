@@ -321,3 +321,13 @@ be simple and obvious; no code-golf to meet a budget. When a budget and clarity 
 the feature is cut or simplified and the cut is recorded. Reviews reject dense or clever
 code even when it is correct and short. A readability review of the existing compiler
 (#47) removes any golf already present.
+
+## 32. Phase 5 semantics measured on TP 5.0 (#49)
+
+Unit initialisation is the unit's `begin ... end.` part (`initialization` is error 37).
+`Append` of a missing file is error 2, so VFS mode 2 fails with -2 when the file is
+missing. A pending I/O error (`{$I-}`) makes every later I/O routine, console included, do
+nothing until `IOResult` is read. `Read(c)` returns CR then LF at a line end and `Eoln` is
+true before the CR, also for console input (the runtime synthesises CR LF after
+`readline`). `{$I+/-}` and conditional symbols are local to their source file; an `$IF`
+must close in the file that opened it (129).

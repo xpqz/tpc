@@ -244,5 +244,5 @@ fn unused_aggregate_routines_leave_the_module_unchanged() {
 #[test]
 fn hello_world_stays_small() {
     let hello = compile("program Hello;\nbegin\n  WriteLn('hello')\nend.");
-    assert!(hello.len() <= 430, "hello-world is {} bytes", hello.len());
+    common::assert_hello_fits(&hello);
 }

@@ -201,7 +201,7 @@ fn rejected(src: &str) -> (u16, u32) {
 #[test]
 fn allocator_is_emitted_only_when_used() {
     let hello = compile("program Hello;\nbegin\n  WriteLn('hello')\nend.");
-    assert!(hello.len() <= 430, "hello-world is {} bytes", hello.len());
+    common::assert_hello_fits(&hello);
     let plain = compile("program Prog;\nvar i: Integer;\nbegin\n  i := 1;\n  WriteLn(i)\nend.");
     let dead = compile(
         "program Prog;\ntype PI = ^Integer;\nprocedure Dead;\nvar p: PI;\nbegin\n  New(p);\n  p^ := 1;\n  Dispose(p)\nend;\nvar i: Integer;\nbegin\n  i := 1;\n  WriteLn(i)\nend.",

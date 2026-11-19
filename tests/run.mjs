@@ -1,8 +1,11 @@
-// Test runner: node tests/run.mjs prog.wasm [expected.out]
+// Test runner: node tests/run.mjs [--dir AUXDIR] [--in INPUT] prog.wasm [expected.out]
+// AUXDIR holds the files the program can open (a snapshot; see tests/vfs.mjs); INPUT is the
+// text readline returns, by default the process stdin.
 // Exit: program code on match or print mode, 1 on output mismatch, 2 on runner error.
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { fmtReal } from "../host/fmt_real.js";
+import { Vfs, Input } from "./vfs.mjs";
 
 class Halt {
   constructor(code) {
@@ -17,10 +20,11 @@ export class RunnerError extends Error {
   }
 }
 
-const STUBS = ["readkey", "keypressed", "readline", "screen", "fs_open", "fs_read", "fs_write",
-  "fs_close", "time", "compile"];
+const STUBS = ["readkey", "keypressed", "screen", "time", "compile"];
 
-export async function run(bytes) {
+// `files` is the aux directory path or null; `input` is a Buffer of console input or null
+// for the process stdin.
+export async function run(bytes, { files = null, input = null } = {}) {
   let module;
   try {
     module = await WebAssembly.compile(bytes);
@@ -31,13 +35,18 @@ export async function run(bytes) {
   let memory = null;
   const stdout = () => Buffer.concat(out);
   const fail = (msg) => new RunnerError(msg, stdout());
+  const vfs = new Vfs(files);
+  const console_in = new Input(input);
+  const checkRange = (what, ptr, len) => {
+    if (ptr < 0 || len < 0 || ptr + len > memory.buffer.byteLength) {
+      throw fail(`host.${what}: out of bounds (${ptr}, ${len})`);
+    }
+  };
   const host = {
     write(fd, ptr, len) {
       if (fd !== 1 && fd !== 2) throw fail(`host.write: bad fd ${fd}`);
       if (len === 0) return;
-      if (ptr < 0 || len < 0 || ptr + len > memory.buffer.byteLength) {
-        throw fail(`host.write: out of bounds (${ptr}, ${len})`);
-      }
+      checkRange("write", ptr, len);
       const chunk = Buffer.from(memory.buffer.slice(ptr, ptr + len));
       if (fd === 1) out.push(chunk);
       else process.stderr.write(chunk);
@@ -49,8 +58,34 @@ export async function run(bytes) {
       return fmtReal(memory, x, width, decimals, ptr);
     },
     rterror(code) {
-      out.push(Buffer.from(`Runtime error ${code}\n`));
+      out.push(Buffer.from(`Runtime error ${String(code).padStart(3, "0")}\n`));
       throw new Halt(code);
+    },
+    fs_open(namePtr, nameLen, mode) {
+      checkRange("fs_open", namePtr, nameLen);
+      const name = Buffer.from(memory.buffer.slice(namePtr, namePtr + nameLen)).toString("latin1");
+      return vfs.open(name, mode);
+    },
+    fs_read(handle, ptr, len) {
+      checkRange("fs_read", ptr, len);
+      const chunk = vfs.read(handle, len);
+      if (typeof chunk === "number") return chunk;
+      Buffer.from(memory.buffer).set(chunk, ptr);
+      return chunk.length;
+    },
+    fs_write(handle, ptr, len) {
+      checkRange("fs_write", ptr, len);
+      return vfs.write(handle, Buffer.from(memory.buffer.slice(ptr, ptr + len)));
+    },
+    fs_close(handle) {
+      return vfs.close(handle);
+    },
+    readline(ptr, max) {
+      checkRange("readline", ptr, max);
+      const line = console_in.readLine(max);
+      if (line === null) return -1;
+      Buffer.from(memory.buffer).set(line, ptr);
+      return line.length;
     },
   };
   for (const name of STUBS) {
@@ -126,11 +161,33 @@ function read(path) {
   }
 }
 
-async function main(args) {
-  if (args.length < 1 || args.length > 2) throw new RunnerError("usage: run.mjs prog.wasm [expected.out]");
+const USAGE = "usage: run.mjs [--dir AUXDIR] [--in INPUT] prog.wasm [expected.out]";
+
+// Splits the command line into its options and the positional arguments.
+function parseArgs(args) {
+  const options = { dir: null, input: null };
+  const positional = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--dir" || args[i] === "--in") {
+      if (i + 1 >= args.length) throw new RunnerError(USAGE);
+      options[args[i] === "--dir" ? "dir" : "input"] = args[++i];
+    } else {
+      positional.push(args[i]);
+    }
+  }
+  if (positional.length < 1 || positional.length > 2) throw new RunnerError(USAGE);
+  return { options, positional };
+}
+
+async function main(argv) {
+  const { options, positional: args } = parseArgs(argv);
   const wasm = read(args[0]);
   const expected = args[1] === undefined ? null : read(args[1]);
-  const { stdout, code } = await run(wasm);
+  if (options.dir !== null && !fs.existsSync(options.dir)) {
+    throw new RunnerError(`cannot read directory ${options.dir}`);
+  }
+  const input = options.input === null ? null : read(options.input);
+  const { stdout, code } = await run(wasm, { files: options.dir, input });
   if (expected === null) {
     process.stdout.write(stdout);
   } else if (!stdout.equals(expected)) {

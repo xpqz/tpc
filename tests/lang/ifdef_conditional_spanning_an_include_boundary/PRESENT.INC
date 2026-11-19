@@ -1,0 +1,2 @@
+const
+  Value = 7;
