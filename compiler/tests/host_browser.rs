@@ -42,3 +42,15 @@ fn browser_key_mapping_agrees_with_the_key_table() {
 fn persistence_store_and_write_hook() {
     node("persistence.mjs");
 }
+
+#[test]
+fn console_readln_without_crt_reads_typed_lines() {
+    let o = std::process::Command::new("node")
+        .arg(root().join("tests/host/console_readln.mjs"))
+        .env("TP5C", env!("CARGO_BIN_EXE_tp5c"))
+        .output()
+        .expect("node must be installed");
+    let out = String::from_utf8_lossy(&o.stdout);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "console_readln.mjs: {out}{err}");
+}
