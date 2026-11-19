@@ -421,3 +421,6 @@ Measurements use Free Pascal 3.2.2 (aarch64, macOS) with `fpc -Mtp -v0`, program
     `FreeList`) and the helpers `HeapGet`, `HeapPut`, `HeapMark`, `HeapRelease` bound by handle.
 16. **`{$R}` default.** Plan lists `{$R}` as supported but not whether the default is `+` or
     `-`. TP default is `{$R-}`; assumed, to be confirmed.
+
+`readline` in the browser returns -2 ("no line input": there is no stdin); System then
+edits the line from `readkey` (decision 46). The Node runner returns -1 at end of input.
