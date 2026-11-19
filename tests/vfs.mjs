@@ -42,7 +42,7 @@ export class Vfs {
     if (this.handles.size >= MAX_OPEN) return TOO_MANY_OPEN;
     const key = name.toUpperCase();
     let file = this.files.get(key);
-    if (mode === RESET && file === undefined) return NOT_FOUND;
+    if (mode !== REWRITE && file === undefined) return NOT_FOUND;
     if (file === undefined || mode === REWRITE) {
       file = { data: Buffer.alloc(0) };
       this.files.set(key, file);

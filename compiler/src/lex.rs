@@ -32,9 +32,10 @@ pub struct Tok {
     pub text: Vec<u8>,
     pub int: i64,
     pub real: f64,
-    /// The source file number and `{$R+}` state, set by `directives::expand`.
+    /// The source file number and the `{$R+}` and `{$I+}` state, set by `directives::expand`.
     pub file: u32,
     pub range_checks: bool,
+    pub io_checks: bool,
 }
 
 /// The reserved words, upper case and space separated; `word` scans the list for each
@@ -88,6 +89,7 @@ impl Scanner<'_> {
             real: 0.0,
             file: 0,
             range_checks: false,
+            io_checks: true,
         }
     }
 

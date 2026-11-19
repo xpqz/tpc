@@ -87,3 +87,11 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | D26 | A variable with the name of a used unit | Error 4 in the same scope; in a nested routine the variable hides the unit name | A unit name followed by `.` and an identifier is always the qualified name, so `U.x` in a routine that declares its own `U` reads the unit's `x` | Needs a local named like a used unit; no test |
 | D27 | A variable named like a used unit, in the same scope | Error 4 | Accepted | Not tested |
 | D28 | `CPU87` | Defined when an 8087 is present at compile time | Always defined | Conditional symbols that depend on the machine; the oracle machine has a coprocessor (`predefined_symbols_are_ver50_msdos_cpu86_and_cpu87`) |
+
+## Text files (Phase 5)
+
+| # | Deviation | TP5 | This compiler | Notes |
+|---|---|---|---|---|
+| D29 | Length of a console input line | A redirected line may be any length | A line longer than 254 characters is cut (`readline` is given the 256-byte buffer less the CR LF it appends) | Interactive TP5 input is limited to 127 characters; no test pins the cut |
+| D30 | Size and fields of `Text` | `SizeOf(Text)` is 256 and a text file has no visible fields | `SizeOf(Text)` is 347 (System's record); fields of a `Text` are error 121 in user code | A System-internal layout |
+| D31 | Text file output is not buffered | Data reaches the file when the buffer fills or at `Close`/`Flush` | Every `Write` piece goes to the host at once | Unobservable except through a second handle on the same file |

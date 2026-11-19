@@ -16,7 +16,7 @@
 use crate::ast::{Ast, Id, Kind, List, Plan};
 use crate::diag::{code, Diag};
 use crate::directives::{expand, in_file};
-use crate::lex::{lex, Tok};
+use crate::lex::Tok;
 use crate::parse::{parse_program, parse_system, parse_unit};
 use crate::symbols::name_of;
 
@@ -72,7 +72,7 @@ pub fn find_file(files: &[SourceFile], name: &[u8]) -> Option<usize> {
 pub fn load(system: &[u8], program: &[u8], files: &[SourceFile]) -> Result<(Ast, Plan), Diag> {
     let mut ast = Ast::default();
     // Every token of System is at line 0, so its diagnostics never carry a user line.
-    let mut system_tokens = lex(system).map_err(|d| Diag { line: 0, ..d })?;
+    let mut system_tokens = expand(0, system, &[]).map_err(|d| Diag { line: 0, ..d })?;
     system_tokens.iter_mut().for_each(|t| t.line = 0);
     let system_node = parse_system(&mut ast, system_tokens).map_err(|d| in_file(d, 0, system))?;
     let program_node = parse_file(&mut ast, 0, program, files, parse_program)?;

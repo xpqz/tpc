@@ -187,13 +187,25 @@ the `.pas` and `.inc` files beside the input, then those of `--dir AUXDIR`, whic
 clash. Include files (`{$I name}`) are looked up in the same table, `name` or `name.PAS` when it
 has no extension; the CLI registers only `.PAS` and `.INC` files, `add_file` takes any name.
 
+### Text files in System
+
+`Text` is a record in `runtime/system.pas` (host handle, mode, buffer position and length, name,
+256-byte buffer); `Input` and `Output` are typed constants of that type. The five file and
+console calls are `external` declarations there (`Fs_Open`, `Fs_Read`, `Fs_Write`, `Fs_Close`,
+`ReadLine`). The compiler writes by calling `TextOut(file address, pointer, count)` (address 0
+is the console) and `TextNewLine`, and reads by calling the `Read*` helpers. Console input is
+read a line at a time with `readline` (256-byte buffer, so a line is cut at 254 characters,
+D29); the runtime appends CR LF. `InOutRes` holds the pending error; with `{$I+}` the compiler
+calls `CheckIo` after each Write statement and each call of a routine whose first parameter is
+a `Text`, except `Assign`.
+
 ### File and console input contract
 
 Used by the test runner (`tests/vfs.mjs`) and the browser host alike. The runtime (`System`)
 turns a negative result `-e` into `InOutRes := e`, so the codes are DOS error numbers.
 
 - `fs_open(namePtr, nameLen, mode)`: `mode` is 0 Reset (read; the file must exist), 1 Rewrite
-  (create or truncate; write only), 2 Append (create if missing, position at the end; write
+  (create or truncate; write only), 2 Append (the file must exist, position at the end; write
   only). Returns a handle (1 or more) or a negative error number.
 - The file system is flat. A name is 1 to 8 characters, optionally a dot and 0 to 3 more, from
   `A-Z 0-9 _ $ ~ ! # % & - { } ( ) @ ' ^`, matched case-insensitively (files are created in
@@ -207,7 +219,7 @@ turns a negative result `-e` into `InOutRes := e`, so the codes are DOS error nu
 
 | Result | DOS error | Cause |
 |---|---|---|
-| -2 | 2 file not found | Reset of a missing file; a name that is not a valid 8.3 name (any mode) |
+| -2 | 2 file not found | Reset or Append of a missing file; a name that is not a valid 8.3 name (any mode) |
 | -3 | 3 path not found | name with `\`, `/` or `:` |
 | -4 | 4 too many open files | a 21st open handle |
 | -5 | 5 access denied | unknown mode; read on a Rewrite/Append handle; write on a Reset handle |

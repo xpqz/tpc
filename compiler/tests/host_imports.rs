@@ -11,8 +11,9 @@ use sysutil::{compile_with, contains, system_pas};
 
 const HELLO: &str = "program Hello;\nbegin\n  WriteLn('hello')\nend.";
 
-/// The size of hello-world before external routines existed; it may not grow.
-const HELLO_BYTES_BEFORE_EXTERNALS: usize = 429;
+/// The size of hello-world with `Write` going through `TextOut` (was 429 before text files);
+/// it may not grow.
+const HELLO_BYTES: usize = 676;
 
 /// The real System with `extra` declarations appended.
 fn system_with(extra: &str) -> Vec<u8> {
@@ -198,8 +199,8 @@ fn hello_world_does_not_grow() {
     let wasm = compiled(&system_pas(), HELLO);
     assert_hello_fits(&wasm);
     assert!(
-        wasm.len() <= HELLO_BYTES_BEFORE_EXTERNALS,
-        "hello-world is {} bytes, was {HELLO_BYTES_BEFORE_EXTERNALS}",
+        wasm.len() <= HELLO_BYTES,
+        "hello-world is {} bytes, was {HELLO_BYTES}",
         wasm.len()
     );
     assert!(contains(&wasm, "hello"));

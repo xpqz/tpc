@@ -70,10 +70,21 @@ pub enum Helper {
     HostWrite,
     HostRtError,
     FmtReal,
+    TextOut,
+    TextNewLine,
+    CheckIo,
+    Assign,
+    Eof,
+    Eoln,
+    ReadChar,
+    ReadLong,
+    ReadReal,
+    ReadStr,
+    ReadLnEnd,
 }
 
 impl Helper {
-    pub const ALL: [Helper; 21] = [
+    pub const ALL: [Helper; 32] = [
         Helper::AbsLong,
         Helper::StrCat,
         Helper::StrCmp,
@@ -95,6 +106,17 @@ impl Helper {
         Helper::HostWrite,
         Helper::HostRtError,
         Helper::FmtReal,
+        Helper::TextOut,
+        Helper::TextNewLine,
+        Helper::CheckIo,
+        Helper::Assign,
+        Helper::Eof,
+        Helper::Eoln,
+        Helper::ReadChar,
+        Helper::ReadLong,
+        Helper::ReadReal,
+        Helper::ReadStr,
+        Helper::ReadLnEnd,
     ];
 
     /// The routine's name in `runtime/system.pas`, upper-cased.
@@ -121,6 +143,17 @@ impl Helper {
             Helper::HostWrite => b"HOSTWRITE",
             Helper::HostRtError => b"RTERROR",
             Helper::FmtReal => b"FMT_REAL",
+            Helper::TextOut => b"TEXTOUT",
+            Helper::TextNewLine => b"TEXTNEWLINE",
+            Helper::CheckIo => b"CHECKIO",
+            Helper::Assign => b"ASSIGN",
+            Helper::Eof => b"EOF",
+            Helper::Eoln => b"EOLN",
+            Helper::ReadChar => b"READCHAR",
+            Helper::ReadLong => b"READLONG",
+            Helper::ReadReal => b"READREAL",
+            Helper::ReadStr => b"READSTR",
+            Helper::ReadLnEnd => b"READLNEND",
         }
     }
 }
@@ -164,6 +197,8 @@ const PREDEFINED: &[(&[u8], SymKind, Ty)] = &[
     (b"STRING", SymKind::Type, Ty::STRING),
     (b"WRITE", SymKind::Intrinsic(Intrinsic::Write), Ty::NONE),
     (b"WRITELN", SymKind::Intrinsic(Intrinsic::WriteLn), Ty::NONE),
+    (b"READ", SymKind::Intrinsic(Intrinsic::Read), Ty::NONE),
+    (b"READLN", SymKind::Intrinsic(Intrinsic::ReadLn), Ty::NONE),
     (b"ORD", SymKind::Intrinsic(Intrinsic::Ord), Ty::NONE),
     (b"CHR", SymKind::Intrinsic(Intrinsic::Chr), Ty::NONE),
     (b"SUCC", SymKind::Intrinsic(Intrinsic::Succ), Ty::NONE),
@@ -217,6 +252,9 @@ pub struct SystemNames {
     pub helpers: [u32; Helper::ALL.len()],
     /// Address of `HeapOrg`; the next 4 bytes are `HeapPtr`.
     pub heap: u32,
+    /// System's `Text` type and its console input file `Input`.
+    pub text: Ty,
+    pub input: Sym,
 }
 
 /// What a routine body saves on entry and restores on exit.
@@ -315,7 +353,28 @@ impl Symbols {
         else {
             return Err(MissingSystemName);
         };
-        Ok(SystemNames { helpers, heap })
+        let text = ast.intern(b"TEXT");
+        let input = ast.intern(b"INPUT");
+        let (
+            Some((
+                _,
+                Symbol {
+                    kind: SymKind::Type,
+                    ty: text,
+                    ..
+                },
+            )),
+            Some((input, _)),
+        ) = (self.lookup_symbol(text), self.lookup_symbol(input))
+        else {
+            return Err(MissingSystemName);
+        };
+        Ok(SystemNames {
+            helpers,
+            heap,
+            text,
+            input,
+        })
     }
 
     /// System is declared: its names, with the predefined ones, are the unit `name`'s exports,

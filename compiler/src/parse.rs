@@ -160,6 +160,7 @@ impl Parser<'_> {
 fn parser(ast: &mut Ast, tokens: Vec<Tok>) -> Parser<'_> {
     let system = ast.intern(b"SYSTEM");
     ast.range_checks = false;
+    ast.io_checks = true;
     Parser {
         tokens,
         pos: 0,
@@ -257,11 +258,12 @@ impl Parser<'_> {
         &self.tokens[self.pos - 1]
     }
 
-    /// Consumes the lookahead. New nodes belong to the file and `{$R}` state of the last token
-    /// consumed.
+    /// Consumes the lookahead. New nodes belong to the file and `{$R}`/`{$I}` state of the last
+    /// token consumed.
     fn advance(&mut self) {
         self.ast.file = self.tokens[self.pos].file;
         self.ast.range_checks = self.tokens[self.pos].range_checks;
+        self.ast.io_checks = self.tokens[self.pos].io_checks;
         self.pos += 1;
     }
 

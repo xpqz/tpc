@@ -14,8 +14,9 @@
 //! - Includes are read from the registered file table. TP allows them in declaration parts only,
 //!   so the expander follows the nesting of `begin`/`end` to know when it is inside a
 //!   statement part (error 118).
-//! - `{$R+}` and `{$R-}` are state that flows with the text, also out of an include. Other
-//!   switches are not implemented (error 200); a malformed directive is error 17.
+//! - `{$R+/-}` and `{$I+/-}` are state that flows with the text, also out of an include. `{$I}`
+//!   is on by default. Other switches are not implemented (error 200); a malformed directive
+//!   is error 17.
 use crate::diag::{code, Diag};
 use crate::lex::{Lexer, Tk, Tok};
 use crate::units::{find_file, SourceFile};
@@ -35,7 +36,8 @@ enum Directive {
     Else,
     EndIf,
     /// `{$R+}`, `{$R-}` and the switches that are accepted and ignored.
-    RangeChecks(bool),
+    /// The new `{$R}` and `{$I}` states, each `None` when the directive does not set it.
+    Switches(Option<bool>, Option<bool>),
     Ignored,
 }
 
@@ -125,21 +127,23 @@ fn symbol(text: &[u8]) -> Result<Vec<u8>, u16> {
 }
 
 /// A comma separated list of switches `R+`, `F-`, ... Anything else is error 17, and a
-/// well-formed switch this compiler does not know is error 200. `I+` and `I-` are such a
-/// switch; `I` followed by a blank is an include.
+/// well-formed switch this compiler does not know is error 200. `I` followed by a blank is
+/// an include, not a switch.
 fn switches(text: &[u8]) -> Result<Directive, u16> {
     let mut range_checks = None;
+    let mut io_checks = None;
     for item in text.split(|&c| c == b',') {
         match item.to_ascii_uppercase().as_slice() {
             b"F+" | b"F-" => {}
             b"R+" | b"R-" => range_checks = Some(item[1] == b'+'),
+            b"I+" | b"I-" => io_checks = Some(item[1] == b'+'),
             [letter, b'+' | b'-'] if letter.is_ascii_alphabetic() => {
                 return Err(code::NOT_SUPPORTED)
             }
             _ => return Err(code::INVALID_DIRECTIVE),
         }
     }
-    Ok(range_checks.map_or(Directive::Ignored, Directive::RangeChecks))
+    Ok(Directive::Switches(range_checks, io_checks))
 }
 
 /// Reads the directive whose text is `text` (the comment body after the `$`).
@@ -164,6 +168,7 @@ struct Expander<'a> {
     files: &'a [SourceFile],
     symbols: Vec<Vec<u8>>,
     range_checks: bool,
+    io_checks: bool,
     statement_part: StatementPart,
     tokens: Vec<Tok>,
 }
@@ -175,6 +180,7 @@ pub fn expand(file: u32, text: &[u8], files: &[SourceFile]) -> Result<Vec<Tok>, 
         files,
         symbols: PREDEFINED_SYMBOLS.iter().map(|s| s.to_vec()).collect(),
         range_checks: false,
+        io_checks: true,
         statement_part: StatementPart::default(),
         tokens: Vec::new(),
     };
@@ -187,6 +193,7 @@ impl Expander<'_> {
     fn push(&mut self, mut token: Tok, file: u32) {
         token.file = file;
         token.range_checks = self.range_checks;
+        token.io_checks = self.io_checks;
         self.statement_part.after(&token);
         self.tokens.push(token);
     }
@@ -288,7 +295,10 @@ impl Expander<'_> {
                 }
             }
             Directive::Undef(name) => self.symbols.retain(|s| *s != name),
-            Directive::RangeChecks(on) => self.range_checks = on,
+            Directive::Switches(range, io) => {
+                self.range_checks = range.unwrap_or(self.range_checks);
+                self.io_checks = io.unwrap_or(self.io_checks);
+            }
             Directive::Include(name) => self.include(&name, at, depth)?,
             Directive::Ignored => {}
         }

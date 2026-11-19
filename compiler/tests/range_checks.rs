@@ -155,7 +155,7 @@ fn range_directive_is_accepted_in_every_form() {
 
 #[test]
 fn other_directives_in_a_list_are_still_unsupported() {
-    for dir in ["{$R+,I+}", "{$I-,R+}", "{$R+,F+,L+}"] {
+    for dir in ["{$R+,F+,L+}", "{$R+,L-}"] {
         assert_eq!(
             rejected(&format!("program P;\n{dir}\n{BODY}")),
             (200, 2),

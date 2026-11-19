@@ -236,6 +236,8 @@ pub struct Node {
     pub file: u32,
     /// True when `{$R+}` was in force where the node's last token stands.
     pub range_checks: bool,
+    /// True when `{$I+}` was in force there: an I/O call is followed by a check of `InOutRes`.
+    pub io_checks: bool,
     pub ty: Ty,
 }
 
@@ -248,8 +250,9 @@ pub struct Ast {
     pub strs: Vec<Vec<u8>>,
     /// The file that `add` stamps on new nodes.
     pub file: u32,
-    /// The `{$R+}` state that `add` stamps on new nodes.
+    /// The `{$R+}` and `{$I+}` state that `add` stamps on new nodes.
     pub range_checks: bool,
+    pub io_checks: bool,
     /// The qualified names `Unit.Name` the parser interned, for the symbol table.
     pub qualified: Vec<Qualified>,
     /// For each identifier used as an operand without arguments, the line of the token that
@@ -287,6 +290,7 @@ impl Ast {
             col,
             file: self.file,
             range_checks: self.range_checks,
+            io_checks: self.io_checks,
             ty: Ty::NONE,
         });
         self.nodes.len() as Id - 1
@@ -298,6 +302,7 @@ impl Ast {
         let id = self.add(kind, line, col);
         self.nodes[id as usize].file = self.node(at).file;
         self.nodes[id as usize].range_checks = self.node(at).range_checks;
+        self.nodes[id as usize].io_checks = self.node(at).io_checks;
         self.set_ty(id, ty);
         id
     }

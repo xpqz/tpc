@@ -54,7 +54,6 @@ const SET_TEMP: u32 = crate::types::SET_BYTES;
 const REAL_BUF: u32 = 512;
 /// The WASM global holding the stack pointer.
 const SP: u32 = 0;
-const STDOUT: i32 = 1;
 /// Longest String.
 const MAX_STRING: i32 = 255;
 /// The runtime error numbers raised by generated code.
@@ -138,8 +137,10 @@ struct Reached {
 /// functions: the three built-in helpers, `rdiv` if used, the reached routines, the main
 /// program and the table's trap stub.
 struct Indexes {
-    host_write: u32,
     host_rterror: u32,
+    /// System's `TextOut`, which the built-in output functions call; known once the reached
+    /// routines are numbered.
+    text_out: u32,
     write_string: u32,
     write_integer: u32,
     quotient: u32,
@@ -148,11 +149,11 @@ struct Indexes {
 }
 
 impl Indexes {
-    fn new(import_count: u32, host_write: u32, host_rterror: u32, uses_real_div: bool) -> Self {
+    fn new(import_count: u32, host_rterror: u32, uses_real_div: bool) -> Self {
         let first_defined = import_count;
         Indexes {
-            host_write,
             host_rterror,
+            text_out: 0,
             write_string: first_defined,
             write_integer: first_defined + 1,
             quotient: first_defined + 2,
@@ -204,7 +205,7 @@ impl Layout {
             position: vec![None; info.routines.len()],
             external: info.routines.iter().map(|r| r.import.is_some()).collect(),
             uses_real_div: false,
-            indexes: Indexes::new(0, 0, 0, false),
+            indexes: Indexes::new(0, 0, false),
             wasm_types: vec![0; info.types.count()],
             table_slots: vec![0; info.routines.len()],
         }
@@ -220,12 +221,13 @@ impl Layout {
         }
         let import_number =
             |helper| position[info.helper(helper) as usize].expect("always reached");
-        let indexes = Indexes::new(
+        let mut indexes = Indexes::new(
             reached.imports.len() as u32,
-            import_number(Helper::HostWrite),
             import_number(Helper::HostRtError),
             reached.uses_real_div,
         );
+        let text_out = position[info.helper(Helper::TextOut) as usize].expect("always reached");
+        indexes.text_out = indexes.first_routine + text_out;
         Layout {
             marking: false,
             reached: reached.routines.clone(),
@@ -317,6 +319,8 @@ struct Gen<'a> {
     /// Lexical depth of the routine; a routine of depth 2 or more has its static link in
     /// local 0.
     depth: u32,
+    /// The local holding the address of the file the current `Write` writes to.
+    file: u32,
     /// The block around the routine body; `Exit` branches to it.
     exit: Label,
     /// Each `with` record designator and the local holding its address.
@@ -338,9 +342,11 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
 /// The mark phase: generates every body, discarding the code, to find what is reached.
 fn mark(ast: &Ast, info: &Info, root: Id) -> Reached {
     let mut layout = Layout::for_marking(ast, info);
-    // The built-in functions call `write` and `rterror`, so every module imports them, first.
+    // `rterror` is called by the built-in functions and `write` by `TextOut`, which they call, so
+    // every module imports both, first.
     layout.routine_index(info.helper(Helper::HostWrite));
     layout.routine_index(info.helper(Helper::HostRtError));
+    layout.routine_index(info.helper(Helper::TextOut));
     generate_bodies(ast, info, root, &mut layout);
     Reached {
         routines: layout.reached,
@@ -520,13 +526,13 @@ fn emit_imports(m: &mut Module, ast: &Ast, info: &Info, reached: &Reached) {
 /// The functions every module defines, in function-number order: `write_string`,
 /// `write_integer`, `quotient`, and `real_quotient` if the program divides Reals.
 fn emit_builtin_functions(m: &mut Module, layout: &Layout) {
-    let write = m.ty(&[I32, I32, I32], &[]);
-    m.func(write, &[], write_string(layout.indexes.host_write));
-    let two_params = m.ty(&[I32, I32], &[]);
+    let write = m.ty(&[I32, I32, I32, I32], &[]);
+    m.func(write, &[], write_string(layout.indexes.text_out));
+    let three_params = m.ty(&[I32, I32, I32], &[]);
     let write_integer_code = write_integer(layout.indexes.write_string);
-    m.func(two_params, &[I32, I32, I32], write_integer_code);
-    let three_params = m.ty(&[I32, I32, I32], &[I32]);
-    m.func(three_params, &[], quotient(layout.indexes.host_rterror));
+    m.func(three_params, &[I32, I32, I32], write_integer_code);
+    let quotient_type = m.ty(&[I32, I32, I32], &[I32]);
+    m.func(quotient_type, &[], quotient(layout.indexes.host_rterror));
     if layout.uses_real_div {
         let real_div = m.ty(&[F64, F64], &[F64]);
         m.func(real_div, &[], real_quotient(layout.indexes.host_rterror));
@@ -577,6 +583,7 @@ fn body(ast: &Ast, info: &Info, layout: &mut Layout, routine: Option<&Routine>, 
         temp_in_use: 0,
         temp_peak: 0,
         depth: routine.map_or(0, |r| r.depth),
+        file: 0,
         exit: Label(0),
         withs: Vec::new(),
     };
@@ -601,38 +608,39 @@ fn body(ast: &Ast, info: &Info, layout: &mut Layout, routine: Option<&Routine>, 
     }
 }
 
-/// `write_string(pointer, length, width)`: writes the text right-justified in `width`:
-/// `while width > length do (write a space; width := width - 1); write(pointer, length)`.
-fn write_string(host_write: u32) -> Code {
-    let (pointer, length, width) = (0, 1, 2);
+/// `write_string(file, pointer, length, width)`: writes the text right-justified in `width`
+/// to the file (an address, 0 for the console): `while width > length do (write a space;
+/// width := width - 1); write(pointer, length)`, each write being `TextOut(file, ...)`.
+fn write_string(text_out: u32) -> Code {
+    let (file, pointer, length, width) = (0, 1, 2, 3);
     let mut c = Code::new();
     let pad = c.loop_(VOID);
     c.local_get(width).local_get(length).op(I32_GT_S).if_(VOID);
-    c.i32_const(STDOUT)
+    c.local_get(file)
         .i32_const(SPACE)
         .i32_const(1)
-        .call(host_write);
+        .call(text_out);
     c.local_get(width)
         .i32_const(1)
         .op(I32_SUB)
         .local_set(width)
         .br(pad);
     c.end().end();
-    c.i32_const(STDOUT)
+    c.local_get(file)
         .local_get(pointer)
         .local_get(length)
-        .call(host_write);
+        .call(text_out);
     c
 }
 
-/// `write_integer(value, width)`: the decimal digits are built backwards at the end of `BUF`
+/// `write_integer(file, value, width)`: the decimal digits are built backwards at the end of `BUF`
 /// from the absolute value, a minus sign is put in front, and `write_string` prints them:
 /// `u := abs(value); p := end; repeat p := p - 1; mem[p] := '0' + u mod 10; u := u div 10
-/// until u = 0; if value < 0 then (p := p - 1; mem[p] := '-')`. Locals after the two
+/// until u = 0; if value < 0 then (p := p - 1; mem[p] := '-')`. Locals after the three
 /// parameters: the write position, whether the value is negative, and the unsigned value.
 fn write_integer(write_string_index: u32) -> Code {
-    let (value, width) = (0, 1);
-    let (position, negative, unsigned) = (2, 3, 4);
+    let (file, value, width) = (0, 1, 2);
+    let (position, negative, unsigned) = (3, 4, 5);
     let mut c = Code::new();
     c.local_get(value)
         .i32_const(0)
@@ -670,8 +678,9 @@ fn write_integer(write_string_index: u32) -> Code {
         .i32_const(b'-' as i32)
         .mem(I32_STORE8, 0, 0)
         .end();
-    // write_string(position, BUF_END - position, width)
-    c.local_get(position)
+    // write_string(file, position, BUF_END - position, width)
+    c.local_get(file)
+        .local_get(position)
         .i32_const(BUF + BUF_LEN)
         .local_get(position)
         .op(I32_SUB);
@@ -1130,8 +1139,8 @@ impl Gen<'_> {
                 self.helper(Helper::StrCat);
                 self.temp_addr(t);
             }
-            Kind::Invoke(r, args) => {
-                let t = self.invoke(r, args).expect("string function");
+            Kind::Invoke(..) => {
+                let t = self.invoke(e).expect("string function");
                 self.temp_addr(t);
             }
             Kind::Fmt {
@@ -1239,7 +1248,10 @@ impl Gen<'_> {
     /// arguments passed as addresses. The static link comes first, then, for a function
     /// whose result lives in memory, the address of a new temporary for the result, which is
     /// returned.
-    fn invoke(&mut self, r: u32, args: List) -> Option<u32> {
+    fn invoke(&mut self, call: Id) -> Option<u32> {
+        let Kind::Invoke(r, args) = self.ast.kind(call) else {
+            unreachable!("an Invoke node")
+        };
         let info = self.info;
         let routine = &info.routines[r as usize];
         if routine.has_static_link() {
@@ -1254,7 +1266,17 @@ impl Gen<'_> {
         self.push_args(args, &routine.params, routine.import.is_some());
         let index = self.layout.routine_index(r);
         self.code.call(index);
+        if info.checks_io(r) {
+            self.io_check(call);
+        }
         result
+    }
+
+    /// After an I/O call under `{$I+}`: `CheckIo` raises the pending error, if any.
+    fn io_check(&mut self, node: Id) {
+        if self.ast.node(node).io_checks {
+            self.helper(Helper::CheckIo);
+        }
     }
 
     /// Value arguments converted to the parameter types, `var` arguments as addresses. A Real
@@ -1335,8 +1357,8 @@ impl Gen<'_> {
             Kind::Compound(statements) => self.statements(statements),
             Kind::Assign(target, value) => self.assign(target, value),
             Kind::With(records, body) => self.with_statement(records, body),
-            Kind::Invoke(r, args) => {
-                self.invoke(r, args);
+            Kind::Invoke(..) => {
+                self.invoke(id);
             }
             Kind::Indirect(callee, args) => self.indirect(callee, args),
             Kind::RunErr(code) => {
@@ -1388,13 +1410,24 @@ impl Gen<'_> {
                 downto,
             } => self.for_statement(variable, first, last, body, downto),
             Kind::Write(args, newline) => {
-                for &arg in self.ast.items(args) {
+                // The first argument is the file; its address is computed once into a local.
+                let items = self.ast.items(args);
+                self.file = self.new_local();
+                match self.ast.kind(items[0]) {
+                    Kind::IntLit(console) => {
+                        self.code.i32_const(console as i32);
+                    }
+                    _ => self.address_of(items[0]),
+                }
+                self.code.local_set(self.file);
+                for &arg in &items[1..] {
                     self.write_arg(arg);
                 }
                 if newline {
-                    self.code.i32_const(STDOUT).i32_const(LF).i32_const(1);
-                    self.code.call(self.layout.indexes.host_write);
+                    self.code.local_get(self.file);
+                    self.helper(Helper::TextNewLine);
                 }
+                self.io_check(id);
             }
             _ => unreachable!("checked statements"),
         }
@@ -1560,6 +1593,7 @@ impl Gen<'_> {
                 self.write_char_array(value, node.ty, width)
             }
             (Some(Tag::Int), _) => {
+                self.code.local_get(self.file);
                 self.expr(value);
                 self.width(width);
                 self.code.call(self.layout.indexes.write_integer);
@@ -1573,7 +1607,7 @@ impl Gen<'_> {
     /// then prints what it produced.
     fn write_real(&mut self, value: Id, width: Option<Id>, decimals: Option<Id>) {
         let t = self.new_temp(REAL_BUF);
-        self.code.i32_const(STDOUT);
+        self.code.local_get(self.file);
         self.temp_addr(t);
         self.real(value);
         match width {
@@ -1585,9 +1619,7 @@ impl Gen<'_> {
         self.decimals_or_absent(decimals);
         self.temp_addr(t);
         let fmt_real = self.helper_index(Helper::FmtReal);
-        self.code
-            .call(fmt_real)
-            .call(self.layout.indexes.host_write);
+        self.code.call(fmt_real).call(self.layout.indexes.text_out);
     }
 
     /// A string literal is written from its text in static data, skipping the length byte.
@@ -1595,6 +1627,7 @@ impl Gen<'_> {
         let bytes = &self.ast.strs[s as usize];
         let addr = self.layout.literal(s, bytes);
         self.code
+            .local_get(self.file)
             .i32_const(addr as i32 + 1)
             .i32_const(bytes.len() as i32);
         self.width(width);
@@ -1606,6 +1639,7 @@ impl Gen<'_> {
         let address = self.new_local();
         self.str(value);
         self.code.local_set(address);
+        self.code.local_get(self.file);
         self.code.local_get(address).i32_const(1).op(I32_ADD);
         self.code.local_get(address).mem(I32_LOAD8_U, 0, 0);
         self.width(width);
@@ -1615,6 +1649,7 @@ impl Gen<'_> {
     /// An array of Char is written from its address: every element.
     fn write_char_array(&mut self, value: Id, ty: Ty, width: Option<Id>) {
         let (_, low, high, _) = self.info.types.array_of(ty).expect("an array");
+        self.code.local_get(self.file);
         self.address_of(value);
         self.code.i32_const((high - low + 1) as i32);
         self.width(width);
@@ -1623,6 +1658,7 @@ impl Gen<'_> {
 
     /// A Char is stored in the scratch buffer and written as a one-character string.
     fn write_char(&mut self, value: Id, width: Option<Id>) {
+        self.code.local_get(self.file);
         self.code.i32_const(BUF);
         self.expr(value);
         self.code.mem(I32_STORE8, 0, 0).i32_const(BUF).i32_const(1);
@@ -1636,6 +1672,7 @@ impl Gen<'_> {
         let flag = self.new_local();
         self.expr(value);
         self.code.local_set(flag);
+        self.code.local_get(self.file);
         self.code
             .i32_const(TRUE)
             .i32_const(FALSE)
@@ -1702,8 +1739,8 @@ impl Gen<'_> {
                 let offset = self.addr(e);
                 self.code.mem(F64_LOAD, 0, offset);
             }
-            Kind::Invoke(r, args) => {
-                let t = self.invoke(r, args).expect("Real function");
+            Kind::Invoke(..) => {
+                let t = self.invoke(e).expect("Real function");
                 self.reload(t);
             }
             Kind::Binary {
@@ -1760,8 +1797,8 @@ impl Gen<'_> {
                 self.code
                     .i32_const(self.layout.table_slots[r as usize] as i32);
             }
-            Kind::Invoke(r, args) => {
-                self.invoke(r, args);
+            Kind::Invoke(..) => {
+                self.invoke(e);
             }
             Kind::Indirect(callee, args) => self.indirect(callee, args),
             Kind::Binary {

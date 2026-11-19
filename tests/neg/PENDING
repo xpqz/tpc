@@ -1,8 +1,1 @@
 dos_get_date_needs_four_arguments
-text_assign_name_must_be_a_string
-text_file_assignment_is_not_allowed
-text_file_passed_by_value
-text_ioresult_is_read_only
-text_read_boolean_from_file
-text_reset_of_integer_variable
-text_write_record_to_file
