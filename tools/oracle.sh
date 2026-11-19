@@ -2,7 +2,9 @@
 # Re-derives every corpus expectation with the real TP 5.0 (tools/tp5.sh) and reports
 # differences. Covers tests/{lang,abi,neg} and the per-feature fixture sets under
 # compiler/tests/fixtures/*/{lang,neg,rt}. Runtime-error programs drop TP5's
-# " at XXXX:YYYY." suffix, as the runner prints `Runtime error NNN` (three digits, as TP5) only.
+# " at XXXX:YYYY." (wherever it is on the line), as the runner prints `Runtime error NNN`
+# (three digits, as TP5) only. A program that uses Crt may have a key script NAME.keys; its
+# .out is the program's stdout followed by the screen dump (tools/tp5.sh describes both).
 # .out must equal TP5 output; .err must equal TP5's "N LINE" ("N LINE FILE" for an error in
 # a unit or include), except unsupported_* (TP5 accepts or differs by design). A program
 # NAME.pas may have a directory NAME/ of auxiliary files and an input NAME.in (decision 26),
@@ -25,7 +27,7 @@ done
 RT="tests/rt $(ls -d compiler/tests/fixtures/*/rt 2>/dev/null | grep -v fixtures/rt)"
 for d in $RT; do
   for f in "$d"/*.pas; do
-    "$tools/tp5.sh" "$f" | sed -E 's/(Runtime error [0-9]+) at [0-9A-F]{4}:[0-9A-F]{4}\.$/\1/' > "$scratch" 2>&1
+    "$tools/tp5.sh" "$f" | sed -E 's/(Runtime error [0-9]+) at [0-9A-F]{4}:[0-9A-F]{4}\./\1/' > "$scratch" 2>&1
     cmp -s "$scratch" "${f%.pas}.out" || { echo "DIFF $f"; bad=1; }
   done
 done

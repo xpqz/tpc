@@ -1,11 +1,11 @@
 // Checks host/worker.js: a program runs in a real worker thread with keys from the shared
 // queue, sleeps with Atomics.wait, draws to the shared grid, and stops on terminate even while
-// blocked or spinning. Also the teletype that puts console output on the grid. Exit 0 on success.
+// blocked or spinning. Also Screen.print, the teletype that puts console output on the grid. Exit 0 on success.
 import assert from "node:assert/strict";
 import { Worker } from "node:worker_threads";
 import { COLS, ROWS, CURSOR, clearScreen } from "../../host/terminal.js";
 import { newKeyQueue, pushKeys } from "../../host/keys.js";
-import { teletype } from "../../host/worker.js";
+import { Screen } from "../../host/screen.js";
 import { echoProgram, spinProgram, emptyProgram, newGrid, rowText, cursorOf, sleepMs, runTests }
   from "./browser_helpers.mjs";
 
@@ -89,10 +89,11 @@ const bytes = (s) => Uint8Array.from(s, (c) => c.charCodeAt(0));
 function screen() {
   const grid = newGrid();
   clearScreen(grid);
-  return { grid, out: teletype(grid) };
+  const model = new Screen(grid);
+  return { grid, out: (_fd, text) => model.print(text) };
 }
 
-test("teletype: text, CR, LF and the cursor", () => {
+test("print: text, CR, LF and the cursor", () => {
   const { grid, out } = screen();
   out(1, bytes("Hi\r\nX"));
   assert.equal(rowText(grid, 0), "Hi");
@@ -101,21 +102,21 @@ test("teletype: text, CR, LF and the cursor", () => {
   assert.equal(grid[1], 7, "attribute stays light grey on black");
 });
 
-test("teletype: LF alone moves down without returning to column 0, fd 2 draws too", () => {
+test("print: LF alone moves down without returning to column 0, fd 2 draws too", () => {
   const { grid, out } = screen();
   out(1, bytes("ab\ncd"));
   out(2, bytes("!"));
   assert.equal(rowText(grid, 1), "  cd!");
 });
 
-test("teletype: backspace moves left, stops at column 0, bell is silent", () => {
+test("print: backspace moves left, stops at column 0, bell is silent", () => {
   const { grid, out } = screen();
   out(1, bytes("ab\b\bc\b\b\b\x07"));
   assert.equal(rowText(grid, 0), "cb");
   assert.deepEqual(cursorOf(grid), [0, 0]);
 });
 
-test("teletype: the 81st character wraps to the next row", () => {
+test("print: the 81st character wraps to the next row", () => {
   const { grid, out } = screen();
   out(1, bytes("x".repeat(COLS) + "y"));
   assert.equal(rowText(grid, 0), "x".repeat(COLS));
@@ -123,7 +124,7 @@ test("teletype: the 81st character wraps to the next row", () => {
   assert.deepEqual(cursorOf(grid), [1, 1]);
 });
 
-test("teletype: past the last row the screen scrolls up and the new row is blank", () => {
+test("print: past the last row the screen scrolls up and the new row is blank", () => {
   const { grid, out } = screen();
   for (let i = 0; i < ROWS + 3; i++) out(1, bytes(`line${i}\r\n`));
   assert.equal(rowText(grid, 0), "line4");
@@ -133,7 +134,7 @@ test("teletype: past the last row the screen scrolls up and the new row is blank
   assert.equal(grid[CURSOR - 1], 7, "scrolled-in row has the default attribute");
 });
 
-test("teletype: filling the last cell scrolls at once", () => {
+test("print: filling the last cell scrolls at once", () => {
   const { grid, out } = screen();
   out(1, bytes("top\r\n"));
   out(1, bytes("\n".repeat(ROWS - 2)));

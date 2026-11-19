@@ -140,10 +140,11 @@ epilogue:  sp = fp + framesize
 | Import | Signature | Purpose |
 |---|---|---|
 | `write` | `(fd, ptr, len)` | console / terminal output |
-| `readkey` | `() -> i32` | blocks (`Atomics.wait`) |
-| `keypressed` | `() -> i32` | non-blocking |
+| `readkey` | `() -> i32` | the next byte of Crt's ReadKey; blocks (`Atomics.wait`) (below) |
+| `keypressed` | `() -> i32` | 1 when a key is waiting, else 0; non-blocking, does not consume |
 | `readline` | `(ptr, max) -> len` | blocks, line editing in JS; `len` is -1 at end of input |
-| `screen` | `(op, a, b, c)` | gotoxy, clrscr, textattr, cursor |
+| `screen` | `(op, a, b, c)` | cell operations on the 80x25 text screen (below) |
+| `sleep` | `(ms)` | `Delay`: the clock moves forward by `ms` (decision 38) |
 | `fs_open` | `(namePtr, nameLen, mode) -> h` | VFS, text only; `h` < 0 is an error |
 | `fs_read` / `fs_write` | `(h, ptr, len) -> n` | VFS; `n` < 0 is an error |
 | `fs_close` | `(h) -> status` | VFS; 0, or < 0 on error |
@@ -203,6 +204,41 @@ instant. Dates before 1970 are not supported. The test runner reads the local ti
 milliseconds since 1970-01-01 from the environment variable `TP5_NOW_MS` when set (tests fix the
 clock with it), else the real local time. Any other `what` is a runner error.
 
+### The screen, keys and sleep (decisions 37 to 39)
+
+`screen(op, a, b, c)` applies one cell operation to the grid of 80 columns by 25 rows
+(`host/screen.js`). Columns and rows are 0-based; an operand that puts a cell off the screen,
+or an unknown `op`, is a host error. Operands are packed in 16-bit words (`lo` is the low byte,
+`hi` the high byte):
+
+| op | Operation | a | b | c |
+|---|---|---|---|---|
+| 0 | put a character | column | row | character `lo`, attribute `hi` |
+| 1 | scroll a rectangle up | left `lo`, top `hi` | right `lo`, bottom `hi` | lines `lo`, fill attribute `hi` |
+| 2 | scroll a rectangle down | as 1 | as 1 | as 1 |
+| 3 | set the cursor | column | row | unused |
+
+The rectangle is inclusive. Scrolling by `n` moves each row `n` rows (rows outside the
+rectangle are untouched), and the `n` rows left empty are filled with blanks in the fill
+attribute; `n` of 0 changes nothing. A new screen is all blanks, attribute `$07`, cursor 0,0.
+
+`readkey` returns the next byte `Crt.ReadKey` returns: an ASCII code, or 0 for an extended key
+(the arrows, F1 to F10, ...) followed by the scan code on the next call. The browser blocks
+until a key arrives; the runner, when its key script is used up, ends the program with exit
+code 255 instead; `keypressed` then returns 0. The same `Host` arguments serve both: `keys`
+`{ available(), next() }`, `clock` `{ nowMs(), advance(ms) }` (the browser's `advance` really
+waits) and `screen` (the browser passes a `Screen` over the shared grid of `host/terminal.js`).
+
+`sleep(ms)` calls `clock.advance(ms)`: the runner's virtual clock moves by `ms` milliseconds
+and returns at once.
+
+The screen dump is the text of the final screen, printed by the runner after the program's
+stdout when the program imports `screen`, and by `tools/tp5.sh` for a program that uses Crt.
+It is, line by line: the 25 rows (trailing blanks cut), `cursor COL ROW` (1-based), `exit CODE`,
+and one `attr ROW COL LEN HEX` line (1-based, two hex digits) for each run of cells in a row
+whose attribute is not `07`, in reading order. A runtime error prints its `Runtime error NNN`
+line first (to stdout), then the dump with `exit NNN`.
+
 ### Text files in System
 
 `Text` is a record in `runtime/system.pas` (host handle, mode, buffer position and length, name,
@@ -259,16 +295,22 @@ turns a negative result `-e` into `InOutRes := e`, so the codes are DOS error nu
 - `rterror(code)` writes `Runtime error NNN` and LF to stdout (code zero-padded to three digits
   as TP5 prints it, no address), then behaves as `halt(code)`. fpc writes to stderr; TP5 writes
   to the console.
-- Command line: `run.mjs [--dir AUXDIR] [--in INPUT] prog.wasm [expected.out]`; `--dir` and
-  `--in` supply the file system and the console input described above. The JS API is
-  `run(bytes, { files, input })` with the directory path and a Buffer (both default to null).
-  A missing directory or input file is a runner error.
+- Command line: `run.mjs [--dir AUXDIR] [--in INPUT] [--keys KEYS] prog.wasm [expected.out]`;
+  `--dir` and `--in` supply the file system and the console input described above, `--keys` a
+  key script (tools/tp5.sh documents the format: whitespace-separated key names and printable
+  characters) for `readkey` and `keypressed`. The JS API is `run(bytes, { files, input, keys })`
+  with the directory path and two Buffers (all default to null). A missing directory, input
+  or key file, or an unknown key in the script, is a runner error. The drivers pass
+  `NAME.keys` when it exists, as they pass `NAME.in`.
+- The clock is virtual (decision 38): it starts at `TP5_NOW_MS`, else at the real local time,
+  and moves only through `sleep`.
+- A program that imports `screen` ends with the screen dump on stdout (above).
 - Exit codes: program code when output matches (or none is expected), 1 on output mismatch,
   2 on runner error (stderr prefix `run.mjs:`). A program `halt(2)` is indistinguishable by code.
 - A host `RangeError` (engine stack exhausted by recursion in routines without a frame) is
   reported as `Runtime error 202`, exit code 202, the same as the shadow-stack overflow.
-- `readkey`, `keypressed`, `screen` and `compile` are stubs that fail with
-  `host import X not available in test runner`; unknown imports fail instantiation.
+- `compile` is a stub that fails with `host import compile not available in test runner`;
+  unknown imports fail instantiation.
 
 ## 9. Runtime errors
 

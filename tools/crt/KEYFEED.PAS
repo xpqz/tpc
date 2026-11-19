@@ -1,16 +1,37 @@
-{ Prototype: scripted keyboard. Replaces BIOS INT 16h so ReadKey, KeyPressed and ReadLn under
-  Crt see the characters of Keys instead of the keyboard (Crt reads keys through INT 16h, not
-  through DOS stdin). Must come before Crt in the uses clause only for readability; the hook
-  is looked up at call time. When Keys runs out, a blocking read reports Enter forever; the
-  real unit should halt with a marker instead. Extended keys would need a scan code in Hi(AX). }
+{ Scripted keyboard. Crt reads keys through BIOS INT 16h (not DOS stdin), so this unit
+  replaces INT 16h with a procedure that serves the keys listed in KEYS.DAT: one word per
+  line, `$AAAA` hex, high byte the scan code and low byte the ASCII code, as INT 16h returns
+  them (tools/crt/keys.awk makes the file from NAME.keys). A blocking read after the last key
+  halts the program with exit code 255, which shows in the screen dump. Without KEYS.DAT
+  there are no keys. }
 unit KeyFeed;
 interface
 implementation
 uses Dos;
 const
-  Keys: string = 'hello'#13;
+  KeysExhausted = 255;
 var
-  Next: Integer;
+  Keys: array[1..500] of Word;
+  Count, Next: Integer;
+
+procedure LoadKeys;
+var
+  T: Text;
+begin
+  Count := 0;
+  Next := 1;
+  Assign(T, 'KEYS.DAT');
+  {$I-}
+  Reset(T);
+  {$I+}
+  if IOResult <> 0 then Exit;
+  while not Eof(T) do
+  begin
+    Inc(Count);
+    ReadLn(T, Keys[Count]);
+  end;
+  Close(T);
+end;
 
 {$F+}
 procedure Hook(Flags, CS, IP, AX, BX, CX, DX, SI, DI, DS, ES, BP: Word); interrupt;
@@ -18,13 +39,14 @@ begin
   case Hi(AX) of
     $00, $10:
       begin
-        if Next <= Length(Keys) then AX := Ord(Keys[Next]) else AX := $1C0D;
+        if Next > Count then Halt(KeysExhausted);
+        AX := Keys[Next];
         Inc(Next);
       end;
     $01, $11:
-      if Next <= Length(Keys) then
+      if Next <= Count then
       begin
-        AX := Ord(Keys[Next]);
+        AX := Keys[Next];
         Flags := Flags and not FZero;
       end
       else Flags := Flags or FZero;
@@ -33,6 +55,6 @@ end;
 {$F-}
 
 begin
-  Next := 1;
+  LoadKeys;
   SetIntVec($16, @Hook);
 end.
