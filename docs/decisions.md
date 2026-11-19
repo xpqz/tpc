@@ -628,3 +628,15 @@ repaints the whole screen through View (decision 47) instead of saving what it c
 Titles and items are typed-constant record tables. `CmdNew = 7` lives in Menu; `Show` is
 public so a test can look at an open menu (a program blocked in `ReadKey` fails the corpus).
 **Reason.** Smallest menu that covers the plan; no screen-saving code.
+
+## 50. Scope calls from the SWAG sweep (#83)
+
+Typed and untyped files (`file of T`, `file`, `BlockRead`, `BlockWrite`) stay omitted as
+plan §2 says, although they are the largest single reason SWAG programs fail (53 of the
+portable ones); the budget is locked and the plan's target does not include them. DOS device
+names (`COM1`, `LPT1`, `PRN`, `AUX`) are ordinary file names here (D35). Uninitialised
+variables read as zero here and as memory garbage in TP (D36); tests never depend on them.
+The remaining findings are Phase 8 issues: harmless compiler switches and `{$M}`, `Random`,
+`FillChar`/`Move`, `Exp`/`Sin`/`Cos`/`Ln`/`ArcTan`/`Pi`/`MaxInt`, Dos additions, `Val` into
+`Word` (D18 retired), large hex literals, Crt `LastMode`, `SetTextBuf`, `Assign(f, '')` as
+the console, error 11 for long lines, and heap exhaustion ending in 203.
