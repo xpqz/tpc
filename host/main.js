@@ -20,7 +20,7 @@
 // IDE posts { saved }. A running program gets the IDE's files, and its own writes are dropped.
 import { Terminal, GRID_BYTES, clearScreen } from "./terminal.js";
 import { newKeyQueue, pushKeys, keyBytes } from "./keys.js";
-import { loadFiles, saveFile } from "./persist.js";
+import { loadFiles, removeFile, saveFile } from "./persist.js";
 
 const STOPPED = 1;
 
@@ -62,6 +62,7 @@ function runGuest({ module, files }) {
 
 function onWorkerMessage({ data }) {
   if (data.saved) saveFile(localStorage, data.saved.name, data.saved.bytes);
+  else if (data.erased) removeFile(localStorage, data.erased);
   else if (data.run) runGuest(data.run);
   else stop(data.error ?? `finished, exit code ${data.done.code}`);
 }

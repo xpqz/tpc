@@ -685,7 +685,7 @@ nothing to System, so programs that declare these names themselves are unaffecte
 Rejected: adding them to System (not TP, and would clash with programs' own declarations);
 a compiler-side intrinsic set (costs Rust lines, cannot be checked by the oracle).
 
-## 54. Erase and Rename stay omitted (#99)
+## 54. Erase and Rename stay omitted (#99; superseded by decision 55 and #101)
 
 **Decision.** `Erase(f)` and `Rename(f, name)` are not provided. They need a delete and a
 rename in the host file system (docs/abi.md section 8 has open, read, write and close only),
@@ -703,3 +703,6 @@ and host glue was at 600 of 600. Under the borrowing rule (decision 51) the IDE,
 2,300 and feature-complete, gives 30 lines: IDE 2,300 to 2,270, host glue 600 to 630. The total
 is unchanged at 15,000. Rejected: keeping them omitted, because they appear in 74 and 38 SWAG
 files and are ordinary TP routines.
+Amended at #101's review: the plain implementation needed 55 lines (Vfs delete and rename
+with open handles following the file, the two imports, IDE persistence of erases), so the IDE
+gives 60: IDE 2,240, host glue 660. Compressing the host code to fit 30 was rejected.

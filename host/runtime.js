@@ -13,7 +13,8 @@
 //                     or returns null when no key can come any more
 //   screen            the Screen grid (default: a private one), kept as `host.screen`; a
 //                     runner prints its dump after the program ends
-//   onWritten         (name, bytes) called when a file opened for writing is closed
+//   onWritten         (name, bytes) called when a file opened for writing is closed or renamed
+//   onErased          (name) called when a file name is deleted or renamed away
 import { HostError } from "./error.js";
 import { fmtReal } from "./fmt_real.js";
 import { Screen } from "./screen.js";
@@ -36,10 +37,19 @@ const text = (string) => Uint8Array.from(string, (c) => c.charCodeAt(0));
 export const KEYS_EXHAUSTED = 255;
 
 export class Host {
-  constructor({ write, input, files = null, clock, keys, screen = new Screen(), onWritten }) {
+  constructor({
+    write,
+    input,
+    files = null,
+    clock,
+    keys,
+    screen = new Screen(),
+    onWritten,
+    onErased,
+  }) {
     this.sink = write;
     this.input = input;
-    this.vfs = new Vfs(files, onWritten);
+    this.vfs = new Vfs(files, onWritten, onErased);
     this.clock = clock;
     this.keys = keys;
     this.screen = screen;
@@ -83,6 +93,11 @@ export class Host {
     return new Uint8Array(this.memory.buffer, ptr, len);
   }
 
+  // A file name stored at ptr, as a string of one character per byte.
+  nameAt(what, ptr, len) {
+    return latin1(this.bytesAt(what, ptr, len));
+  }
+
   // `time(0)` takes a reading of the clock and returns its days; 1 and 2 return the seconds
   // since midnight and the hundredths of a second of that same reading (docs/abi.md), so the
   // date and time a program fetches in three calls agree.
@@ -121,8 +136,7 @@ export class Host {
         throw new Halt(code);
       },
       fs_open: (namePtr, nameLen, mode) => {
-        const name = latin1(this.bytesAt("fs_open", namePtr, nameLen));
-        return this.vfs.open(name, mode);
+        return this.vfs.open(this.nameAt("fs_open", namePtr, nameLen), mode);
       },
       fs_read: (handle, ptr, len) => {
         const target = this.bytesAt("fs_read", ptr, len);
@@ -134,6 +148,11 @@ export class Host {
       fs_write: (handle, ptr, len) =>
         this.vfs.write(handle, this.bytesAt("fs_write", ptr, len).slice()),
       fs_close: (handle) => this.vfs.close(handle),
+      fs_delete: (namePtr, nameLen) => this.vfs.delete(this.nameAt("fs_delete", namePtr, nameLen)),
+      fs_rename: (oldPtr, oldLen, newPtr, newLen) => {
+        const oldName = this.nameAt("fs_rename", oldPtr, oldLen);
+        return this.vfs.rename(oldName, this.nameAt("fs_rename", newPtr, newLen));
+      },
       readline: (ptr, max) => {
         const target = this.bytesAt("readline", ptr, max);
         const line = this.input.readLine(max);

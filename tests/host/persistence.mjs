@@ -26,6 +26,9 @@ class MemoryStorage {
   setItem(key, value) {
     this.items.set(key, String(value));
   }
+  removeItem(key) {
+    this.items.delete(key);
+  }
 }
 
 const bytes = (...values) => Uint8Array.from(values);
