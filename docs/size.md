@@ -26,3 +26,4 @@ Measured stripped (custom sections removed) at phase-4: compiler 160,907 B, hell
 | phase-6 | 9183 | 276165 B unstripped / 222182 B stripped | 875 B | Crt unit, browser terminal and workers; Chrome and Firefox browser tests pass; host 471 / 500 |
 | phase-7 | 10844 | 283090 B unstripped / 228901 B stripped | 875 B | IDE in Pascal (IDE WASM 21364 B, target 120 KB); exit test passes in Chrome and Firefox |
 | phase-8 size pass | 11878 | 234,407 B unstripped = stripped (release `strip = true`; was 309,789 / 254,558) | 691 B (was 875) | IDE WASM 21,584 B (unchanged); targets are decimal: 1 KB = 1,000 B, so the compiler target is 250,000 B stripped (met from this pass on) |
+| phase-8 | 11902 | 234,778 B (stripped in release) | 691 B | IDE WASM 21,584 B; make check, strict make test-browser (Chrome, Firefox) and make oracle all green; checker 2127 / 2600, codegen 1669 / 2100 |
