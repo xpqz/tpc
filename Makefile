@@ -1,7 +1,7 @@
 CARGO_TARGET_DIR := $(shell scripts/cargo-target.sh)
 export CARGO_TARGET_DIR
 
-.PHONY: build test fmt clippy check wasm loc hooks oracle
+.PHONY: build test fmt clippy check wasm loc hooks oracle oracle-tables
 
 build:
 	cargo build
@@ -31,5 +31,8 @@ loc:
 hooks:
 	install -m 755 scripts/pre-commit "$$(git rev-parse --git-path hooks)/pre-commit"
 
-oracle:
+oracle: oracle-tables
 	tools/oracle.sh
+
+oracle-tables:
+	cargo test -- --ignored oracle_agrees

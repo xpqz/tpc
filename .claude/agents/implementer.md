@@ -58,6 +58,10 @@ response section to `docs/prs/{id}.md`, commit, and report.
 
 ## Rules
 
+- Readability first (CLAUDE.md): the code is a teaching text for compiler techniques.
+  Plain control flow, descriptive names, small functions, comments that explain the
+  technique. Never compress code to meet a budget; report the conflict instead.
+
 - Never merge, rebase `main`, delete branches or worktrees, close or create issues, or
   edit `docs/reviews/`. The lead does that.
 - Never use `--no-verify`. Never mention Claude, Anthropic or AI in commits or docs.

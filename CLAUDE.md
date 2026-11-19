@@ -12,6 +12,15 @@ relevant section before starting any issue. `docs/abi.md`, `docs/subset.md` and
 Layout: `compiler/` (Rust), `runtime/` (Pascal), `ide/` (Pascal), `host/` (JS), `tests/`,
 `tools/`, `docs/`.
 
+## Readability comes first
+
+The code is meant to be studied by people learning how a compiler works. It must be simple
+and obvious: plain control flow, descriptive names, one idea per function, comments that
+explain the technique where it is not self-evident. No code-golf tricks to get under a
+budget: no dense one-liners, clever bit tricks without explanation, cryptic abbreviations,
+or merged unrelated logic. When a feature cannot be written clearly within its budget,
+cut or simplify the feature (a recorded decision), never the clarity.
+
 ## The LOC budget is the hard constraint
 
 Compiler, runtime, IDE and host glue total at most **15,000 lines**; the per-component
@@ -34,12 +43,13 @@ budgets are in `plan.md` §1. The 500-line margin is not spent before Phase 7.
   IDE 2,200 at feature-complete. At a checkpoint breach, stop feature work, cut scope or
   simplify (with the advisor), and record the decision in `docs/decisions.md`.
 - Do not game the count: no long lines to dodge rustfmt, no stuffing logic into strings,
-  macros or data tables to hide it, no moving production code into `tools/` or tests.
-  Write straight, readable Rust.
+  macros or data tables to hide it, no moving production code into `tools/` or tests, no
+  compressing code into clever forms. Write straight, readable Rust (see "Readability
+  comes first").
 - If a feature cannot fit, the lead decides a scope or algorithmic reduction. Cut
   features, not the cap. Do not contort code to squeeze it in.
 - Before adding code, look for existing code to reuse. Every issue ends with a pass asking
-  whether the change can be shorter while staying clear.
+  whether the change can be simpler and clearer; shorter only where that also reads better.
 
 ## Engineering rules (from `plan.md` §8)
 
@@ -204,7 +214,7 @@ scope creep in the current branch.
 - Approved tests green; full suite green with no regressions.
 - `cargo fmt --check` and clippy clean.
 - `tools/loc.sh` green per component and in total, and the delta is recorded.
-- Self-review done: is this the shortest clear version?
+- Self-review done: is this the clearest version that fits? Clarity beats brevity.
 
 ## Writing style
 

@@ -313,3 +313,11 @@ error 200.
 
 About 300 checker lines for the whole phase (decision 22 pacing); loading, ordering,
 cycles, includes and conditionals live in `units.rs` (Driver component, ~850 lines free).
+
+## 31. Readability over line count
+
+**Decision.** The code is a teaching text for compiler techniques (user direction). It must
+be simple and obvious; no code-golf to meet a budget. When a budget and clarity conflict,
+the feature is cut or simplified and the cut is recorded. Reviews reject dense or clever
+code even when it is correct and short. A readability review of the existing compiler
+(#47) removes any golf already present.
