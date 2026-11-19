@@ -6,6 +6,7 @@ use common::*;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use tp5c::wasm::*;
 
 fn root() -> PathBuf {
@@ -108,7 +109,8 @@ fn halt_100_minus(c: &mut Code) {
 const DROP: u8 = 0x1A;
 
 fn run(wasm: &[u8], args: &[&str], stdin: Option<&[u8]>) -> Output {
-    let w = scratch("prog.wasm");
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let w = scratch(&format!("prog{}.wasm", NEXT.fetch_add(1, Ordering::SeqCst)));
     std::fs::write(&w, wasm).unwrap();
     let mut child = Command::new("node")
         .arg(root().join("tests/run.mjs"))
@@ -279,9 +281,9 @@ fn readline_reads_lines_from_the_in_file() {
 
 #[test]
 fn readline_without_in_option_reads_the_process_stdin() {
-    let o = run(&three_lines(), &[], Some(b"from\nstdin\n"));
+    let o = run(&three_lines(), &[], Some(b"from\nstdin\n\n"));
     assert_eq!(o.status.code(), Some(0), "{}", err(&o));
-    assert_eq!(o.stdout, b"from|stdin|");
+    assert_eq!(o.stdout, b"from|stdin||");
 }
 
 /// A negative `readline` result at end of input is the contract: the line length is -1.

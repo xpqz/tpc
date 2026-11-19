@@ -142,10 +142,11 @@ epilogue:  sp = fp + framesize
 | `write` | `(fd, ptr, len)` | console / terminal output |
 | `readkey` | `() -> i32` | blocks (`Atomics.wait`) |
 | `keypressed` | `() -> i32` | non-blocking |
-| `readline` | `(ptr, max) -> len` | blocks, line editing in JS |
+| `readline` | `(ptr, max) -> len` | blocks, line editing in JS; `len` is -1 at end of input |
 | `screen` | `(op, a, b, c)` | gotoxy, clrscr, textattr, cursor |
-| `fs_open` | `(namePtr, nameLen, mode) -> h` | VFS, text only |
-| `fs_read` / `fs_write` / `fs_close` | `(h, ptr, len) -> n` | VFS |
+| `fs_open` | `(namePtr, nameLen, mode) -> h` | VFS, text only; `h` < 0 is an error |
+| `fs_read` / `fs_write` | `(h, ptr, len) -> n` | VFS; `n` < 0 is an error |
+| `fs_close` | `(h) -> status` | VFS; 0, or < 0 on error |
 | `fmt_real` | `(f64, width, decimals, bufPtr) -> len` | TP-style real formatting; `width` and `decimals` are -1 when absent; the buffer holds 512 bytes; imported only by modules that use Real (`host/fmt_real.js`) |
 | `halt` | `(code)` | terminate with exit code |
 | `rterror` | `(code)` | runtime error report |
@@ -156,14 +157,54 @@ Compiler API exported from `compiler.wasm` (`plan.md` §3): `alloc(n) -> ptr`,
 `compile(src_ptr, src_len, flags) -> status`, `out_ptr()`, `out_len()`, `err_line()`,
 `err_col()`, `err_code()`.
 
+### File and console input contract
+
+Used by the test runner (`tests/vfs.mjs`) and the browser host alike. The runtime (`System`)
+turns a negative result `-e` into `InOutRes := e`, so the codes are DOS error numbers.
+
+- `fs_open(namePtr, nameLen, mode)`: `mode` is 0 Reset (read; the file must exist), 1 Rewrite
+  (create or truncate; write only), 2 Append (create if missing, position at the end; write
+  only). Returns a handle (1 or more) or a negative error number.
+- The file system is flat. A name is 1 to 8 characters, optionally a dot and 0 to 3 more, from
+  `A-Z 0-9 _ $ ~ ! # % & - { } ( ) @ ' ^`, matched case-insensitively (files are created in
+  upper case). The name is raw bytes, not a path: a name containing `\`, `/` or `:` is a path
+  error.
+- `fs_read(h, ptr, len)` returns the number of bytes stored at `ptr` (0 to `len`, 0 at end of
+  file); `fs_write(h, ptr, len)` returns `len`. Bytes are raw: the host does no line-ending or
+  ^Z translation (TP writes CRLF itself and treats ^Z as end of file when reading text, so
+  `System` does both).
+- Several handles on one file have independent positions. At most 20 files are open at once.
+
+| Result | DOS error | Cause |
+|---|---|---|
+| -2 | 2 file not found | Reset of a missing file; a name that is not a valid 8.3 name (any mode) |
+| -3 | 3 path not found | name with `\`, `/` or `:` |
+| -4 | 4 too many open files | a 21st open handle |
+| -5 | 5 access denied | unknown mode; read on a Rewrite/Append handle; write on a Reset handle |
+| -6 | 6 invalid handle | `fs_read`, `fs_write` or `fs_close` on a handle that is not open (never opened or already closed) |
+
+- `readline(ptr, max)` stores the next input line at `ptr`, without its LF or CRLF, cut to
+  `max` bytes (the rest of a longer line is discarded), and returns the stored length. At end
+  of input it returns -1 and stores nothing. A final line without a terminator is a line.
+- Test runner (decision 26): the directory `DIR/NAME/` of a test program `DIR/NAME.pas` is the
+  initial file system and `DIR/NAME.in` is the input. The runner reads the directory into
+  memory at startup, so files the program creates or changes are never written back and
+  every run starts from the same state. Without a directory the file system is empty; without
+  an input file `readline` reads the process stdin.
+
 ### Test runner contract (`tests/run.mjs`)
 
 - The module exports `main` (`() -> ()`) and `memory`; both are required.
 - `write(fd, ptr, len)`: fd 1 is stdout, fd 2 is stderr, other fds are a runner error. Bytes are
   copied raw from `memory`; no text decoding.
 - `halt(code)` stops execution; the exit code is `code`.
-- `rterror(code)` writes `Runtime error N` and LF to stdout (no address), then behaves as
-  `halt(code)`. fpc writes to stderr; TP5 writes to the console.
+- `rterror(code)` writes `Runtime error NNN` and LF to stdout (code zero-padded to three digits
+  as TP5 prints it, no address), then behaves as `halt(code)`. fpc writes to stderr; TP5 writes
+  to the console.
+- Command line: `run.mjs [--dir AUXDIR] [--in INPUT] prog.wasm [expected.out]`; `--dir` and
+  `--in` supply the file system and the console input described above. The JS API is
+  `run(bytes, { files, input })` with the directory path and a Buffer (both default to null).
+  A missing directory or input file is a runner error.
 - Exit codes: program code when output matches (or none is expected), 1 on output mismatch,
   2 on runner error (stderr prefix `run.mjs:`). A program `halt(2)` is indistinguishable by code.
 - A host `RangeError` (engine stack exhausted by recursion in routines without a frame) is
@@ -173,7 +214,7 @@ Compiler API exported from `compiler.wasm` (`plan.md` §3): `alloc(n) -> ptr`,
 
 ## 9. Runtime errors
 
-(Plan §4.10.) Report `Runtime error N`.
+(Plan §4.10.) Report `Runtime error NNN` (three digits, zero-padded, as TP5 prints it).
 
 | Code | Meaning |
 |---|---|
@@ -253,9 +294,8 @@ Measurements use Free Pascal 3.2.2 (aarch64, macOS) with `fpc -Mtp -v0`, program
 12. **Halt exit code and `rterror` flow.** §4.4 says `Halt` calls `host.halt`; §4.10 says
     report `Runtime error N` via `host.rterror`. Not stated: whether `rterror` is followed
     by `halt(N)` or itself terminates, and the exit code used.
-13. **`host.write` `fd` values** (0/1/2?), `screen` `op` numbering, `fs_open` `mode`
-    encoding, `host.time` unit, and error return conventions of `fs_*` (negative `n`?):
-    unspecified.
+13. **`host.write` `fd` values** (0/1/2?), `screen` `op` numbering and `host.time` unit:
+    unspecified. (`fs_open` `mode` and the `fs_*` error returns are settled in section 8.)
 14. **Table layout beyond index 0.** Whether the element section assigns indices in
     declaration order or by address-taken order; not specified.
 15. **Heap helper contracts.** Settled: Pascal globals in `System` (`HeapOrg`, `HeapPtr`,

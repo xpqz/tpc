@@ -161,7 +161,7 @@ fn rejected(src: &str) -> (u16, u32) {
 #[test]
 fn set_helpers_are_emitted_only_when_used() {
     let hello = compile("program Hello;\nbegin\n  WriteLn('hello')\nend.");
-    assert!(hello.len() <= 430, "hello-world is {} bytes", hello.len());
+    common::assert_hello_fits(&hello);
     let plain = compile("program Prog;\nvar i: Integer;\nbegin\n  i := 1;\n  WriteLn(i)\nend.");
     let dead = compile(
         "program Prog;\ntype S = set of Byte;\nprocedure Dead;\nvar a, b: S; i: Integer;\nbegin\n  a := [1, 2..9] + b * [i];\n  if (3 in a) or (a <= b) or (a = b) then a := a - b\nend;\nvar i: Integer;\nbegin\n  i := 1;\n  WriteLn(i)\nend.",

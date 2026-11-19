@@ -218,18 +218,36 @@ fn expect_ok(r: &Res, what: &str) -> Result<(), String> {
     }
 }
 
+/// Runs `wasm` under tests/run.mjs against `expected`. A directory `STEM/` next to the source
+/// `STEM.pas` holds the program's files and `STEM.in` is its console input (decision 26).
+fn run_wasm(src: &Path, wasm: &Path, expected: &Path) -> Res {
+    let mut cmd = Command::new("node");
+    cmd.arg(root().join("tests/run.mjs"));
+    let aux = src.with_extension("");
+    if aux.is_dir() {
+        cmd.arg("--dir").arg(aux);
+    }
+    let input = src.with_extension("in");
+    if input.is_file() {
+        cmd.arg("--in").arg(input);
+    }
+    res(cmd
+        .arg(wasm)
+        .arg(expected)
+        .output()
+        .expect("node must be installed"))
+}
+
 /// Every `STEM.pas` compiles, runs under tests/run.mjs, and prints exactly `STEM.out`.
 pub fn check_lang(dir: &Path, compile: Compile) -> Vec<String> {
     sweep(dir, &|stem| {
         let wasm = scratch(&format!("{stem}.wasm"));
-        expect_ok(&compile(&dir.join(format!("{stem}.pas")), &wasm), "compile")?;
-        let o = Command::new("node")
-            .arg(root().join("tests/run.mjs"))
-            .arg(&wasm)
-            .arg(dir.join(format!("{stem}.out")))
-            .output()
-            .expect("node must be installed");
-        expect_ok(&res(o), "run")
+        let src = dir.join(format!("{stem}.pas"));
+        expect_ok(&compile(&src, &wasm), "compile")?;
+        expect_ok(
+            &run_wasm(&src, &wasm, &dir.join(format!("{stem}.out"))),
+            "run",
+        )
     })
 }
 
@@ -249,14 +267,9 @@ pub fn check_rt(dir: &Path, compile: Compile) -> Vec<String> {
             .and_then(|n| n.parse().ok())
             .ok_or("last line of .out is not `Runtime error N`")?;
         let wasm = scratch(&format!("{stem}.wasm"));
-        expect_ok(&compile(&dir.join(format!("{stem}.pas")), &wasm), "compile")?;
-        let o = Command::new("node")
-            .arg(root().join("tests/run.mjs"))
-            .arg(&wasm)
-            .arg(&out)
-            .output()
-            .expect("node must be installed");
-        match res(o) {
+        let src = dir.join(format!("{stem}.pas"));
+        expect_ok(&compile(&src, &wasm), "compile")?;
+        match run_wasm(&src, &wasm, &out) {
             r if r.code == want => Ok(()),
             r => Err(format!(
                 "run exited {}, want {want}: {}",
@@ -267,8 +280,8 @@ pub fn check_rt(dir: &Path, compile: Compile) -> Vec<String> {
     })
 }
 
-/// Every `STEM.pas` fails with exit 1 and `NAME(LINE,COL): Error N: MSG` where `N LINE` is
-/// the content of `STEM.err`.
+/// Every `STEM.pas` fails with exit 1 and `FILE(LINE,COL): Error N: MSG` where `N LINE` (or
+/// `N LINE FILE` for an error in a unit or include file) is the content of `STEM.err`.
 pub fn check_neg(dir: &Path, compile: Compile) -> Vec<String> {
     sweep(dir, &|stem| {
         let src = dir.join(format!("{stem}.pas"));
@@ -281,13 +294,11 @@ pub fn check_neg(dir: &Path, compile: Compile) -> Vec<String> {
         }
         let got =
             parse_diag(&src, &r.stderr).ok_or(format!("bad diagnostic: {}", r.stderr.trim()))?;
-        let got = [got.0, got.1];
         if r.code != 1 || want != got {
             return Err(format!(
-                "exit {}, got `{} {}`, want `{}`",
+                "exit {}, got `{}`, want `{}`",
                 r.code,
-                got[0],
-                got[1],
+                got.join(" "),
                 want.join(" ")
             ));
         }
@@ -295,17 +306,18 @@ pub fn check_neg(dir: &Path, compile: Compile) -> Vec<String> {
     })
 }
 
-/// (error number, line) from the first stderr line, which must start with the path as given.
-pub fn parse_diag(src: &Path, stderr: &str) -> Option<(String, String)> {
-    let rest = stderr
-        .lines()
-        .next()?
-        .strip_prefix(src.to_str()?)?
-        .strip_prefix('(')?;
+/// `[N, LINE]` from the first stderr line when the diagnostic is in `src` (which must be
+/// named as given), `[N, LINE, FILE]` when it is in another file.
+pub fn parse_diag(src: &Path, stderr: &str) -> Option<Vec<String>> {
+    let (file, rest) = stderr.lines().next()?.split_once('(')?;
     let (pos, rest) = rest.split_once("): Error ")?;
     let (line, col) = pos.split_once(',')?;
     let (n, msg) = rest.split_once(": ")?;
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    let ok = [n, line, col].iter().all(|s| digits(s)) && !msg.is_empty();
-    ok.then(|| (n.to_string(), line.to_string()))
+    let ok = [n, line, col].iter().all(|s| digits(s)) && !msg.is_empty() && !file.is_empty();
+    let mut got = vec![n.to_string(), line.to_string()];
+    if file != src.to_str()? {
+        got.push(file.to_string());
+    }
+    ok.then_some(got)
 }

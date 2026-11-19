@@ -181,7 +181,7 @@ test("reading a write handle and writing a read handle return -5", () => {
 
 test("valid 8.3 names are accepted, invalid ones return -2 in every mode", () => {
   const vfs = new Vfs(null);
-  for (const name of ["A", "ABCDEFGH", "A.B", "ABCDEFGH.XYZ", "A_1$~!#.%&-", "{A}(B)@'^.T", "NAME."]) {
+  for (const name of ["A", "ABCDEFGH", "A.B", "ABCDEFGH.XYZ", "A_1$~!#.%&-", "{A}(B)@'.^T", "NAME."]) {
     for (const mode of [REWRITE, APPEND]) {
       const h = vfs.open(name, mode);
       assert.ok(h > 0, `${name} mode ${mode}: ${h}`);
