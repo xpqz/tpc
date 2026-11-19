@@ -1,17 +1,15 @@
-// Test runner: node tests/run.mjs [--dir AUXDIR] [--in INPUT] prog.wasm [expected.out]
+// Test runner: node tests/run.mjs [--dir AUXDIR] [--in INPUT] [--keys KEYS] prog.wasm [expected.out]
 // AUXDIR holds the files the program can open (a snapshot; see tests/vfs.mjs); INPUT is the
-// text readline returns, by default the process stdin.
+// text readline returns, by default the process stdin; KEYS is a key script (NAME.keys, see
+// tests/keys.mjs) that readkey and keypressed serve, by default no keys. A program that
+// imports `screen` ends with the screen dump on stdout, as tools/tp5.sh prints it.
 // Exit: program code on match or print mode, 1 on output mismatch, 2 on runner error.
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
-import { fmtReal } from "../host/fmt_real.js";
-import { Vfs, Input } from "./vfs.mjs";
-
-class Halt {
-  constructor(code) {
-    this.code = code;
-  }
-}
+import { Host, HostError } from "../host/runtime.js";
+import { dump } from "./screen_dump.mjs";
+import { KeyScript, KeyScriptError, parseKeys } from "./keys.mjs";
+import { Input, loadSnapshot } from "./vfs.mjs";
 
 export class RunnerError extends Error {
   constructor(message, stdout = Buffer.alloc(0)) {
@@ -20,21 +18,27 @@ export class RunnerError extends Error {
   }
 }
 
-const STUBS = ["readkey", "keypressed", "screen", "compile"];
-const MS_PER_DAY = 86400000;
+// A virtual clock (decision 38): it starts at the local time in milliseconds since
+// 1970-01-01 00:00:00, TP5_NOW_MS when set (tests fix the clock with it) else the real local
+// time, and moves only when the program sleeps, so a run never waits.
+function virtualClock() {
+  let now = Number(process.env.TP5_NOW_MS ?? Date.now() - new Date().getTimezoneOffset() * 60000);
+  return { nowMs: () => now, advance: (ms) => (now += ms) };
+}
 
-// The local time in milliseconds since 1970-01-01 00:00:00: the environment variable
-// TP5_NOW_MS when set (tests fix the clock with it), else the real local time.
-function localNowMs() {
-  const fixed = process.env.TP5_NOW_MS;
-  if (fixed !== undefined) return Number(fixed);
-  const now = new Date();
-  return now.getTime() - now.getTimezoneOffset() * 60000;
+// The INT 16h words of the key script in `text` (a Buffer, or null for no keys).
+function keyWords(text) {
+  try {
+    return text === null ? [] : parseKeys(text.toString("latin1"));
+  } catch (e) {
+    if (e instanceof KeyScriptError) throw new RunnerError(`bad key script: ${e.message}`);
+    throw e;
+  }
 }
 
 // `files` is the aux directory path or null; `input` is a Buffer of console input or null
-// for the process stdin.
-export async function run(bytes, { files = null, input = null } = {}) {
+// for the process stdin; `keys` is a Buffer holding a key script, or null for no keys.
+export async function run(bytes, { files = null, input = null, keys = null } = {}) {
   let module;
   try {
     module = await WebAssembly.compile(bytes);
@@ -42,80 +46,20 @@ export async function run(bytes, { files = null, input = null } = {}) {
     throw new RunnerError(`invalid wasm: ${e.message}`);
   }
   const out = [];
-  let memory = null;
   const stdout = () => Buffer.concat(out);
-  const fail = (msg) => new RunnerError(msg, stdout());
-  const vfs = new Vfs(files);
-  const console_in = new Input(input);
-  const checkRange = (what, ptr, len) => {
-    if (ptr < 0 || len < 0 || ptr + len > memory.buffer.byteLength) {
-      throw fail(`host.${what}: out of bounds (${ptr}, ${len})`);
-    }
+  const sink = (fd, bytes) => {
+    if (fd === 1) out.push(Buffer.from(bytes));
+    else process.stderr.write(bytes);
   };
-  let reading = 0;
-  const host = {
-    // `time(0)` takes a reading of the clock and returns its days; 1 and 2 return the seconds
-    // since midnight and the hundredths of a second of that same reading (docs/abi.md).
-    time(what) {
-      if (what === 0) reading = localNowMs();
-      const msOfDay = reading % MS_PER_DAY;
-      if (what === 1) return Math.floor(msOfDay / 1000);
-      if (what === 2) return Math.floor((msOfDay % 1000) / 10);
-      if (what !== 0) throw fail(`host.time: bad argument ${what}`);
-      return Math.floor(reading / MS_PER_DAY);
-    },
-    write(fd, ptr, len) {
-      if (fd !== 1 && fd !== 2) throw fail(`host.write: bad fd ${fd}`);
-      if (len === 0) return;
-      checkRange("write", ptr, len);
-      const chunk = Buffer.from(memory.buffer.slice(ptr, ptr + len));
-      if (fd === 1) out.push(chunk);
-      else process.stderr.write(chunk);
-    },
-    halt(code) {
-      throw new Halt(code);
-    },
-    fmt_real(x, width, decimals, ptr) {
-      return fmtReal(memory, x, width, decimals, ptr);
-    },
-    rterror(code) {
-      out.push(Buffer.from(`Runtime error ${String(code).padStart(3, "0")}\n`));
-      throw new Halt(code);
-    },
-    fs_open(namePtr, nameLen, mode) {
-      checkRange("fs_open", namePtr, nameLen);
-      const name = Buffer.from(memory.buffer.slice(namePtr, namePtr + nameLen)).toString("latin1");
-      return vfs.open(name, mode);
-    },
-    fs_read(handle, ptr, len) {
-      checkRange("fs_read", ptr, len);
-      const chunk = vfs.read(handle, len);
-      if (typeof chunk === "number") return chunk;
-      Buffer.from(memory.buffer).set(chunk, ptr);
-      return chunk.length;
-    },
-    fs_write(handle, ptr, len) {
-      checkRange("fs_write", ptr, len);
-      return vfs.write(handle, Buffer.from(memory.buffer.slice(ptr, ptr + len)));
-    },
-    fs_close(handle) {
-      return vfs.close(handle);
-    },
-    readline(ptr, max) {
-      checkRange("readline", ptr, max);
-      const line = console_in.readLine(max);
-      if (line === null) return -1;
-      Buffer.from(memory.buffer).set(line, ptr);
-      return line.length;
-    },
-  };
-  for (const name of STUBS) {
-    host[name] = () => {
-      throw fail(`host import ${name} not available in test runner`);
-    };
-  }
+  const host = new Host({
+    write: sink,
+    input: new Input(input),
+    files: loadSnapshot(files),
+    clock: virtualClock(),
+    keys: new KeyScript(keyWords(keys)),
+  });
   for (const imp of WebAssembly.Module.imports(module)) {
-    if (imp.module !== "host" || imp.kind !== "function" || !(imp.name in host)) {
+    if (imp.module !== "host" || imp.kind !== "function" || !(imp.name in host.imports)) {
       throw new RunnerError(`unknown import ${imp.module}.${imp.name}`);
     }
   }
@@ -124,24 +68,23 @@ export async function run(bytes, { files = null, input = null } = {}) {
       throw new RunnerError(`missing export ${name}`);
     }
   }
-  const instance = await WebAssembly.instantiate(module, { host });
-  memory = instance.exports.memory;
+  const instance = await WebAssembly.instantiate(module, { host: host.imports });
+  host.attach(instance);
   const sp = instance.exports.sp;
   const sp0 = sp?.value;
   try {
-    instance.exports.main();
-    if (sp && sp.value !== sp0) throw fail(`sp not restored: ${sp0} before main, ${sp.value} after`);
-  } catch (e) {
-    if (e instanceof Halt) return { stdout: stdout(), code: e.code };
-    if (e instanceof RunnerError) throw e;
-    if (e instanceof RangeError) {
-      out.push(Buffer.from("Runtime error 202\n"));
-      return { stdout: stdout(), code: 202 };
+    const { code, halted } = host.runMain(instance);
+    if (!halted && sp && sp.value !== sp0) {
+      throw new RunnerError(`sp not restored: ${sp0} before main, ${sp.value} after`, stdout());
     }
-    if (e instanceof WebAssembly.RuntimeError) throw fail(`trap: ${e.message}`);
+    const usesScreen = WebAssembly.Module.imports(module).some((i) => i.name === "screen");
+    if (usesScreen) out.push(Buffer.from(dump(host.screen.cells, code), "latin1"));
+    return { stdout: stdout(), code };
+  } catch (e) {
+    if (e instanceof HostError) throw new RunnerError(e.message, stdout());
+    if (e instanceof WebAssembly.RuntimeError) throw new RunnerError(`trap: ${e.message}`, stdout());
     throw e;
   }
-  return { stdout: stdout(), code: 0 };
 }
 
 const show = (s) => s.replace(/[^\x20-\x7e]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
@@ -182,16 +125,17 @@ function read(path) {
   }
 }
 
-const USAGE = "usage: run.mjs [--dir AUXDIR] [--in INPUT] prog.wasm [expected.out]";
+const USAGE = "usage: run.mjs [--dir AUXDIR] [--in INPUT] [--keys KEYS] prog.wasm [expected.out]";
+const OPTIONS = { "--dir": "dir", "--in": "input", "--keys": "keys" };
 
 // Splits the command line into its options and the positional arguments.
 function parseArgs(args) {
-  const options = { dir: null, input: null };
+  const options = { dir: null, input: null, keys: null };
   const positional = [];
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--dir" || args[i] === "--in") {
+    if (Object.hasOwn(OPTIONS, args[i])) {
       if (i + 1 >= args.length) throw new RunnerError(USAGE);
-      options[args[i] === "--dir" ? "dir" : "input"] = args[++i];
+      options[OPTIONS[args[i]]] = args[++i];
     } else {
       positional.push(args[i]);
     }
@@ -208,7 +152,8 @@ async function main(argv) {
     throw new RunnerError(`cannot read directory ${options.dir}`);
   }
   const input = options.input === null ? null : read(options.input);
-  const { stdout, code } = await run(wasm, { files: options.dir, input });
+  const keys = options.keys === null ? null : read(options.keys);
+  const { stdout, code } = await run(wasm, { files: options.dir, input, keys });
   if (expected === null) {
     process.stdout.write(stdout);
   } else if (!stdout.equals(expected)) {

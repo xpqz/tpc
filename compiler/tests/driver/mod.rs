@@ -61,7 +61,8 @@ pub fn real_compile(src: &Path, out: &Path) -> Res {
 /// on stderr. A source whose first line is `#do` becomes a module that runs one directive per
 /// following line: `#file NAME` prints what `fs_read` returns for the file NAME (runtime
 /// error `-h` when `fs_open` fails), `#stdin` prints the next `readline` result and `|`,
-/// `#rt N` calls `rterror(N)`. Any other source becomes a module that prints the source text.
+/// `#rt N` calls `rterror(N)`, `#key` reads a key and draws its character at the next column
+/// of the top screen row (a Crt program: the runner then prints the screen dump). Any other source becomes a module that prints the source text.
 pub fn fake_compile(src: &Path, out: &Path) -> Res {
     let text = std::fs::read(src).unwrap();
     if let Some(rest) = text.strip_prefix(b"#error ") {
@@ -93,7 +94,13 @@ fn fake_module(text: &[u8]) -> Vec<u8> {
     const FS_OPEN: u32 = 3;
     const FS_READ: u32 = 4;
     const FS_CLOSE: u32 = 5;
+    const READKEY: u32 = 6;
+    const SCREEN: u32 = 7;
     const BUFFER: i32 = 4096;
+    const AND: u8 = 0x71;
+    const OR: u8 = 0x72;
+    // Only a program with `#key` imports the screen: that is what makes the runner dump it.
+    let uses_keys = text.windows(5).any(|w| w == b"\n#key");
     let mut m = Module::new();
     let write = m.ty(&[I32, I32, I32], &[]);
     let rterror = m.ty(&[I32], &[]);
@@ -106,6 +113,12 @@ fn fake_module(text: &[u8]) -> Vec<u8> {
     m.import_func("host", "fs_open", file_op);
     m.import_func("host", "fs_read", file_op);
     m.import_func("host", "fs_close", close);
+    if uses_keys {
+        let readkey = m.ty(&[], &[I32]);
+        let screen = m.ty(&[I32, I32, I32, I32], &[]);
+        m.import_func("host", "readkey", readkey);
+        m.import_func("host", "screen", screen);
+    }
     let main = m.ty(&[], &[]);
     m.memory(1);
     let mut data = Vec::new();
@@ -126,6 +139,7 @@ fn fake_module(text: &[u8]) -> Vec<u8> {
         }
         Some(directives) => {
             let (bar, _) = at(b"|");
+            let mut column = 0;
             for line in directives.lines() {
                 let (word, arg) = line.split_once(' ').unwrap_or((line, ""));
                 match word {
@@ -155,6 +169,12 @@ fn fake_module(text: &[u8]) -> Vec<u8> {
                         c.i32_const(BUFFER).i32_const(255).idx(CALL, READLINE);
                         c.idx(CALL, WRITE);
                         c.i32_const(1).i32_const(bar).i32_const(1).idx(CALL, WRITE);
+                    }
+                    "#key" => {
+                        c.i32_const(0).i32_const(column).i32_const(0);
+                        c.idx(CALL, READKEY).i32_const(255).op(AND);
+                        c.i32_const(0x700).op(OR).idx(CALL, SCREEN);
+                        column += 1;
                     }
                     "#rt" => {
                         c.i32_const(arg.parse().unwrap()).idx(CALL, RTERROR);
@@ -222,7 +242,8 @@ fn expect_ok(r: &Res, what: &str) -> Result<(), String> {
 }
 
 /// Runs `wasm` under tests/run.mjs against `expected`. A directory `STEM/` next to the source
-/// `STEM.pas` holds the program's files and `STEM.in` is its console input (decision 26).
+/// `STEM.pas` holds the program's files and `STEM.in` is its console input (decision 26);
+/// `STEM.keys` is the key script of a Crt program (tools/tp5.sh documents the format).
 fn run_wasm(src: &Path, wasm: &Path, expected: &Path) -> Res {
     let mut cmd = Command::new("node");
     cmd.arg(root().join("tests/run.mjs"));
@@ -233,6 +254,10 @@ fn run_wasm(src: &Path, wasm: &Path, expected: &Path) -> Res {
     let input = src.with_extension("in");
     if input.is_file() {
         cmd.arg("--in").arg(input);
+    }
+    let keys = src.with_extension("keys");
+    if keys.is_file() {
+        cmd.arg("--keys").arg(keys);
     }
     res(cmd
         .arg(wasm)
@@ -255,8 +280,8 @@ pub fn check_lang(dir: &Path, compile: Compile) -> Vec<String> {
 }
 
 /// Every `STEM.pas` compiles and runs under tests/run.mjs, prints exactly `STEM.out` and
-/// exits with the code N of the `Runtime error N` that ends `STEM.out` (TP prints it
-/// directly after any unfinished output line).
+/// exits with the code N of the last `Runtime error N` line of `STEM.out` (TP prints it
+/// directly after any unfinished output line; a Crt program's dump follows it).
 pub fn check_rt(dir: &Path, compile: Compile) -> Vec<String> {
     sweep(dir, &|stem| {
         let out = dir.join(format!("{stem}.out"));
@@ -264,11 +289,11 @@ pub fn check_rt(dir: &Path, compile: Compile) -> Vec<String> {
             std::fs::read_to_string(&out).map_err(|e| format!("cannot read {stem}.out: {e}"))?;
         let want: i32 = text
             .lines()
-            .last()
-            .and_then(|l| l.rsplit_once("Runtime error "))
+            .rev()
+            .find_map(|l| l.rsplit_once("Runtime error "))
             .map(|(_, n)| n)
             .and_then(|n| n.parse().ok())
-            .ok_or("last line of .out is not `Runtime error N`")?;
+            .ok_or("no `Runtime error N` line in .out")?;
         let wasm = scratch(&format!("{stem}.wasm"));
         let src = dir.join(format!("{stem}.pas"));
         expect_ok(&compile(&src, &wasm), "compile")?;
