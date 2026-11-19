@@ -104,7 +104,7 @@ fn file_types() {
 
 #[test]
 fn eighty_eighty_seven_types() {
-    for ty in ["Single", "Double", "Extended", "Comp", "Real"] {
+    for ty in ["Single", "Double", "Extended", "Comp"] {
         let src = format!("program P;\nvar x: {ty};\nbegin\nend.\n");
         // The checker reports a variable's type error at the declared name.
         unsupported(&src, "x:");

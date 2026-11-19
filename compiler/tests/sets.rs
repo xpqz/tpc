@@ -45,8 +45,8 @@ fn own_invalid_programs_report_tp5_number_and_line() {
 }
 
 /// Corpus programs (tests/lang, tests/abi, tests/neg) that this slice must make pass. Left out:
-/// `mixed_pointer_set_real_params_one_call` and `set_of_real` (need Real). `set_in_with_non_set`
-/// runs below with its Real declarations removed.
+/// `mixed_pointer_set_real_params_one_call` (a pointer, set and Real program, covered by the Real
+/// slice).
 const LANG: &[&str] = &[
     "set_algebra_identities_over_all_elements",
     "set_assignment_copies_and_aliasing",
@@ -79,16 +79,12 @@ const NEG: &[&str] = &[
     "set_constructor_range_wrong_type",
     "set_element_type_mismatch",
     "set_function_result_type",
+    "set_in_with_non_set",
     "set_include_unavailable",
     "set_less_than",
     "set_plus_integer",
     "set_write",
 ];
-
-/// Corpus negatives whose shared `var` line declares Real variables, which wait for the Real
-/// type: they run here with `r: Real` removed and `pr: ^Real` made `^Byte` (same line, so the
-/// same diagnostic).
-const NEG_REAL: &[&str] = &["set_in_with_non_set"];
 
 /// Copies `names` with the given extensions into a fresh directory (no PENDING file).
 fn subset(kind: &str, names: &[&str], exts: &[&str]) -> PathBuf {
@@ -127,29 +123,11 @@ fn corpus_neg_programs_report_tp5_number_and_line() {
 }
 
 #[test]
-fn corpus_neg_programs_without_real_declarations_report_tp5_number_and_line() {
-    let dir = subset("neg", NEG_REAL, &["err"]);
-    for n in NEG_REAL {
-        let src = std::fs::read_to_string(root().join(format!("tests/neg/{n}.pas"))).unwrap();
-        assert!(
-            src.contains("r: Real; ") && src.contains("pr: ^Real; "),
-            "{n}"
-        );
-        let src = src
-            .replace("r: Real; ", "")
-            .replace("pr: ^Real; ", "pr: ^Byte; ");
-        std::fs::write(dir.join(format!("{n}.pas")), src).unwrap();
-    }
-    assert_clean(check_neg(&dir, &real_compile));
-}
-
-#[test]
 fn corpus_lists_are_sorted_and_name_existing_programs() {
     for (kind, names, ext) in [
         ("lang", LANG, "out"),
         ("abi", ABI, "out"),
         ("neg", NEG, "err"),
-        ("neg", NEG_REAL, "err"),
     ] {
         assert!(!names.is_empty());
         let mut sorted = names.to_vec();
@@ -163,7 +141,7 @@ fn corpus_lists_are_sorted_and_name_existing_programs() {
             }
         }
     }
-    assert_eq!((LANG.len(), ABI.len(), NEG.len()), (17, 3, 9));
+    assert_eq!((LANG.len(), ABI.len(), NEG.len()), (17, 3, 10));
 }
 
 fn compile(src: &str) -> Vec<u8> {

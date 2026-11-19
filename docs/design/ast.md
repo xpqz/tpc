@@ -51,7 +51,7 @@ Node kinds, by group:
   `Invoke(routine, args)`, `Indirect(callee value, args)`, `ProcRef(routine)`.
 - **Expressions.** `Name`, `IntLit` (Integer, Boolean, Char and enum constants), `StrLit`, `Var(sym)`,
   `Unary`, `Binary`, `Index(base, index, continues)`, `Field(base, name | offset)`, `Fmt(value,
-  width)` (write arguments only), `Paren`, `AddrOf`, `Deref`, `CharToStr`; `PtrType(name)` is a type definition and `RunErr(code)` a statement.
+  width, decimals)` (write arguments only), `RealLit`, `IntToReal(e)`, `Paren`, `AddrOf`, `Deref`, `CharToStr`; `PtrType(name)` is a type definition and `RunErr(code)` a statement.
 
 ## What the checker does to the tree
 
@@ -64,7 +64,12 @@ The checker mutates nodes in place; `expr(e)` and `stmt(s)` return `R<()>`, and 
    or, in an expression, a unary operator, a constant (`SizeOf`, casts of constants), a cast
    (`T(x)` becomes `Unary(Ord, x)` of type `T`) or `Invoke`. A `For` control variable and a `var`
    argument are resolved by the statement or call that owns them.
-2. **Conversions.** Only `CharToStr(c)` exists (`coerce_str`): a Char used where a String is wanted
+2. **Conversions.** `IntToReal(e)` (`coerce_real`) wraps an Integer-family operand used as a Real: an
+   assignment or argument to a Real, an operand of `+ - * /` or a comparison with a Real, either operand
+   of `/`, and the argument of `Round`, `Trunc`, `Sqrt`, `Int`, `Frac`; an `IntLit` becomes a `RealLit`.
+   Real values are f64 on the WASM stack (`Gen::real`) and f64 in memory; a Real variable, value
+   parameter and function result are in memory like a string (`Types::in_memory`), passed by address.
+   `CharToStr(c)` (`coerce_str`): a Char used where a String is wanted
    becomes a one-character `StrLit` when constant, else wraps a copy of the Char node. It is applied
    to an assignment to a string, to either operand of a binary operator that involves a string, and
    to `Concat` arguments. A one-character string literal is typed Char (`IntLit`) by `expr`.
@@ -103,8 +108,8 @@ The checker mutates nodes in place; `expr(e)` and `stmt(s)` return `R<()>`, and 
 ## Types (`types.rs`)
 
 `Ty(u32)` indexes `Types::v: Vec<Type>`. Fixed indices: `NONE 0`, `STRING 1` (`String[255]`), `BYTE`,
-`SHORTINT`, `INTEGER`, `WORD`, `LONGINT`, `BOOLEAN`, `CHAR` (2 to 8). `Real` and the other
-floating types are `SymKind::Omitted` and give error 200.
+`SHORTINT`, `INTEGER`, `WORD`, `LONGINT`, `BOOLEAN`, `CHAR` (2 to 8). `REAL` is `Type::Real` (index 10,
+8 bytes); the other floating types are `SymKind::Omitted` and give error 200.
 
 ```rust
 pub enum Type {
