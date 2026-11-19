@@ -123,17 +123,6 @@ fn corpus_lists_are_sorted_name_existing_programs_and_leave_pending() {
     assert_eq!((LANG.len(), NEG.len()), (12, 6));
 }
 
-/// Range checking is a separate slice: its programs stay pending here.
-#[test]
-fn range_checking_programs_stay_pending() {
-    for (kind, prefix, count) in [("lang", "rangecheck_", 5), ("rt", "range_", 14)] {
-        let pending =
-            std::fs::read_to_string(root().join(format!("tests/{kind}/PENDING"))).unwrap();
-        let n = pending.lines().filter(|l| l.starts_with(prefix)).count();
-        assert_eq!(n, count, "{kind}/{prefix}*");
-    }
-}
-
 fn rejected(src: &str) -> (u16, u32) {
     match tp5c::compile(src.as_bytes()) {
         Ok(_) => panic!("accepted:\n{src}"),

@@ -46,13 +46,6 @@ fn expected_output_is_not_empty() {
     }
 }
 
-/// Range checking is Phase 4: the directive is still reported as unsupported (200).
-#[test]
-fn range_check_directive_is_still_unsupported() {
-    let src = b"program P;\n{$R+}\ntype T = 1..3;\nbegin\nend.";
-    assert_eq!(tp5c::compile(src).unwrap_err().code, 200);
-}
-
 /// Phase 3 corpus programs (tests/lang, tests/neg) in this slice's scope; the others there need
 /// arrays, records or strings. `subrange_sizes` observes storage through `SizeOf` of a type name.
 const LANG: &[&str] = &[

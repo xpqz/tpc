@@ -2,7 +2,9 @@
 //! Static data: a fixed header, the globals (`check::GLOBALS`..), then the string literals that
 //! live bodies use. Bodies are emitted from a worklist (decision 14).
 use crate::ast::{Ast, Id, Kind, List, Op};
-use crate::check::{Info, H_ABS, H_ASSIGN, H_CAT, H_CMP, H_SETADD, H_SETCMP, H_SETIN, H_SETOP};
+use crate::check::{
+    Info, H_ABS, H_ASSIGN, H_CAT, H_CMP, H_RANGE, H_SETADD, H_SETCMP, H_SETIN, H_SETOP,
+};
 use crate::types::{Routine, SymKind, Symbol, Tag, Ty, Type};
 use crate::wasm::{Code, Label, Module, F64, FUNC, GLOBAL, I32, MEM, VOID};
 
@@ -517,6 +519,33 @@ impl Gen<'_> {
         }
     }
 
+    /// Under `{$R+}` at the node `e`, checks the i32 that `e` pushed against `lo..hi`: runtime
+    /// error 201 outside. Skipped for constants and when the type of `e` already fits.
+    fn check(&mut self, e: Id, lo: i64, hi: i64) {
+        let n = &self.ast.nodes[e as usize];
+        let at = (n.line, n.col);
+        let on = self.ast.range.iter().rev().find(|s| (s.0, s.1) <= at);
+        if !on.is_some_and(|s| s.2) || matches!(n.kind, Kind::IntLit(_)) {
+            return;
+        }
+        if self.info.types.tag(n.ty).is_none_or(|_| {
+            let (l, h, ..) = self.info.types.ord(n.ty);
+            l >= lo && h <= hi
+        }) {
+            return;
+        }
+        self.code.i32_const(lo as i32).i32_const(hi as i32);
+        self.helper(H_RANGE);
+    }
+
+    /// `check` against the bounds of the type `ty`, when it is an ordinal type.
+    fn check_ty(&mut self, e: Id, ty: Ty) {
+        if self.info.types.tag(ty).is_some() {
+            let (lo, hi, ..) = self.info.types.ord(ty);
+            self.check(e, lo, hi);
+        }
+    }
+
     fn new_local(&mut self) -> u32 {
         self.locals += 1;
         self.locals - 1
@@ -702,7 +731,7 @@ impl Gen<'_> {
             Kind::Index(base, index, _) => {
                 let offset = self.addr(base);
                 let types = &self.info.types;
-                let (_, lo, _, elem) = types
+                let (_, lo, hi, elem) = types
                     .array_of(self.ast.nodes[base as usize].ty)
                     .expect("checked array");
                 let size = types.size(elem);
@@ -710,6 +739,7 @@ impl Gen<'_> {
                     return offset + (c - lo) as u32 * size;
                 }
                 self.expr(index);
+                self.check(index, lo, hi);
                 if lo != 0 {
                     self.code.i32_const(lo as i32).op(I32_SUB);
                 }
@@ -835,6 +865,7 @@ impl Gen<'_> {
                 self.str(a);
             } else {
                 self.expr(a);
+                self.check_ty(a, ty);
                 self.narrow(ty);
             }
         }
@@ -923,7 +954,13 @@ impl Gen<'_> {
                 self.real(value);
                 self.code.mem(F64_STORE, 0, offset);
             }
-            Kind::Assign(target, value) => self.put(target, |g| g.expr(value)),
+            Kind::Assign(target, value) => {
+                let ty = self.ast.nodes[target as usize].ty;
+                self.put(target, |g| {
+                    g.expr(value);
+                    g.check_ty(value, ty);
+                })
+            }
             Kind::With(records, body) => {
                 let outer = self.withs.len();
                 for &d in self.ast.items(records) {

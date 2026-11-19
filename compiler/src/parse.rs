@@ -17,38 +17,48 @@ struct Parser {
 
 type R<T> = Result<T, Diag>;
 
-/// Only the `{$F+}` and `{$F-}` switches are accepted; they have no effect.
-fn drop_directives(toks: Vec<Tok>) -> R<Vec<Tok>> {
-    for t in toks.iter().filter(|t| t.kind == Tk::Directive) {
-        if !t.text.eq_ignore_ascii_case(b"F+") && !t.text.eq_ignore_ascii_case(b"F-") {
-            return Err(Diag {
-                code: 200,
-                line: t.line,
-                col: t.col,
-            });
+impl Parser {
+    /// Removes the directive tokens. `F+`/`F-` are ignored, `R+`/`R-` are recorded with their
+    /// position, a malformed item is 17 and any other switch is 200.
+    fn drop_directives(&mut self, toks: Vec<Tok>) -> R<Vec<Tok>> {
+        for t in toks.iter().filter(|t| t.kind == Tk::Directive) {
+            for item in t.text.split(|&c| c == b',') {
+                let code = match item.to_ascii_uppercase().as_slice() {
+                    b"F+" | b"F-" => continue,
+                    b"R+" | b"R-" => {
+                        self.ast.range.push((t.line, t.col, item[1] == b'+'));
+                        continue;
+                    }
+                    [c, b'+' | b'-'] if c.is_ascii_alphabetic() => 200,
+                    _ => 17,
+                };
+                let (line, col) = (t.line, t.col);
+                return Err(Diag { code, line, col });
+            }
         }
+        Ok(toks
+            .into_iter()
+            .filter(|t| t.kind != Tk::Directive)
+            .collect())
     }
-    Ok(toks
-        .into_iter()
-        .filter(|t| t.kind != Tk::Directive)
-        .collect())
 }
 
 /// The System declaration part `system`, then the program `toks`; the program's declaration list
 /// starts with System's (`Ast::system` of them).
 pub fn parse(system: Vec<Tok>, toks: Vec<Tok>) -> R<(Ast, Id)> {
     let mut p = Parser {
-        toks: drop_directives(system)?,
+        toks: Vec::new(),
         at: 0,
         ast: Ast::default(),
         stops: 0,
     };
+    p.toks = p.drop_directives(system)?;
     let mut sys = p.declarations()?;
     if p.tok().kind != Tk::Eof {
         return Err(p.err(36));
     }
     p.ast.system = sys.len();
-    (p.toks, p.at) = (drop_directives(toks)?, 0);
+    (p.toks, p.at) = (p.drop_directives(toks)?, 0);
     let mut name = NO_NAME;
     if p.kw(b"PROGRAM") {
         name = p.ident()?;

@@ -60,9 +60,7 @@ fn own_invalid_programs_report_tp5_number_and_line() {
     assert_clean(check_neg(&fx("neg"), &real_compile));
 }
 
-/// Corpus programs this slice must make pass. `rangecheck_string_index_is_not_checked` is
-/// listed under RT: its `.out` ends in `Runtime error 201` (decision 24), so it only passes
-/// the runtime-error driver; it lives in tests/lang.
+/// Corpus programs this slice must make pass.
 const LANG: &[&str] = &[
     "rangecheck_directive_switches_within_program",
     "rangecheck_in_range_values_pass",
@@ -71,7 +69,7 @@ const LANG: &[&str] = &[
 ];
 
 const RT: &[(&str, &str)] = &[
-    ("lang", "rangecheck_string_index_is_not_checked"),
+    ("rt", "range_string_index_in_string_variable"),
     ("rt", "range_array_enum_index"),
     ("rt", "range_array_index_above"),
     ("rt", "range_array_index_below"),
@@ -88,18 +86,13 @@ const RT: &[(&str, &str)] = &[
     ("rt", "range_value_argument"),
 ];
 
-/// Copies the corpus programs into a fresh directory (no PENDING file). A `.out` that still
-/// carries TP's ` at XXXX:YYYY.` suffix is normalised on the copy.
+/// Copies the corpus programs into a fresh directory (no PENDING file).
 fn subset(items: &[(&str, &str)], exts: &[&str]) -> PathBuf {
     let dir = scratch("x").parent().unwrap().to_path_buf();
     for (kind, n) in items {
         for e in exts {
             let f = format!("{n}.{e}");
-            let text = std::fs::read(root().join("tests").join(kind).join(&f)).unwrap();
-            let cut = String::from_utf8_lossy(&text).find(" at 0000:");
-            let keep = cut.unwrap_or(text.len());
-            let tail = if cut.is_some() { &b"\n"[..] } else { b"" };
-            std::fs::write(dir.join(&f), [&text[..keep], tail].concat()).unwrap();
+            std::fs::copy(root().join("tests").join(kind).join(&f), dir.join(&f)).unwrap();
         }
     }
     dir
