@@ -11,20 +11,22 @@
 tools=$(cd "$(dirname "$0")" && pwd)
 cd "${ORACLE_ROOT:-$tools/..}" || exit 2
 mkdir -p tmp
+scratch=$(mktemp "${TMPDIR:-/tmp}/oracle.XXXXXX")
+trap 'rm -f "$scratch"' EXIT
 bad=0
 LANG="tests/lang tests/abi $(ls -d compiler/tests/fixtures/*/lang | grep -v fixtures/lang)"
 NEG="tests/neg $(ls -d compiler/tests/fixtures/*/neg | grep -v fixtures/neg)"
 for d in $LANG; do
   for f in "$d"/*.pas; do
-    "$tools/tp5.sh" "$f" > tmp/oracle.out 2>&1
-    cmp -s tmp/oracle.out "${f%.pas}.out" || { echo "DIFF $f"; bad=1; }
+    "$tools/tp5.sh" "$f" > "$scratch" 2>&1
+    cmp -s "$scratch" "${f%.pas}.out" || { echo "DIFF $f"; bad=1; }
   done
 done
 RT="tests/rt $(ls -d compiler/tests/fixtures/*/rt 2>/dev/null | grep -v fixtures/rt)"
 for d in $RT; do
   for f in "$d"/*.pas; do
-    "$tools/tp5.sh" "$f" | sed -E 's/(Runtime error [0-9]+) at [0-9A-F]{4}:[0-9A-F]{4}\.$/\1/' > tmp/oracle.out 2>&1
-    cmp -s tmp/oracle.out "${f%.pas}.out" || { echo "DIFF $f"; bad=1; }
+    "$tools/tp5.sh" "$f" | sed -E 's/(Runtime error [0-9]+) at [0-9A-F]{4}:[0-9A-F]{4}\.$/\1/' > "$scratch" 2>&1
+    cmp -s "$scratch" "${f%.pas}.out" || { echo "DIFF $f"; bad=1; }
   done
 done
 for f in $(for d in $NEG; do ls "$d"/*.pas; done); do
