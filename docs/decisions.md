@@ -695,3 +695,11 @@ so there is no line-neutral way to add them (D49).
 lead later moves host lines to the glue, the contract needs `fs_delete(namePtr, nameLen)` and
 `fs_rename(oldPtr, oldLen, newPtr, newLen)` returning 0 or a negated DOS error (2 file not
 found, 5 access denied for an open file), and `System` needs the two routines on a `Text`.
+
+## 55. Rebalance: 30 lines from the IDE to host glue for Erase and Rename
+
+Erase and Rename (decision 54, D49) need two host file-system imports, a delete and a rename,
+and host glue was at 600 of 600. Under the borrowing rule (decision 51) the IDE, at 1,380 of
+2,300 and feature-complete, gives 30 lines: IDE 2,300 to 2,270, host glue 600 to 630. The total
+is unchanged at 15,000. Rejected: keeping them omitted, because they appear in 74 and 38 SWAG
+files and are ordinary TP routines.
