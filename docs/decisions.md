@@ -596,3 +596,11 @@ The Host glue component goes from 500 to 600 lines; the plan's unallocated margi
 the margin available from Phase 7. Reason: moving the host runtime into host/ (decision
 36) for one tested implementation cost ~180 lines the plan did not foresee, and the IDE
 needs compile, run handoff and persistence (~130 lines measured from working drafts).
+
+## 46. Browser console ReadLn without Crt: a Pascal line editor in System
+
+In the browser there is no stdin, so `readline` returns -2 ("no line input") there; System
+then reads the line from keys (`readkey`) with a small Pascal line editor that echoes
+through the console writer (Backspace, Enter), the same technique as Crt's `EditLine`.
+The Node runner keeps `readline` from `NAME.in`. Reason: host glue is at 599 / 600; the
+editing logic belongs with the console code in Pascal, which the runtime budget can carry.
