@@ -4,6 +4,11 @@
 //! the file `NAME.PAS` of that table, any case; of two files with the same name the later
 //! registration wins. Only the units a program reaches are lexed and parsed.
 //!
+//! The units of the runtime (Dos) are embedded in the compiler and sit outside that table, like
+//! System: they are looked up first, so a registered `DOS.PAS` never replaces one (TP 5.0 takes
+//! its own units from TURBO.TPL whatever is in the directory). They are file 0 with every token
+//! at line 0, so no diagnostic of theirs carries a user line.
+//!
 //! One depth-first walk of the `uses` clauses, in the order they are written, produces both
 //! orders the checker needs. A unit is visited when it is first named:
 //!
@@ -17,13 +22,19 @@ use crate::ast::{Ast, Id, Kind, List, Plan};
 use crate::diag::{code, Diag};
 use crate::directives::{expand, in_file};
 use crate::lex::Tok;
-use crate::parse::{parse_program, parse_system, parse_unit};
+use crate::parse::{parse_program, parse_runtime_unit, parse_system, parse_unit};
 use crate::symbols::name_of;
 
 /// A registered source file.
 pub struct SourceFile {
     pub name: String,
     pub text: Vec<u8>,
+}
+
+/// A unit of the runtime that is part of the compiler: its name and source.
+pub struct EmbeddedUnit {
+    pub name: &'static str,
+    pub source: &'static [u8],
 }
 
 #[derive(PartialEq)]
@@ -41,6 +52,7 @@ struct LoadedUnit {
 struct Loader<'a> {
     ast: Ast,
     files: &'a [SourceFile],
+    embedded: &'a [EmbeddedUnit],
     units: Vec<LoadedUnit>,
     interface_order: Vec<Id>,
     init_order: Vec<Id>,
@@ -69,7 +81,12 @@ pub fn find_file(files: &[SourceFile], name: &[u8]) -> Option<usize> {
 }
 
 /// Parses System, the program and every unit the program uses.
-pub fn load(system: &[u8], program: &[u8], files: &[SourceFile]) -> Result<(Ast, Plan), Diag> {
+pub fn load(
+    system: &[u8],
+    program: &[u8],
+    files: &[SourceFile],
+    embedded: &[EmbeddedUnit],
+) -> Result<(Ast, Plan), Diag> {
     let mut ast = Ast::default();
     // Every token of System is at line 0, so its diagnostics never carry a user line.
     let mut system_tokens = expand(0, system, &[]).map_err(|d| Diag { line: 0, ..d })?;
@@ -82,6 +99,7 @@ pub fn load(system: &[u8], program: &[u8], files: &[SourceFile]) -> Result<(Ast,
     let mut loader = Loader {
         ast,
         files,
+        embedded,
         units: Vec::new(),
         interface_order: Vec::new(),
         init_order: Vec::new(),
@@ -149,10 +167,25 @@ impl Loader<'_> {
         Ok(())
     }
 
+    /// Parses the source of an embedded unit. Its tokens are at line 0, as System's are.
+    fn parse_embedded(&mut self, source: &[u8]) -> Result<Id, Diag> {
+        self.ast.file = 0;
+        let mut tokens = expand(0, source, &[]).map_err(|d| Diag { line: 0, ..d })?;
+        tokens.iter_mut().for_each(|t| t.line = 0);
+        parse_runtime_unit(&mut self.ast, tokens).map_err(|d| in_file(d, 0, source))
+    }
+
     /// Finds the file of the unit `name` and parses it. Returns the unit's node and the number
     /// of its file. Not found is error 15 and a different unit name is error 69, both at the
     /// `uses` entry.
     fn load_unit(&mut self, file: u32, entry: Id, name: u32) -> Result<(Id, u32), Diag> {
+        let embedded = self.embedded.iter().find(|u| {
+            let wanted = &self.ast.names[name as usize];
+            u.name.as_bytes().eq_ignore_ascii_case(wanted)
+        });
+        if let Some(unit) = embedded {
+            return Ok((self.parse_embedded(unit.source)?, 0));
+        }
         let mut wanted = self.ast.names[name as usize].clone();
         wanted.extend_from_slice(b".PAS");
         let Some(position) = find_file(self.files, &wanted) else {

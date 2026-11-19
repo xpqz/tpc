@@ -2,10 +2,16 @@
 use crate::check::check;
 use crate::codegen::gen;
 use crate::diag::Diag;
-use crate::units::{load, SourceFile};
+use crate::units::{load, EmbeddedUnit, SourceFile};
 use std::path::Path;
 
 const USAGE: &str = "usage: tp5c in.pas -o out.wasm [--dir AUXDIR]";
+
+/// The units of the runtime that `uses` finds without a file (decision 11).
+const EMBEDDED_UNITS: &[EmbeddedUnit] = &[EmbeddedUnit {
+    name: "DOS",
+    source: include_bytes!("../../runtime/dos.pas"),
+}];
 
 /// Compiles the program `src` with no unit files.
 pub fn compile(src: &[u8]) -> Result<Vec<u8>, Diag> {
@@ -25,7 +31,7 @@ pub fn compile_with(system: &[u8], src: &[u8]) -> Result<Vec<u8>, Diag> {
 
 /// load (lex and parse every file), check, codegen.
 fn build(system: &[u8], src: &[u8], files: &[SourceFile]) -> Result<Vec<u8>, Diag> {
-    let (mut ast, plan) = load(system, src, files)?;
+    let (mut ast, plan) = load(system, src, files, EMBEDDED_UNITS)?;
     let info = check(&mut ast, &plan)?;
     Ok(gen(&ast, &info, plan.program))
 }

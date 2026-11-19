@@ -20,7 +20,17 @@ export class RunnerError extends Error {
   }
 }
 
-const STUBS = ["readkey", "keypressed", "screen", "time", "compile"];
+const STUBS = ["readkey", "keypressed", "screen", "compile"];
+const MS_PER_DAY = 86400000;
+
+// The local time in milliseconds since 1970-01-01 00:00:00: the environment variable
+// TP5_NOW_MS when set (tests fix the clock with it), else the real local time.
+function localNowMs() {
+  const fixed = process.env.TP5_NOW_MS;
+  if (fixed !== undefined) return Number(fixed);
+  const now = new Date();
+  return now.getTime() - now.getTimezoneOffset() * 60000;
+}
 
 // `files` is the aux directory path or null; `input` is a Buffer of console input or null
 // for the process stdin.
@@ -42,7 +52,18 @@ export async function run(bytes, { files = null, input = null } = {}) {
       throw fail(`host.${what}: out of bounds (${ptr}, ${len})`);
     }
   };
+  let reading = 0;
   const host = {
+    // `time(0)` takes a reading of the clock and returns its days; 1 and 2 return the seconds
+    // since midnight and the hundredths of a second of that same reading (docs/abi.md).
+    time(what) {
+      if (what === 0) reading = localNowMs();
+      const msOfDay = reading % MS_PER_DAY;
+      if (what === 1) return Math.floor(msOfDay / 1000);
+      if (what === 2) return Math.floor((msOfDay % 1000) / 10);
+      if (what !== 0) throw fail(`host.time: bad argument ${what}`);
+      return Math.floor(reading / MS_PER_DAY);
+    },
     write(fd, ptr, len) {
       if (fd !== 1 && fd !== 2) throw fail(`host.write: bad fd ${fd}`);
       if (len === 0) return;

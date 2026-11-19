@@ -67,7 +67,7 @@ struct Parser<'a> {
     pos: usize,
     ast: &'a mut Ast,
     stops: StopWords,
-    /// Parsing the embedded runtime source, the only place `external` is allowed.
+    /// Parsing an embedded runtime source, the only place `external` is allowed.
     in_system: bool,
     /// Parsing a unit's interface part: a routine heading stands alone, as a forward.
     in_interface: bool,
@@ -196,6 +196,13 @@ pub fn parse_system(ast: &mut Ast, toks: Vec<Tok>) -> R<Id> {
 /// The unit in `toks`.
 pub fn parse_unit(ast: &mut Ast, toks: Vec<Tok>) -> R<Id> {
     parser(ast, toks).unit()
+}
+
+/// A unit of the embedded runtime: like `parse_unit`, but it may declare `external` routines.
+pub fn parse_runtime_unit(ast: &mut Ast, toks: Vec<Tok>) -> R<Id> {
+    let mut parser = parser(ast, toks);
+    parser.in_system = true;
+    parser.unit()
 }
 
 /// The program in `toks`.
