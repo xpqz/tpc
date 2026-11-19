@@ -1,42 +1,48 @@
-// The 80x25 text screen as a grid of cells, driven by the cell operations of the `screen`
-// import (docs/abi.md section 8). Cursor, window and attribute state live in the Crt unit;
-// this model only stores what Crt draws and prints it as the screen dump that
-// tools/crt/SCRDUMP.PAS writes on the real Turbo Pascal.
+// The 80x25 text screen, driven by the cell operations of the `screen` import (docs/abi.md
+// section 8) and by console output. `cells` is the byte layout host/terminal.js draws: a
+// character and an attribute byte per cell, row by row, then the cursor column and row. The
+// browser shares one such array with the page; the test runner makes its own. Cursor, window
+// and attribute state live in the Crt unit; this model only stores what Crt draws, and prints
+// it as the screen dump that tools/crt/SCRDUMP.PAS writes on the real Turbo Pascal.
 import { HostError } from "./error.js";
+import { COLS, ROWS, CURSOR, GRID_BYTES, DEFAULT_ATTR, clearScreen } from "./terminal.js";
 
-export const COLUMNS = 80;
-export const ROWS = 25;
 const BLANK = 0x20;
-const LIGHT_GREY_ON_BLACK = 0x07;
-
 const OP_PUT = 0;
 const OP_SCROLL_UP = 1;
 const OP_SCROLL_DOWN = 2;
 const OP_CURSOR = 3;
+const BEL = 7;
+const BS = 8;
+const LF = 10;
+const CR = 13;
 
 const low = (word) => word & 0xff;
 const high = (word) => (word >> 8) & 0xff;
 
+// A blank screen: light grey blanks, cursor at the top left.
+function blankCells() {
+  const cells = new Uint8Array(GRID_BYTES);
+  clearScreen(cells);
+  return cells;
+}
+
 export class Screen {
-  constructor() {
-    this.chars = new Uint8Array(COLUMNS * ROWS).fill(BLANK);
-    this.attrs = new Uint8Array(COLUMNS * ROWS).fill(LIGHT_GREY_ON_BLACK);
-    this.cursorCol = 0;
-    this.cursorRow = 0;
+  constructor(cells = blankCells()) {
+    this.cells = cells;
   }
 
-  // Index of a cell in `chars` and `attrs`, row by row.
+  // Offset of a cell's character byte; its attribute follows.
   cell(col, row) {
-    if (col < 0 || col >= COLUMNS || row < 0 || row >= ROWS) {
+    if (col < 0 || col >= COLS || row < 0 || row >= ROWS) {
       throw new HostError(`host.screen: cell (${col}, ${row}) is off the screen`);
     }
-    return row * COLUMNS + col;
+    return (row * COLS + col) * 2;
   }
 
   put(col, row, char, attr) {
     const at = this.cell(col, row);
-    this.chars[at] = char;
-    this.attrs[at] = attr;
+    [this.cells[at], this.cells[at + 1]] = [char, attr];
   }
 
   // Moves the cells of the rectangle (inclusive, 0-based) up by `lines` rows, or down when
@@ -50,7 +56,8 @@ export class Screen {
       const from = row + lines;
       for (let col = left; col <= right; col++) {
         if (from >= top && from <= bottom) {
-          this.put(col, row, this.chars[this.cell(col, from)], this.attrs[this.cell(col, from)]);
+          const source = this.cell(col, from);
+          this.put(col, row, this.cells[source], this.cells[source + 1]);
         } else {
           this.put(col, row, BLANK, attr);
         }
@@ -60,8 +67,7 @@ export class Screen {
 
   setCursor(col, row) {
     this.cell(col, row);
-    this.cursorCol = col;
-    this.cursorRow = row;
+    [this.cells[CURSOR], this.cells[CURSOR + 1]] = [col, row];
   }
 
   // The `screen(op, a, b, c)` import. Operands are packed in 16-bit words:
@@ -78,12 +84,34 @@ export class Screen {
     else throw new HostError(`host.screen: bad operation ${op}`);
   }
 
+  // Console output of a program without Crt: a teletype. Characters go to the cursor cell
+  // (keeping its attribute) and the cursor wraps at column 80; the screen scrolls up after
+  // the last row. CR, LF and BS move the cursor; BEL is ignored.
+  print(bytes) {
+    for (const byte of bytes) {
+      let [col, row] = [this.cells[CURSOR], this.cells[CURSOR + 1]];
+      if (byte === CR) col = 0;
+      else if (byte === LF) row++;
+      else if (byte === BS) col = Math.max(col - 1, 0);
+      else if (byte !== BEL) {
+        const at = this.cell(col, row);
+        this.cells[at] = byte;
+        if (++col === COLS) [col, row] = [0, row + 1];
+      }
+      if (row === ROWS) {
+        this.scroll(0, 0, COLS - 1, ROWS - 1, 1, DEFAULT_ATTR);
+        row = ROWS - 1;
+      }
+      this.setCursor(col, row);
+    }
+  }
+
   // The 25 rows without trailing blanks.
   textRows() {
     const rows = [];
     for (let row = 0; row < ROWS; row++) {
-      const cells = this.chars.subarray(row * COLUMNS, (row + 1) * COLUMNS);
-      rows.push(String.fromCharCode(...cells).replace(/ +$/, ""));
+      const chars = Array.from({ length: COLS }, (_, col) => this.cells[this.cell(col, row)]);
+      rows.push(String.fromCharCode(...chars).replace(/ +$/, ""));
     }
     return rows;
   }
@@ -93,11 +121,11 @@ export class Screen {
     const runs = [];
     for (let row = 0; row < ROWS; row++) {
       let col = 0;
-      while (col < COLUMNS) {
-        const attr = this.attrs[this.cell(col, row)];
+      while (col < COLS) {
+        const attr = this.cells[this.cell(col, row) + 1];
         const start = col;
-        while (col < COLUMNS && this.attrs[this.cell(col, row)] === attr) col++;
-        if (attr !== LIGHT_GREY_ON_BLACK) {
+        while (col < COLS && this.cells[this.cell(col, row) + 1] === attr) col++;
+        if (attr !== DEFAULT_ATTR) {
           const hex = attr.toString(16).toUpperCase().padStart(2, "0");
           runs.push(`attr ${row + 1} ${start + 1} ${col - start} ${hex}`);
         }
@@ -109,10 +137,8 @@ export class Screen {
   // The screen dump: the text rows, the cursor (1-based column and row), the exit code and
   // the attribute runs, one per line.
   dump(exitCode) {
-    const lines = [...this.textRows()];
-    lines.push(`cursor ${this.cursorCol + 1} ${this.cursorRow + 1}`);
-    lines.push(`exit ${exitCode}`);
-    lines.push(...this.attributeRuns());
+    const cursor = `cursor ${this.cells[CURSOR] + 1} ${this.cells[CURSOR + 1] + 1}`;
+    const lines = [...this.textRows(), cursor, `exit ${exitCode}`, ...this.attributeRuns()];
     return lines.map((line) => `${line}\n`).join("");
   }
 }

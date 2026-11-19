@@ -140,7 +140,7 @@ epilogue:  sp = fp + framesize
 | Import | Signature | Purpose |
 |---|---|---|
 | `write` | `(fd, ptr, len)` | console / terminal output |
-| `readkey` | `() -> i32` | the next key as an INT 16h word; blocks (`Atomics.wait`) (below) |
+| `readkey` | `() -> i32` | the next byte of Crt's ReadKey; blocks (`Atomics.wait`) (below) |
 | `keypressed` | `() -> i32` | 1 when a key is waiting, else 0; non-blocking, does not consume |
 | `readline` | `(ptr, max) -> len` | blocks, line editing in JS; `len` is -1 at end of input |
 | `screen` | `(op, a, b, c)` | cell operations on the 80x25 text screen (below) |
@@ -222,13 +222,15 @@ The rectangle is inclusive. Scrolling by `n` moves each row `n` rows (rows outsi
 rectangle are untouched), and the `n` rows left empty are filled with blanks in the fill
 attribute; `n` of 0 changes nothing. A new screen is all blanks, attribute `$07`, cursor 0,0.
 
-`readkey` returns the word INT 16h returns: the scan code in the high byte, the ASCII code in
-the low byte (0 for an extended key such as the arrows and F1 to F10; `Crt.ReadKey` turns that
-into the `#0` followed by the scan code). When the runner has no key left it ends the program
-with exit code 255 instead of blocking; `keypressed` then returns 0.
+`readkey` returns the next byte `Crt.ReadKey` returns: an ASCII code, or 0 for an extended key
+(the arrows, F1 to F10, ...) followed by the scan code on the next call. The browser blocks
+until a key arrives; the runner, when its key script is used up, ends the program with exit
+code 255 instead; `keypressed` then returns 0. The same `Host` arguments serve both: `keys`
+`{ available(), next() }`, `clock` `{ nowMs(), advance(ms) }` (the browser's `advance` really
+waits) and `screen` (the browser passes a `Screen` over the shared grid of `host/terminal.js`).
 
-`sleep(ms)` advances the virtual clock that `time` reads by `ms` milliseconds and returns at
-once in the runner.
+`sleep(ms)` calls `clock.advance(ms)`: the runner's virtual clock moves by `ms` milliseconds
+and returns at once.
 
 The screen dump is the text of the final screen, printed by the runner after the program's
 stdout when the program imports `screen`, and by `tools/tp5.sh` for a program that uses Crt.

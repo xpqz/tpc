@@ -206,11 +206,14 @@ fn keys_come_from_the_key_script_in_order() {
 }
 
 #[test]
-fn an_extended_key_is_zero_in_the_low_byte() {
-    let w = module(&["screen", "readkey"], &[Step::Key(0), Step::Key(1)]);
+fn an_extended_key_is_zero_then_its_scan_code() {
+    let w = module(
+        &["screen", "readkey"],
+        &[Step::Key(0), Step::Key(1), Step::Key(2)],
+    );
     let o = run("extended", &w, Some("Up b"), "0");
     let out = stdout(&o);
-    assert!(out.starts_with("\0b\n"), "{out:?}");
+    assert!(out.starts_with("\0Hb\n"), "{out:?}");
 }
 
 #[test]

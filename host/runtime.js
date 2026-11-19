@@ -6,8 +6,10 @@
 //   files             maps file names to bytes, the starting file system (see vfs.js)
 //   clock             { nowMs(), advance(ms) }: the local time in milliseconds since
 //                     1970-01-01 00:00:00, and a way to move it forward (`sleep`)
-//   keys              { available(), next() }: the keyboard as INT 16h words (see `readkey`)
-// The screen grid is `host.screen`; a runner prints its dump after the program ends.
+//   keys              { available(), next() }: the keyboard as ReadKey bytes; `next` blocks,
+//                     or returns null when no key can come any more
+//   screen            the Screen grid (default: a private one), kept as `host.screen`; a
+//                     runner prints its dump after the program ends
 import { HostError } from "./error.js";
 import { fmtReal } from "./fmt_real.js";
 import { Screen } from "./screen.js";
@@ -33,13 +35,13 @@ export const KEYS_EXHAUSTED = 255;
 const UNAVAILABLE = ["compile"];
 
 export class Host {
-  constructor({ write, input, files = null, clock, keys }) {
+  constructor({ write, input, files = null, clock, keys, screen = new Screen() }) {
     this.sink = write;
     this.input = input;
     this.vfs = new Vfs(files);
     this.clock = clock;
     this.keys = keys;
-    this.screen = new Screen();
+    this.screen = screen;
     this.memory = null;
     this.reading = 0; // the clock reading `time(0)` took
     this.imports = this.makeImports();
@@ -97,10 +99,11 @@ export class Host {
       sleep: (ms) => this.clock.advance(ms),
       screen: (op, a, b, c) => this.screen.apply(op, a, b, c),
       keypressed: () => (this.keys.available() ? 1 : 0),
-      // The next key as the INT 16h word: scan code in the high byte, ASCII in the low.
+      // The next byte of Crt's ReadKey: an extended key is 0, then its scan code.
       readkey: () => {
-        if (!this.keys.available()) throw new Halt(KEYS_EXHAUSTED);
-        return this.keys.next();
+        const key = this.keys.next();
+        if (key === null) throw new Halt(KEYS_EXHAUSTED);
+        return key;
       },
       write: (fd, ptr, len) => {
         if (fd !== 1 && fd !== 2) throw new HostError(`host.write: bad fd ${fd}`);

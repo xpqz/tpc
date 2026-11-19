@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { Host, HostError, KEYS_EXHAUSTED } from "../../host/runtime.js";
 import { Screen } from "../../host/screen.js";
+import { GRID_BYTES, clearScreen } from "../../host/terminal.js";
 import { KeyScript, KeyScriptError, parseKeys } from "../keys.mjs";
 
 const golden = (name) =>
@@ -180,12 +181,11 @@ function host(words, start = 0) {
   return new Host({ write() {}, input: null, clock: clock(start), keys: new KeyScript(words) });
 }
 
-test("readkey serves the keys in order; keypressed does not consume", () => {
-  const h = host([0x61, 0x4800]);
+test("readkey serves bytes in order, an extended key as 0 then the scan code", () => {
+  const h = host([0x61, 0x4800, 0x62]);
   assert.equal(h.imports.keypressed(), 1);
   assert.equal(h.imports.keypressed(), 1);
-  assert.equal(h.imports.readkey(), 0x61);
-  assert.equal(h.imports.readkey(), 0x4800);
+  assert.deepEqual([0, 1, 2, 3].map(() => h.imports.readkey()), [0x61, 0, 0x48, 0x62]);
   assert.equal(h.imports.keypressed(), 0);
 });
 
@@ -205,6 +205,27 @@ test("sleep advances the clock that time reads, and does not wait", () => {
   h.imports.time(0);
   assert.equal(h.imports.time(1), 5 * 3600 + 22);
   assert.equal(h.imports.time(2), 50);
+});
+
+test("print is a teletype: cursor, CR LF BS BEL, wrap and scroll", () => {
+  const screen = new Screen();
+  const text = (s) => Uint8Array.from(s, (c) => c.charCodeAt(0));
+  screen.print(text("ab\r\ncd\x07\x08X\n"));
+  assert.deepEqual(rows(screen).slice(0, 3), ["ab", "cX", ""]);
+  assert.ok(screen.dump(0).includes("cursor 3 3\n"));
+  screen.print(text("\r" + "y".repeat(80)));
+  assert.equal(rows(screen)[2], "y".repeat(80));
+  assert.ok(screen.dump(0).includes("cursor 1 4\n"));
+  screen.print(text("\n".repeat(30) + "end"));
+  assert.equal(rows(screen)[24], "end");
+  assert.equal(rows(screen)[0], "");
+});
+
+test("a Screen can be built over a shared array and writes into it", () => {
+  const cells = new Uint8Array(GRID_BYTES);
+  clearScreen(cells);
+  new Screen(cells).put(1, 0, 0x41, 0x1f);
+  assert.deepEqual([...cells.subarray(2, 4)], [0x41, 0x1f]);
 });
 
 test("the screen import applies to the host's grid", () => {

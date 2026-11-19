@@ -32,18 +32,19 @@ export function parseKeys(text) {
     });
 }
 
-// A key source for host/runtime.js: serves `words` in order.
+// A key source for host/runtime.js: serves the ReadKey bytes of `words` in order, an extended
+// key (low byte 0) as 0 followed by its scan code. `next` is null when the script is over.
 export class KeyScript {
   constructor(words) {
-    this.words = words;
+    this.bytes = words.flatMap((word) => (word & 0xff ? [word & 0xff] : [0, word >> 8]));
     this.at = 0;
   }
 
   available() {
-    return this.at < this.words.length;
+    return this.at < this.bytes.length;
   }
 
   next() {
-    return this.words[this.at++];
+    return this.available() ? this.bytes[this.at++] : null;
   }
 }
