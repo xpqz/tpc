@@ -624,7 +624,7 @@ Alt-X), Run (Run Ctrl-F9), Compile (Compile F9), Options (one placeholder item t
 the message `No options yet` and returns `CmdNone`). Inside a menu: Up/Down and Left/Right
 wrap, Enter chooses, Esc and F10 cancel, an item's first letter chooses it, every other key
 is ignored. A pull-down is 20 columns wide, has no border, and closing or switching menus
-repaints the whole screen through View (decision 45) instead of saving what it covered.
+repaints the whole screen through View (decision 47) instead of saving what it covered.
 Titles and items are typed-constant record tables. `CmdNew = 7` lives in Menu; `Show` is
 public so a test can look at an open menu (a program blocked in `ReadKey` fails the corpus).
 **Reason.** Smallest menu that covers the plan; no screen-saving code.
