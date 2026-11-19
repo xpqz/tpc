@@ -38,7 +38,7 @@ fn res(o: std::process::Output) -> Res {
 }
 
 /// The auxiliary directory of `STEM.pas` (decision 26): the directory `STEM/` beside it, if any.
-/// `STEM.dirs` lists shared directories (paths from the repository root, one per line, as
+/// `STEM.dirs` lists shared directories or files (paths from the repository root, one per line, as
 /// tools/tp5.sh reads it); then the files of those directories and of `STEM/` are merged into a
 /// scratch directory, `STEM/`'s files replacing shared ones of the same name.
 fn aux_dir(src: &Path) -> Option<PathBuf> {
@@ -58,6 +58,10 @@ fn aux_dir(src: &Path) -> Option<PathBuf> {
         sources.push(own);
     }
     for dir in sources {
+        if dir.is_file() {
+            std::fs::copy(&dir, merged.join(dir.file_name().unwrap())).unwrap();
+            continue;
+        }
         // A shared directory that does not exist contributes nothing, so each program that
         // needs its units fails on its own instead of aborting the whole sweep.
         let Ok(entries) = std::fs::read_dir(&dir) else {
