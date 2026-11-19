@@ -154,8 +154,8 @@ fn range_directive_is_accepted_in_every_form() {
 }
 
 #[test]
-fn other_directives_in_a_list_are_still_unsupported() {
-    for dir in ["{$R+,F+,N+}", "{$R+,E-}"] {
+fn numeric_switches_turned_on_in_a_list_are_still_unsupported() {
+    for dir in ["{$R+,F+,N+}", "{$R+,E+}"] {
         assert_eq!(
             rejected(&format!("program P;\n{dir}\n{BODY}")),
             (200, 2),

@@ -6,7 +6,7 @@
   programs can name it; DosError is declared and never set.
 
   There is no DOS environment: the program sees none, so GetEnv gives the empty string and
-  EnvCount is 0 (docs/deviations.md D43). DosVersion reports DOS 5.0, the version the
+  EnvCount is 0 (docs/deviations.md D47). DosVersion reports DOS 5.0, the version the
   oracle runs under.
 
   File names are plain string work. The current directory of every drive is its root, so

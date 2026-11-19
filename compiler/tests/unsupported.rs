@@ -120,12 +120,12 @@ fn seg_ofs_ptr() {
 }
 
 /// TP accepts `{$N+}` and `{$E+}`; 8087 code and its emulator are omitted (plan §2), so both
-/// switches are error 200 in either sign, in a list too, and in either comment form.
+/// switches are error 200 when on, in a list too, and in either comment form. Off, as by default,
+/// they change nothing and are accepted (tests/lang/switches_n_and_e_off_are_accepted).
 #[test]
 fn numeric_coprocessor_and_emulation_switches() {
     unsupported("program P;\n{$N+}\nbegin\nend.\n", "{$N+}");
-    unsupported("program P;\n{$n-}\nbegin\nend.\n", "{$n-}");
     unsupported("program P;\n{$E+}\nbegin\nend.\n", "{$E+}");
-    unsupported("program P;\n(*$E-*)\nbegin\nend.\n", "(*$E-*)");
+    unsupported("program P;\n(*$e+*)\nbegin\nend.\n", "(*$e+*)");
     unsupported("program P;\n{$A+,N+}\nbegin\nend.\n", "{$A+,N+}");
 }

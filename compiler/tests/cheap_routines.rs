@@ -1,4 +1,4 @@
-//! Deviations of the cheap standard routines (docs/deviations.md D43 and D44). The oracle
+//! Deviations of the cheap standard routines (docs/deviations.md D47 and D48). The oracle
 //! cannot give these expectations: its environment holds variables, and its 40-column and
 //! 50-line modes change the screen size. The corpus programs `dos_getenv_and_dosversion` and
 //! `crt_textmode_*` hold the parts of these routines that agree with TP 5.0.

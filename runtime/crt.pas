@@ -299,7 +299,7 @@ begin
 end;
 
 { Switching mode starts the screen afresh: normal colours, the whole screen as the window, and
-  the cursor at its top left corner. The screen is always 80 by 25 (docs/deviations.md D44),
+  the cursor at its top left corner. The screen is always 80 by 25 (docs/deviations.md D48),
   so the mode is only recorded in LastMode. }
 procedure TextMode(mode: Integer);
 begin

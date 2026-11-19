@@ -67,16 +67,20 @@ fn parse_file(
     files: &[SourceFile],
     parse: fn(&mut Ast, Vec<Tok>) -> Result<Id, Diag>,
 ) -> Result<Id, Diag> {
-    let tokens = expand(file, text, files)?;
-    parse(ast, tokens).map_err(|d| locate_in_file(d, d.file, text))
+    let tokens = expand(file, text, files);
+    // An error inside an include file was located against that file's text by `expand`.
+    parse(ast, tokens).map_err(|d| match d.file == file {
+        true => locate_in_file(d, file, text),
+        false => d,
+    })
 }
 
 /// The tokens of a runtime source (System or an embedded unit) as file 0 with every token at
 /// line 0, so that no diagnostic of it carries a user line.
-fn runtime_tokens(source: &[u8]) -> Result<Vec<Tok>, Diag> {
-    let mut tokens = expand(0, source, &[]).map_err(|d| Diag { line: 0, ..d })?;
+fn runtime_tokens(source: &[u8]) -> Vec<Tok> {
+    let mut tokens = expand(0, source, &[]);
     tokens.iter_mut().for_each(|t| t.line = 0);
-    Ok(tokens)
+    tokens
 }
 
 /// The file number of the file at `position` in the file table: the main program is file 0, so
@@ -101,7 +105,7 @@ pub fn load(
     embedded: &[EmbeddedUnit],
 ) -> Result<(Ast, Plan), Diag> {
     let mut ast = Ast::default();
-    let system_tokens = runtime_tokens(system)?;
+    let system_tokens = runtime_tokens(system);
     let system_node =
         parse_system(&mut ast, system_tokens).map_err(|d| locate_in_file(d, 0, system))?;
     let program_node = parse_file(&mut ast, 0, program, files, parse_program)?;
@@ -181,7 +185,7 @@ impl Loader<'_> {
 
     /// Parses the source of an embedded unit. Its tokens are at line 0, as System's are.
     fn parse_embedded(&mut self, source: &[u8]) -> Result<Id, Diag> {
-        let tokens = runtime_tokens(source)?;
+        let tokens = runtime_tokens(source);
         parse_runtime_unit(&mut self.ast, tokens).map_err(|d| locate_in_file(d, 0, source))
     }
 

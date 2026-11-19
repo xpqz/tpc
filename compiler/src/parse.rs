@@ -275,13 +275,14 @@ impl Parser<'_> {
         (self.tok().line, self.tok().col)
     }
 
-    /// An error at the lookahead token; at end of file it is always 10.
+    /// An error at the lookahead token; at end of file it is always 10, at a scanning error it is
+    /// that error.
     fn err(&self, code: u16) -> Diag {
         let t = self.tok();
-        let code = if t.kind == Tk::Eof {
-            code::UNEXPECTED_END_OF_FILE
-        } else {
-            code
+        let code = match t.kind {
+            Tk::Eof => code::UNEXPECTED_END_OF_FILE,
+            Tk::Error => t.int as u16,
+            _ => code,
         };
         Diag {
             code,
@@ -1292,7 +1293,9 @@ impl Parser<'_> {
         let (args, call_at) = self.arguments()?;
         let list = self.ast.list(&args);
         let call = self.ast.add(Kind::Call(callee, list), call_at.0, call_at.1);
-        if self.is(Tk::Sym, b"^") {
+        // `f(x)^` is a dereference; `f(x)[i]` and `f(x).a` parse as selectors so that the
+        // checker, not the grammar, rejects a call that is not a variable (error 121).
+        if self.is(Tk::Sym, b"^") || self.is(Tk::Sym, b"[") {
             self.selectors(call)
         } else {
             Ok(call)
