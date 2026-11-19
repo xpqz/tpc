@@ -1,0 +1,7 @@
+a eoln=FALSE eof=FALSE
+b eoln=TRUE eof=FALSE
+CR eoln=FALSE eof=FALSE
+LF eoln=FALSE eof=FALSE
+c eoln=TRUE eof=FALSE
+CR eoln=FALSE eof=FALSE
+LF eoln=TRUE eof=TRUE

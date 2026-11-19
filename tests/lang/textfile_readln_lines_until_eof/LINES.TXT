@@ -1,0 +1,6 @@
+plain line
+  leading blanks
+
+trailing blanks   
+tab	inside
+last line

@@ -1,0 +1,13 @@
+reset missing file: 2
+reset in missing directory: 3
+rewrite in missing directory: 3
+close a file that is not open: 103
+reset existing file: 0
+write to a file open for input: 105
+close: 0
+rewrite existing file: 0
+read from a file open for output: 104
+read a number from a word: 106
+close after the failed read: 0
+read a line: 0
+close: 0
