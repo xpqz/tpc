@@ -23,3 +23,4 @@ Measured stripped (custom sections removed) at phase-4: compiler 160,907 B, hell
 | Hello-world output WASM | 20 KB | 2 KB | DCE keeps it at 0.4 KB; a tighter target catches regressions |
 | IDE WASM | 120 KB | 120 KB (kept) | not yet measurable |
 | phase-5 | 8340 | 264704 B unstripped / 210655 B stripped | 683 B | units, includes, conditionals, typed consts, text files, Dos; checker 1887 / 2200 |
+| phase-6 | 9183 | 276165 B unstripped / 222182 B stripped | 875 B | Crt unit, browser terminal and workers; Chrome and Firefox browser tests pass; host 471 / 500 |
