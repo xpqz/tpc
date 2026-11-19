@@ -1,7 +1,10 @@
 # Deviations from Turbo Pascal 5.0
 
-Every deviation from TP5 behaviour is recorded here, with the reason. Append new entries
-at the end. "fpc" means Free Pascal 3.2.2 with `-Mtp`; where fpc and TP5 differ, the TP5
+Every deviation from TP5 behaviour is recorded here, with the reason. Entries are numbered
+D1 to D51 in order; a number never changes and is never reused. A retired entry (D18, D32,
+D49) stays as a one-line stub that says what replaced it. Append new entries at the end.
+Deviations in what the compiler accepts, and the omitted features, are in `docs/subset.md`.
+"fpc" means Free Pascal 3.2.2 with `-Mtp`; where fpc and TP5 differ, the TP5
 manual is the reference.
 
 ## Accepted up front (`plan.md` §2)
@@ -44,7 +47,7 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
-| D11 | `{$F+}` for procedural values | A routine can be assigned to a procedural variable or passed as a procedural argument only if it was declared under `{$F+}`; otherwise error 143 | `{$F+}` and `{$F-}` are accepted and ignored; every global routine can be assigned | Accepts programs TP5 rejects; no valid TP5 program changes meaning. Any other directive is error 200 until the directives phase |
+| D11 | `{$F+}` for procedural values | A routine can be assigned to a procedural variable or passed as a procedural argument only if it was declared under `{$F+}`; otherwise error 143 | `{$F+}` and `{$F-}` are accepted and ignored; every global routine can be assigned | Accepts programs TP5 rejects; no valid TP5 program changes meaning. The other switches are D38 |
 
 ## System unit (Phase 3)
 
@@ -66,6 +69,7 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
 | D17 | Side effects in the variable of `Inc`/`Dec` | The designator is evaluated once | `Inc(x, n)` is `x := Ord(x) + n`, so a designator with a function call (`Inc(a[F]);`) runs the call twice | No test depends on it |
+| D18 | (retired by #89) `Val` with a Word `code` variable rejected | TP5 accepts an Integer or a Word | Accepted | No difference remains |
 | D19 | `ParamStr(0)` | The path of the program | `''`; `ParamCount` is 0 and `ParamStr(n)` is `''` | |
 | D20 | Width wider than the target in `Str` of a Real | The width is cut to the capacity of the target string (`Str(1.5:8:2, t)` with `String[6]` is `  1.50`) | Done for integers; a Real is formatted at the full width and then truncated on the left | |
 | D21 | `Inc`/`Dec` of a subrange under `{$R+}` | `Inc(s)` of `s: 1..10` at 10 is runtime error 201 (a Byte at 255 wraps, unchecked) | `Inc` and `Dec` are never range-checked; the value wraps into the storage size (D17 rewrite) | `lang/inc_dec_of_byte_at_the_limit_is_not_checked` covers the Byte case only |
@@ -99,7 +103,7 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
-| D32 | (retired by #99) Crt names left out | `TextMode`, `LastMode`, `AssignCrt` and the mode constants `BW40` to `Font8x8` exist | They exist now: see D41 (`LastMode`, `TextMode`, the mode constants) and D44 | The screen is always 80x25 colour. `CheckBreak`, `CheckEof`, `CheckSnow`, `DirectVideo` exist as variables and change nothing |
+| D32 | (retired by #99) Crt names left out | `TextMode`, `LastMode`, `AssignCrt` and the mode constants `BW40` to `Font8x8` exist | They exist now: see D41 (`LastMode`), D48 (`TextMode` and the mode constants) | The screen is always 80x25 colour. `CheckBreak`, `CheckEof`, `CheckSnow`, `DirectVideo` exist as variables and change nothing |
 | D33 | Sound and ReadLn length | `Sound` makes a tone; a `ReadLn` line is at most 127 characters | `Sound` and `NoSound` do nothing; the line editor takes up to 254 characters (as D29) | |
 | D34 | A parameterless function called with arguments inside `if`, `[]`, `for` bounds or `case` | Error 40, 93, 58 or 54 (the next token the construct expects) | Error 85 | Matching needs an expected-token context through `expr` (#81); assignment and argument positions match TP |
 | D35 | DOS device names in Assign (COM1, LPT1, PRN, AUX, CON, NUL) | Devices | Ordinary file names | Decision 50 |
@@ -111,20 +115,15 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 |---|---|---|---|---|
 | D37 | `Exp`, `Ln`, `Sin`, `Cos`, `ArcTan` in 64-bit arithmetic | 48-bit Real (11 to 12 significant digits); `Exp(x)` overflows (205) above about 88.7; `Sin` and `Cos` lose accuracy for large arguments in their own way | Results are accurate to about 1E-15 for moderate arguments (decision 19); `Exp` overflows (205) above 709.78; `Sin` and `Cos` are accurate while the argument is below about 1E9; the zero or negative argument of `Ln` is error 207 as in TP5 | Tests print at most the digits both representations agree on. System also declares helper names (`ExpReal`, `Reduce`, `Ln2`, ...) that a program can see, as it can the other System helpers |
 
-## Compiler switches (SWAG sweep)
+## Switches, Dos names, Crt and console (D38 to D42)
 
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
 | D38 | `{$A B D F L O S V}` switches and `{$M stack,heapmin,heapmax}` | Change code generation, the stack and the heap | Checked as TP checks them (stack 1024 to 65520, heap sizes 0 to 655360) and ignored | `{$N+}` and `{$E+}`, which TP accepts, stay error 200 (8087 code is omitted); their `-` forms are accepted and ignored; other letters are error 17 as in TP, wherever they stand in a list (an `E+` before a bad letter does not hide it). Odd forms TP tolerates (`{$A++}`, `{$A+B-}`, a `;` between the `$M` numbers) are error 17 here |
+| D39 | `FExpand`, `GetDir`, `DosError` on a flat virtual file system | `FExpand` and `GetDir` use the real current directory of each drive (the oracle runs with `C:\` current, so the corpus cannot tell); `DosError` holds whatever the unit data held at start | The current directory of every drive is its root; `GetDir(d)` is the letter `Chr(64 + d)` (0 is `C`) and `:\`, with no check that the drive exists; `DosError` is 0 and nothing sets it. `FExpand` upper-cases ASCII only | `FindFirst`, `FindNext`, `FSearch`, `DiskSize`, `DiskFree`, `ChDir`, `GetFAttr`, `GetFTime` are omitted (see subset.md) |
 | D40 | `SetTextBuf(f, buf[, size])` | Gives the file a program-supplied buffer | Checked as TP checks it (a Text variable, any variable, an optional Word size) and ignored: buffering is internal to System. Output is the same unless the program relies on the buffer's contents | `lang/settextbuf_with_and_without_size_is_ignored` |
 | D41 | `LastMode` at start | `LastMode` is the video mode before the program started | A Word variable that starts as 3 (`CO80`); `TextMode(m)` sets it to `m` (see D48) | `lang/swag_crt_lastmode` |
 | D42 | A file assigned the empty name (`Assign(f, '')`) | Reset, Rewrite and Append bind it to DOS standard input or output. Reads are block-buffered, so a second reader of standard input (Input, or `Reset` again) finds the data already consumed; under Crt the output goes through DOS, so Crt's `WhereX`/`WhereY` do not see it, and typed input is echoed by DOS | It is the console exactly as `Input` and `Output` are: one line at a time from standard input (Crt's line editor under Crt), output through the same writer as `Output` (Crt's screen and cursor under Crt). Close does not close the console | `lang/assign_empty_*` test only the cases that do not depend on the buffering: one reader, whole lines, numbers, Eof, Eoln, wrong-direction errors 104/105 |
-
-## Dos file names (#88)
-
-| # | Deviation | TP5 | This compiler | Notes |
-|---|---|---|---|---|
-| D39 | `FExpand`, `GetDir`, `DosError` on a flat virtual file system | `FExpand` and `GetDir` use the real current directory of each drive (the oracle runs with `C:\` current, so the corpus cannot tell); `DosError` holds whatever the unit data held at start | The current directory of every drive is its root; `GetDir(d)` is the letter `Chr(64 + d)` (0 is `C`) and `:\`, with no check that the drive exists; `DosError` is 0 and nothing sets it. `FExpand` upper-cases ASCII only | `FindFirst`, `FindNext`, `FSearch`, `DiskSize`, `DiskFree`, `ChDir`, `GetFAttr`, `GetFTime` are omitted (see subset.md) |
 
 ## Diagnostics order and fidelity (#94)
 
@@ -145,17 +144,12 @@ An include whose name has a directory part (`{$I c:\ra\x.inc}`) that cannot be f
 as in TP when the directory is missing; TP says 15 when the directory exists and the file does
 not, which a flat file table cannot tell apart (14 is reported).
 
-## Cheap standard routines (#99)
+## Cheap standard routines, Erase and Rename, Utils (D47 to D51)
 
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
 | D47 | `GetEnv`, `EnvCount`, `EnvStr`; `DosVersion` | The program sees the DOS environment (the oracle's holds `PATH`, `COMSPEC` and one more; `EnvCount` is 3, `EnvStr(1)` is `COMSPEC=Z:\COMMAND.COM`); `DosVersion` is `$0005` (DOS 5.0) under the oracle | There is no environment: `GetEnv` returns `''`, `EnvCount` is 0, `EnvStr(i)` is `''` for every `i`. `DosVersion` returns 5, as the oracle does | `lang/dos_getenv_and_dosversion` (the agreeing cases: an unset name, `EnvStr` out of range); `compiler/tests/cheap_routines.rs` |
 | D48 | `TextMode(m)` for modes with another screen size | `CO40` and `BW40` give a 40-column screen (`WindMax` column 39), `Font8x8` added to a mode gives 43 or 50 lines | `TextMode` always leaves the 80x25 screen: it clears it, sets `TextAttr` to 7, the window to the whole screen and the cursor to the top left, and sets `LastMode` to `m` (any `m`), as TP does for `BW80`, `CO80` and `Mono` | `lang/crt_textmode_*` for the modes that agree; `compiler/tests/cheap_routines.rs` for the others |
-| D49 | (retired by #101) `Erase` and `Rename` omitted | `Erase(f)` and `Rename(f, name)` delete and rename a file | They exist, on `Text` files: see D50 | `Erase` and `Rename` were 74 and 38 of the SWAG files |
-| D51 | Names given to `Erase` and `Rename` | DOS resolves wildcards (`*`, `?`), silently truncates names longer than 8.3, treats device names as devices, and reports a missing or busy directory as 2, 3 or 5 | A name must be a valid 8.3 name of the flat file system: a wildcard or over-long name is error 2, a name with `\`, `/` or `:` is error 3 (the new name of `Rename`: `:` is 3, `\` or `/` is 5, as TP); device names are ordinary names (D35) | Decision 55. Everything else matches TP: erasing or renaming an open file works (0) and the open file follows it |
-
-## Additions (#100)
-
-| # | Deviation | TP5 | This compiler | Notes |
-|---|---|---|---|---|
+| D49 | (retired by #101) `Erase` and `Rename` omitted | `Erase(f)` and `Rename(f, name)` delete and rename a file | They exist, on `Text` files: see D51 | `Erase` and `Rename` were 74 and 38 of the SWAG files |
 | D50 | The `Utils` unit | No such unit: `uses Utils` is error 15 unless the program supplies its own `UTILS.PAS` | An embedded unit (`runtime/utils.pas`) with `Power`, `Tan`, `ArcSin`, `ArcCos`, `Log10`, `Hex`, `TrimLeft`, `TrimRight`, `Trim`, `UpperCase`, `LowerCase`, `Min`, `Max`, `LeadingZero` | An addition, not a change of TP behaviour (decision 53). The unit is plain TP 5.0 Pascal, so the oracle compiles the same file (`NAME.dirs` names `runtime/utils.pas`) and the tests `tests/*/utils_*` have TP 5.0 output. A program that has its own `UTILS.PAS` next to it still gets the embedded unit, as for `Crt` and `Dos` |
+| D51 | Names given to `Erase` and `Rename` | DOS resolves wildcards (`*`, `?`), silently truncates names longer than 8.3, treats device names as devices, and reports a missing or busy directory as 2, 3 or 5 | A name must be a valid 8.3 name of the flat file system: a wildcard or over-long name is error 2, a name with `\`, `/` or `:` is error 3 (the new name of `Rename`: `:` is 3, `\` or `/` is 5, as TP); device names are ordinary names (D35) | Decision 55. Everything else matches TP: erasing or renaming an open file works (0) and the open file follows it |
