@@ -2,8 +2,8 @@
 // section 8) and by console output. `cells` is the byte layout host/terminal.js draws: a
 // character and an attribute byte per cell, row by row, then the cursor column and row. The
 // browser shares one such array with the page; the test runner makes its own. Cursor, window
-// and attribute state live in the Crt unit; this model only stores what Crt draws, and prints
-// it as the screen dump that tools/crt/SCRDUMP.PAS writes on the real Turbo Pascal.
+// and attribute state live in the Crt unit; this model only stores what Crt draws. The test
+// runner prints it with tests/screen_dump.mjs.
 import { HostError } from "./error.js";
 import { COLS, ROWS, CURSOR, GRID_BYTES, DEFAULT_ATTR, clearScreen } from "./terminal.js";
 
@@ -104,41 +104,5 @@ export class Screen {
       }
       this.setCursor(col, row);
     }
-  }
-
-  // The 25 rows without trailing blanks.
-  textRows() {
-    const rows = [];
-    for (let row = 0; row < ROWS; row++) {
-      const chars = Array.from({ length: COLS }, (_, col) => this.cells[this.cell(col, row)]);
-      rows.push(String.fromCharCode(...chars).replace(/ +$/, ""));
-    }
-    return rows;
-  }
-
-  // One `attr ROW COL LEN HEX` line (1-based) per run of cells whose attribute is not 07.
-  attributeRuns() {
-    const runs = [];
-    for (let row = 0; row < ROWS; row++) {
-      let col = 0;
-      while (col < COLS) {
-        const attr = this.cells[this.cell(col, row) + 1];
-        const start = col;
-        while (col < COLS && this.cells[this.cell(col, row) + 1] === attr) col++;
-        if (attr !== DEFAULT_ATTR) {
-          const hex = attr.toString(16).toUpperCase().padStart(2, "0");
-          runs.push(`attr ${row + 1} ${start + 1} ${col - start} ${hex}`);
-        }
-      }
-    }
-    return runs;
-  }
-
-  // The screen dump: the text rows, the cursor (1-based column and row), the exit code and
-  // the attribute runs, one per line.
-  dump(exitCode) {
-    const cursor = `cursor ${this.cells[CURSOR] + 1} ${this.cells[CURSOR + 1] + 1}`;
-    const lines = [...this.textRows(), cursor, `exit ${exitCode}`, ...this.attributeRuns()];
-    return lines.map((line) => `${line}\n`).join("");
   }
 }

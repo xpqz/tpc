@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { Host, HostError } from "../host/runtime.js";
+import { dump } from "./screen_dump.mjs";
 import { KeyScript, KeyScriptError, parseKeys } from "./keys.mjs";
 import { Input, loadSnapshot } from "./vfs.mjs";
 
@@ -77,7 +78,7 @@ export async function run(bytes, { files = null, input = null, keys = null } = {
       throw new RunnerError(`sp not restored: ${sp0} before main, ${sp.value} after`, stdout());
     }
     const usesScreen = WebAssembly.Module.imports(module).some((i) => i.name === "screen");
-    if (usesScreen) out.push(Buffer.from(host.screen.dump(code), "latin1"));
+    if (usesScreen) out.push(Buffer.from(dump(host.screen.cells, code), "latin1"));
     return { stdout: stdout(), code };
   } catch (e) {
     if (e instanceof HostError) throw new RunnerError(e.message, stdout());

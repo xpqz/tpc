@@ -7,6 +7,7 @@ import fs from "node:fs";
 import { Host, HostError, KEYS_EXHAUSTED } from "../../host/runtime.js";
 import { Screen } from "../../host/screen.js";
 import { GRID_BYTES, clearScreen } from "../../host/terminal.js";
+import { dump } from "../screen_dump.mjs";
 import { KeyScript, KeyScriptError, parseKeys } from "../keys.mjs";
 
 const golden = (name) =>
@@ -25,10 +26,10 @@ function draw(screen, col, row, text, attr = 7) {
   for (const ch of text) screen.apply(PUT, col++, row, ch.charCodeAt(0) | (attr << 8));
 }
 
-const rows = (screen) => screen.dump(0).split("\n").slice(0, 25);
+const rows = (screen) => dump(screen.cells, 0).split("\n").slice(0, 25);
 
 test("a new screen is 25 blank rows, cursor 1 1, exit line, no attribute runs", () => {
-  assert.equal(new Screen().dump(0), `${"\n".repeat(25)}cursor 1 1\nexit 0\n`);
+  assert.equal(dump(new Screen().cells, 0), `${"\n".repeat(25)}cursor 1 1\nexit 0\n`);
 });
 
 test("put stores the character and attribute; trailing blanks are cut, inner ones kept", () => {
@@ -44,7 +45,7 @@ test("attribute runs: 1-based row, column and length, in reading order, 07 omitt
   draw(screen, 9, 11, "colour", 0x1e);
   draw(screen, 0, 11, "ab", 0x70);
   draw(screen, 77, 11, "xyz", 0x70);
-  const lines = screen.dump(3).split("\n");
+  const lines = dump(screen.cells, 3).split("\n");
   assert.deepEqual(lines.slice(25), [
     "cursor 1 1", "exit 3", "attr 12 1 2 70", "attr 12 10 6 1E", "attr 12 78 3 70", "",
   ]);
@@ -53,7 +54,7 @@ test("attribute runs: 1-based row, column and length, in reading order, 07 omitt
 test("a blank cell with a non-default attribute is an attribute run but no text", () => {
   const screen = new Screen();
   screen.apply(PUT, 4, 2, 0x20 | (0x4f << 8));
-  const lines = screen.dump(0).split("\n");
+  const lines = dump(screen.cells, 0).split("\n");
   assert.equal(lines[2], "");
   assert.ok(lines.includes("attr 3 5 1 4F"));
 });
@@ -61,7 +62,7 @@ test("a blank cell with a non-default attribute is an attribute run but no text"
 test("the cursor is dumped 1-based", () => {
   const screen = new Screen();
   screen.apply(CURSOR, 79, 24, 0);
-  assert.ok(screen.dump(0).includes("cursor 80 25\n"));
+  assert.ok(dump(screen.cells, 0).includes("cursor 80 25\n"));
 });
 
 test("scroll up moves the rectangle's rows up and blanks the bottom with the fill attribute", () => {
@@ -70,7 +71,7 @@ test("scroll up moves the rectangle's rows up and blanks the bottom with the fil
   // rectangle: left 0, top 1, right 79, bottom 3; one line; fill attribute 0x1f
   screen.apply(SCROLL_UP, 0 | (1 << 8), 79 | (3 << 8), 1 | (0x1f << 8));
   assert.deepEqual(rows(screen).slice(0, 4), ["row0", "row2", "row3", ""]);
-  assert.ok(screen.dump(0).includes("attr 4 1 80 1F\n"));
+  assert.ok(dump(screen.cells, 0).includes("attr 4 1 80 1F\n"));
 });
 
 test("scroll down moves the rectangle's rows down and blanks the top", () => {
@@ -120,7 +121,7 @@ test("operations outside the screen, or unknown, are host errors", () => {
 test("high characters are dumped as single bytes", () => {
   const screen = new Screen();
   screen.apply(PUT, 0, 0, 0xe9 | (7 << 8));
-  assert.equal(screen.dump(0).charCodeAt(0), 0xe9);
+  assert.equal(dump(screen.cells, 0).charCodeAt(0), 0xe9);
 });
 
 test("same bytes as the real TP 5.0: output without ClrScr after cls", () => {
@@ -128,7 +129,7 @@ test("same bytes as the real TP 5.0: output without ClrScr after cls", () => {
   draw(screen, 0, 0, "first");
   draw(screen, 0, 1, "second");
   screen.apply(CURSOR, 6, 1, 0);
-  assert.equal(screen.dump(0), golden("crt_noclear"));
+  assert.equal(dump(screen.cells, 0), golden("crt_noclear"));
 });
 
 test("same bytes as the real TP 5.0: keys, ReadLn echo and a coloured write", () => {
@@ -137,14 +138,14 @@ test("same bytes as the real TP 5.0: keys, ReadLn echo and a coloured write", ()
     draw(screen, 0, row, line));
   draw(screen, 9, 11, "colour", 0x1e);
   screen.apply(CURSOR, 15, 11, 0);
-  assert.equal(screen.dump(0), golden("crt_keys"));
+  assert.equal(dump(screen.cells, 0), golden("crt_keys"));
 });
 
 test("same bytes as the real TP 5.0: exit 255 after the keys ran out", () => {
   const screen = new Screen();
   draw(screen, 0, 0, "q");
   screen.apply(CURSOR, 1, 0, 0);
-  assert.equal(screen.dump(255), golden("crt_exhausted"));
+  assert.equal(dump(screen.cells, 255), golden("crt_exhausted"));
 });
 
 // ---- key scripts ----
@@ -212,10 +213,10 @@ test("print is a teletype: cursor, CR LF BS BEL, wrap and scroll", () => {
   const text = (s) => Uint8Array.from(s, (c) => c.charCodeAt(0));
   screen.print(text("ab\r\ncd\x07\x08X\n"));
   assert.deepEqual(rows(screen).slice(0, 3), ["ab", "cX", ""]);
-  assert.ok(screen.dump(0).includes("cursor 3 3\n"));
+  assert.ok(dump(screen.cells, 0).includes("cursor 3 3\n"));
   screen.print(text("\r" + "y".repeat(80)));
   assert.equal(rows(screen)[2], "y".repeat(80));
-  assert.ok(screen.dump(0).includes("cursor 1 4\n"));
+  assert.ok(dump(screen.cells, 0).includes("cursor 1 4\n"));
   screen.print(text("\n".repeat(30) + "end"));
   assert.equal(rows(screen)[24], "end");
   assert.equal(rows(screen)[0], "");
@@ -231,7 +232,7 @@ test("a Screen can be built over a shared array and writes into it", () => {
 test("the screen import applies to the host's grid", () => {
   const h = host([]);
   h.imports.screen(PUT, 0, 0, 0x5a | (0x0f << 8));
-  assert.ok(h.screen.dump(0).startsWith("Z\n"));
+  assert.ok(dump(h.screen.cells, 0).startsWith("Z\n"));
 });
 
 let failed = 0;
