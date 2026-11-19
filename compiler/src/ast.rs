@@ -168,6 +168,8 @@ pub struct Ast {
     /// For each identifier used as an operand without arguments, the line of the token that
     /// follows it, where TP reports a missing argument list.
     pub follow: Vec<(Id, u32)>,
+    /// The `{$R+}` / `{$R-}` switches in source order: (line, col, on).
+    pub range: Vec<(u32, u32, bool)>,
 }
 
 impl Ast {

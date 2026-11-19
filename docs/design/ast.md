@@ -16,7 +16,7 @@ codegen walks the checked AST.
   names may be redeclared, a duplicate within the program is error 4. A forward routine left
   undefined in System is error 59 at line 0.
 - **Helpers by handle.** Right after System is checked, the checker looks up the names in `HELPERS`
-  (`ABSLONG STRCAT STRCMP STRASSIGN STRDELETE STRINSERT HEAPGET HEAPPUT HEAPMARK HEAPRELEASE`) and stores their routine indexes in
+  (`ABSLONG STRCAT STRCMP STRASSIGN STRDELETE STRINSERT HEAPGET HEAPPUT HEAPMARK HEAPRELEASE ... RANGECHK`) and stores their routine indexes in
   `Info::helpers`, addressed by `H_*`. A missing helper is error 3 at line 0. Later code never
   looks helpers up by name, so a user routine with a helper's name cannot capture them.
 - **Whole program.** The checker finishes every routine before codegen starts: storage of a
@@ -253,3 +253,12 @@ body; an unresolved name is error 19 at that position.
 become `HeapPut(p, size)` (size is `SizeOf(p^)` for `New`/`Dispose`), `Mark(p)` is `p := HeapMark`,
 `Release(p)` is `HeapRelease(p)`. `RunError(code)` (20) is the statement `RunErr`, a call of
 `host.rterror`. `Info::heap` is the address of System's `HeapOrg`.
+
+## Range checking
+
+`Ast::range` holds the `{$R+}`/`{$R-}` switches as `(line, col, on)` in source order (the parser
+records them; `F+`/`F-` are ignored). Codegen's `check(e, lo, hi)` calls the System helper
+`RangeChk` (`H_RANGE`) on the value of expression `e` when the last switch at or before `e`'s position
+is on, unless `e` is a constant or its type already lies in `lo..hi`. It is applied to the value of an
+ordinal assignment, to value arguments (`push_args`) and to array and string indexes (`addr`). The
+`Inc`/`Dec` rewrite positions its value node at line 0, so those assignments are never checked (D21).

@@ -4,7 +4,7 @@ use crate::driver::Diag;
 use crate::types::{Routine, Sym, SymKind, Symbol, Tag, Ty, Type, Types};
 
 /// System routines bound by handle right after System is loaded (decision 11).
-const HELPERS: [&[u8]; 17] = [
+const HELPERS: [&[u8]; 18] = [
     b"ABSLONG",
     b"STRCAT",
     b"STRCMP",
@@ -22,6 +22,7 @@ const HELPERS: [&[u8]; 17] = [
     b"STRINT",
     b"VALLONG",
     b"VALREAL",
+    b"RANGECHK",
 ];
 pub const H_ABS: usize = 0;
 pub const H_CAT: usize = 1;
@@ -40,6 +41,7 @@ pub const H_SETCMP: usize = 13;
 const H_STRINT: usize = 14;
 const H_VALLONG: usize = 15;
 const H_VALREAL: usize = 16;
+pub const H_RANGE: usize = 17;
 
 /// The most bytes of one structure, of all globals, or of one routine's locals.
 const MAX_DATA: u32 = 65535;
@@ -1552,7 +1554,10 @@ impl Cx<'_> {
                 };
                 let cur = self.ast.typed(Kind::Unary(Op::Ord, target), result, at);
                 let op = if which == 26 { Op::Add } else { Op::Sub };
-                self.ast.typed(Kind::Binary(op, cur, step), result, at)
+                // Line 0: outside every `{$R+}` region, so `Inc` and `Dec` are never checked.
+                let sum = self.ast.typed(Kind::Binary(op, cur, step), result, at);
+                self.ast.nodes[sum as usize].line = 0;
+                sum
             }
             28 => {
                 let none = self.ast.typed(Kind::IntLit(-1), Ty::INTEGER, at);

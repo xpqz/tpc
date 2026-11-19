@@ -69,3 +69,5 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 | D18 | Word code in `Val` | `Val(s, v, code)` accepts an `Integer` or `Word` variable for `code` | Only `Integer` (26 reported as 98 for others) | |
 | D19 | `ParamStr(0)` | The path of the program | `''`; `ParamCount` is 0 and `ParamStr(n)` is `''` | |
 | D20 | Width wider than the target in `Str` of a Real | The width is cut to the capacity of the target string (`Str(1.5:8:2, t)` with `String[6]` is `  1.50`) | Done for integers; a Real is formatted at the full width and then truncated on the left | |
+| D21 | `Inc`/`Dec` of a subrange under `{$R+}` | `Inc(s)` of `s: 1..10` at 10 is runtime error 201 (a Byte at 255 wraps, unchecked) | `Inc` and `Dec` are never range-checked; the value wraps into the storage size (D17 rewrite) | `lang/inc_dec_of_byte_at_the_limit_is_not_checked` covers the Byte case only |
+| D22 | `Succ` of the last and `Pred` of the first value under `{$R+}` | Runtime error 201 | Not checked; the value is stored truncated | |

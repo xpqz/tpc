@@ -1,5 +1,0 @@
-rangecheck_directive_switches_within_program
-rangecheck_in_range_values_pass
-rangecheck_string_index_is_not_checked
-rangecheck_string_index_within_declared_size
-rangecheck_value_argument_in_range

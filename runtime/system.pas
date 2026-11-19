@@ -10,6 +10,13 @@ begin
     AbsLong := x
 end;
 
+{ Implicit helper for range checking: v must lie in lo..hi. }
+function RangeChk(v, lo, hi: LongInt): LongInt;
+begin
+  if (v < lo) or (v > hi) then RunError(201);
+  RangeChk := v
+end;
+
 { Hi, Lo and Swap use the low word of any integer. }
 function Lo(x: LongInt): Byte;
 begin

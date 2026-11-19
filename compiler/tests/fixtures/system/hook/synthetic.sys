@@ -72,3 +72,7 @@ function ValReal(s: String; var code: Integer): Real;
 begin
   ValReal := 0
 end;
+function RangeChk(v, lo, hi: LongInt): LongInt;
+begin
+  RangeChk := v
+end;
