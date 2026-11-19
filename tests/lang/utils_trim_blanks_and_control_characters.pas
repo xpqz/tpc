@@ -21,7 +21,7 @@ begin
   Show(#1#2'ctl'#31#32);
   Show(#0'nul'#0);
   Show(#255'high'#255);
-  Show('a'#13#10);
+  Show('a'#10);
   Show(' '#9' '#10);
   Long := '';
   for I := 1 to 255 do
