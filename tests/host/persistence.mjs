@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import * as vfsModule from "../../host/vfs.js";
 import { Vfs, RESET, REWRITE, APPEND } from "../../host/vfs.js";
 import { Host } from "../../host/runtime.js";
-import { loadFiles, saveFile } from "../../host/persist.js";
+import { loadFiles, saveFile, removeFile } from "../../host/persist.js";
 import { runTests } from "./browser_helpers.mjs";
 
 // The part of the Storage interface the page uses.
@@ -145,6 +145,91 @@ test("a Host passes onWritten to its file system: fs_open, fs_write, fs_close", 
   host.imports.fs_write(handle, 32, 2);
   host.imports.fs_close(handle);
   assert.deepEqual(seen, [["SAVED.TXT", bytes(104, 105)]]);
+});
+
+test("removeFile deletes one saved file and nothing else", () => {
+  const store = new MemoryStorage();
+  saveFile(store, "A.PAS", bytes(1));
+  saveFile(store, "B.PAS", bytes(2));
+  store.setItem("theme", "dark");
+  removeFile(store, "A.PAS");
+  assert.deepEqual([...loadFiles(store)], [["B.PAS", bytes(2)]]);
+  assert.equal(store.getItem("theme"), "dark");
+  removeFile(store, "NEVER.PAS");
+  assert.deepEqual([...loadFiles(store)], [["B.PAS", bytes(2)]]);
+});
+
+test("delete reports the erased name once; a failed delete reports nothing", () => {
+  const erased = [];
+  const vfs = new Vfs(new Map([["A.TXT", bytes(1)]]), undefined, (name) => erased.push(name));
+  assert.equal(vfs.delete("nope.txt"), -2);
+  assert.deepEqual(erased, []);
+  assert.equal(vfs.delete("a.txt"), 0);
+  assert.deepEqual(erased, ["A.TXT"]);
+});
+
+test("rename reports the new name with its bytes, then the erased old name", () => {
+  const events = [];
+  const vfs = new Vfs(
+    new Map([["A.TXT", bytes(1, 2)], ["B.TXT", bytes(3)]]),
+    (name, data) => events.push(["written", name, data]),
+    (name) => events.push(["erased", name]),
+  );
+  assert.equal(vfs.rename("A.TXT", "B.TXT"), -5);
+  assert.equal(vfs.rename("NOPE.TXT", "C.TXT"), -2);
+  assert.deepEqual(events, [], "failed renames report nothing");
+  assert.equal(vfs.rename("a.txt", "c.txt"), 0);
+  assert.deepEqual(events, [["written", "C.TXT", bytes(1, 2)], ["erased", "A.TXT"]]);
+});
+
+test("closing a file erased while open for writing reports nothing", () => {
+  const events = [];
+  const vfs = new Vfs(null, (...args) => events.push(["written", ...args]), (n) => events.push(n));
+  const handle = write(vfs, "OUT.TXT", REWRITE, bytes(1));
+  assert.equal(vfs.delete("OUT.TXT"), 0);
+  assert.equal(vfs.write(handle, bytes(2)), 1);
+  assert.equal(vfs.close(handle), 0);
+  assert.deepEqual(events, ["OUT.TXT"], "only the erase is reported");
+});
+
+test("closing a file renamed while open for writing reports the new name only", () => {
+  const events = [];
+  const vfs = new Vfs(null, (name, data) => events.push([name, data]), () => {});
+  const handle = write(vfs, "OLD.TXT", REWRITE, bytes(1));
+  assert.equal(vfs.rename("OLD.TXT", "NEW.TXT"), 0);
+  events.length = 0;
+  assert.equal(vfs.write(handle, bytes(2)), 1);
+  assert.equal(vfs.close(handle), 0);
+  assert.deepEqual(events, [["NEW.TXT", bytes(1, 2)]]);
+});
+
+test("a Vfs without hooks can delete and rename", () => {
+  const vfs = new Vfs(new Map([["A.TXT", bytes(1)]]));
+  assert.equal(vfs.rename("A.TXT", "B.TXT"), 0);
+  assert.equal(vfs.delete("B.TXT"), 0);
+});
+
+test("a Host reaches delete and rename through fs_delete and fs_rename and passes the hooks", () => {
+  const events = [];
+  const host = new Host({
+    write() {}, input: null, keys: null, clock: null,
+    files: new Map([["OLD.TXT", bytes(7)]]),
+    onWritten: (name, data) => events.push(["written", name, data]),
+    onErased: (name) => events.push(["erased", name]),
+  });
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  host.attach({ exports: { memory } });
+  const heap = new Uint8Array(memory.buffer);
+  const put = (at, text) => heap.set([...text].map((c) => c.charCodeAt(0)), at);
+  put(0, "OLD.TXT");
+  put(16, "NEW.TXT");
+  assert.equal(host.imports.fs_rename(0, 7, 16, 7), 0);
+  assert.equal(host.imports.fs_rename(0, 7, 16, 7), -2);
+  assert.equal(host.imports.fs_delete(0, 7), -2);
+  assert.equal(host.imports.fs_delete(16, 7), 0);
+  assert.deepEqual(events, [
+    ["written", "NEW.TXT", bytes(7)], ["erased", "OLD.TXT"], ["erased", "NEW.TXT"],
+  ]);
 });
 
 test("the test-only paths are gone from host/: no compile stub, no LineInput", () => {

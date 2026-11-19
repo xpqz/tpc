@@ -1,0 +1,4 @@
+make KEEP.TXT: 0
+pending error stays: 2
+KEEP.TXT is missing
+erase missing: 2

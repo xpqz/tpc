@@ -1,0 +1,5 @@
+make A.TXT: 0
+pending error stays: 2
+A.TXT is missing
+B.TXT holds x
+new error replaces pending: 5
