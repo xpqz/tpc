@@ -123,6 +123,22 @@ fn ide_main_with_the_real_compiler_wasm() {
     node_test("main_test.mjs");
 }
 
+/// ide/errors.pas has the numbers and texts of TABLE in compiler/src/diag.rs
+/// (tests/ide/errors_test.mjs).
+#[test]
+fn ide_error_messages_agree_with_the_compiler_table() {
+    let o = Command::new("node")
+        .arg(root().join("tests/ide/errors_test.mjs"))
+        .output()
+        .expect("node must be installed");
+    assert!(
+        o.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr)
+    );
+}
+
 #[test]
 fn the_runner_refuses_an_ide_program_without_a_compiler_and_a_missing_compiler_file() {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ide_host");
