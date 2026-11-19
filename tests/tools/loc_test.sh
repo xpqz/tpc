@@ -166,10 +166,10 @@ EXPECTED=$(cat <<EOT
 2000|$SRC/ast.rs $SRC/parse.rs
 2600|$SRC/check.rs
 2100|$SRC/codegen.rs
-2270|ide
+2240|ide
 350|$SRC/wasm.rs
 450|$SRC/lex.rs
-630|host
+660|host
 EOT
 )
 # Paths within an entry are compared as sorted sets; entries sorted as strings.

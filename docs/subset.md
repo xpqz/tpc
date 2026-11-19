@@ -11,7 +11,7 @@ against the TP5 manual and `fpc -Mtp`; every deviation is recorded in `docs/devi
 | Types | `Byte`, `ShortInt`, `Integer` (16-bit), `Word`, `LongInt`, `Boolean`, `Char`, `Real`, `String[n]`, `String`, enums, subranges, arrays, records (including variant parts), sets (base type of at most 256 values), pointers, procedural types |
 | Statements | `begin/end`, `if`, `case`, `while`, `repeat`, `for`, `with`, assignment, procedure call, `Exit`, `Halt` |
 | Declarations | `const`, typed `const`, `type`, `var`, nested procedures and functions, `forward`, units (`interface` / `implementation` / `initialization`) |
-| Text files only | `Assign`, `Reset`, `Rewrite`, `Append`, `Close`, `Read`, `ReadLn`, `Write`, `WriteLn`, `Eof`, `Eoln`, `IOResult`, `{$I+/-}` |
+| Text files only | `Assign`, `Reset`, `Rewrite`, `Append`, `Close`, `Erase`, `Rename`, `Read`, `ReadLn`, `Write`, `WriteLn`, `Eof`, `Eoln`, `IOResult`, `{$I+/-}` |
 | Directives | `{$F+}` / `{$F-}` (accepted, no effect, deviation D11), `{$R}`, `{$I file}` (include), `{$IFDEF}`, `{$IFNDEF}`, `{$ELSE}`, `{$ENDIF}`, `{$DEFINE}` |
 
 Intrinsics and runtime routines named in later phases of `plan.md` §5 (not part of §2):

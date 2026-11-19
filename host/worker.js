@@ -45,6 +45,7 @@ export async function runProgram({ bytes, files, keys, grid, post, compiler, cel
     keys: { available: () => keyPressed(keys), next: () => readKey(keys) },
     screen,
     onWritten: compiler ? (name, bytes) => post({ saved: { name, bytes } }) : undefined,
+    onErased: compiler ? (name) => post({ erased: name }) : undefined,
   });
   // No stdin: -2 tells System to edit the console line from `readkey` (docs/abi.md section 8).
   host.imports.readline = () => -2;

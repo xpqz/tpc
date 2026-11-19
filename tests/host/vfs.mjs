@@ -277,6 +277,145 @@ test("readLine keeps returning null at end of input", () => {
   assert.equal(input.readLine(9), null);
 });
 
+// Writes `text` to a new file `name` and closes it.
+function create(vfs, name, text) {
+  const h = vfs.open(name, REWRITE);
+  assert.ok(h > 0, `open ${name}: ${h}`);
+  assert.equal(vfs.write(h, Buffer.from(text, "latin1")), text.length);
+  assert.equal(vfs.close(h), 0);
+}
+
+test("delete removes the file and leaves the others", () => {
+  const vfs = new Vfs(aux);
+  assert.equal(vfs.delete("DATA.TXT"), 0);
+  assert.equal(vfs.open("DATA.TXT", RESET), NOT_FOUND);
+  assert.equal(slurp(vfs, "ONE.TXT") !== null, true);
+});
+
+test("delete of a missing file, or of the same file twice, is 2", () => {
+  const vfs = new Vfs(aux);
+  assert.equal(vfs.delete("NOPE.TXT"), NOT_FOUND);
+  assert.equal(vfs.delete("ONE.TXT"), 0);
+  assert.equal(vfs.delete("ONE.TXT"), NOT_FOUND);
+});
+
+test("delete matches the name case-insensitively", () => {
+  const vfs = new Vfs(aux);
+  assert.equal(vfs.delete("data.txt"), 0);
+  assert.equal(slurp(vfs, "DATA.TXT"), null);
+});
+
+test("delete of a name with a drive or path is 3; an invalid or empty name is 2", () => {
+  const vfs = new Vfs(aux);
+  assert.equal(vfs.delete("A:DATA.TXT"), PATH_NOT_FOUND);
+  assert.equal(vfs.delete("SUB\\DATA.TXT"), PATH_NOT_FOUND);
+  assert.equal(vfs.delete("SUB/DATA.TXT"), PATH_NOT_FOUND);
+  assert.equal(vfs.delete(""), NOT_FOUND);
+  assert.equal(vfs.delete("*.TXT"), NOT_FOUND);
+  assert.equal(vfs.delete("LONGERNAME.TXT"), NOT_FOUND);
+  assert.equal(text(slurp(vfs, "DATA.TXT")), "alpha\r\nbeta\r\n", "nothing was deleted");
+});
+
+test("a file deleted while open for reading can still be read, and closes with 0", () => {
+  const vfs = new Vfs(aux);
+  const h = vfs.open("DATA.TXT", RESET);
+  assert.equal(vfs.delete("DATA.TXT"), 0);
+  assert.equal(text(vfs.read(h, 100)), "alpha\r\nbeta\r\n");
+  assert.equal(vfs.close(h), 0);
+  assert.equal(vfs.open("DATA.TXT", RESET), NOT_FOUND);
+});
+
+test("a file deleted while open for writing stays deleted after more writes and Close", () => {
+  const vfs = new Vfs(null);
+  const h = vfs.open("OUT.TXT", REWRITE);
+  assert.equal(vfs.write(h, Buffer.from("one")), 3);
+  assert.equal(vfs.delete("OUT.TXT"), 0);
+  assert.equal(vfs.write(h, Buffer.from("two")), 3);
+  assert.equal(vfs.close(h), 0);
+  assert.equal(vfs.open("OUT.TXT", RESET), NOT_FOUND);
+  create(vfs, "OUT.TXT", "new");
+  assert.equal(text(slurp(vfs, "OUT.TXT")), "new", "a later Rewrite starts from empty");
+});
+
+test("rename moves the content to the new name and removes the old name", () => {
+  const vfs = new Vfs(aux);
+  assert.equal(vfs.rename("DATA.TXT", "MOVED.TXT"), 0);
+  assert.equal(text(slurp(vfs, "MOVED.TXT")), "alpha\r\nbeta\r\n");
+  assert.equal(vfs.open("DATA.TXT", RESET), NOT_FOUND);
+  assert.equal(slurp(vfs, "ONE.TXT") !== null, true);
+});
+
+test("rename matches both names case-insensitively and stores the new one in upper case", () => {
+  const vfs = new Vfs(aux);
+  assert.equal(vfs.rename("data.txt", "moved.txt"), 0);
+  assert.equal(text(slurp(vfs, "MOVED.TXT")), "alpha\r\nbeta\r\n");
+  assert.deepEqual([...vfs.files.keys()].filter((n) => n.includes("MOVED")), ["MOVED.TXT"]);
+});
+
+test("rename of a missing file is 2", () => {
+  const vfs = new Vfs(aux);
+  assert.equal(vfs.rename("NOPE.TXT", "NEW.TXT"), NOT_FOUND);
+  assert.equal(vfs.open("NEW.TXT", RESET), NOT_FOUND);
+});
+
+test("rename onto an existing file, or onto its own name, is 5 and changes nothing", () => {
+  const vfs = new Vfs(aux);
+  assert.equal(vfs.rename("DATA.TXT", "ONE.TXT"), DENIED);
+  assert.equal(vfs.rename("DATA.TXT", "DATA.TXT"), DENIED);
+  assert.equal(vfs.rename("DATA.TXT", "data.txt"), DENIED);
+  assert.equal(text(slurp(vfs, "DATA.TXT")), "alpha\r\nbeta\r\n");
+  assert.equal(text(slurp(vfs, "ONE.TXT")), "x");
+});
+
+test("rename: a drive in either name is 3, a directory in the new name is 5", () => {
+  const vfs = new Vfs(aux);
+  assert.equal(vfs.rename("DATA.TXT", "A:NEW.TXT"), PATH_NOT_FOUND);
+  assert.equal(vfs.rename("A:DATA.TXT", "NEW.TXT"), PATH_NOT_FOUND);
+  assert.equal(vfs.rename("SUB\\DATA.TXT", "NEW.TXT"), PATH_NOT_FOUND);
+  assert.equal(vfs.rename("DATA.TXT", "SUB\\NEW.TXT"), DENIED);
+  assert.equal(vfs.rename("DATA.TXT", "SUB/NEW.TXT"), DENIED);
+  assert.equal(text(slurp(vfs, "DATA.TXT")), "alpha\r\nbeta\r\n");
+});
+
+test("rename to an empty, invalid or wildcard name is 2", () => {
+  const vfs = new Vfs(aux);
+  assert.equal(vfs.rename("DATA.TXT", ""), NOT_FOUND);
+  assert.equal(vfs.rename("DATA.TXT", "*.TXT"), NOT_FOUND);
+  assert.equal(vfs.rename("DATA.TXT", "LONGERNAME.TXT"), NOT_FOUND);
+  assert.equal(text(slurp(vfs, "DATA.TXT")), "alpha\r\nbeta\r\n");
+});
+
+test("a file renamed while open for reading is still read through its handle", () => {
+  const vfs = new Vfs(aux);
+  const h = vfs.open("DATA.TXT", RESET);
+  assert.equal(vfs.read(h, 3).length, 3);
+  assert.equal(vfs.rename("DATA.TXT", "MOVED.TXT"), 0);
+  assert.equal(text(vfs.read(h, 100)), "ha\r\nbeta\r\n");
+  assert.equal(vfs.close(h), 0);
+  assert.equal(text(slurp(vfs, "MOVED.TXT")), "alpha\r\nbeta\r\n");
+});
+
+test("writes after renaming a file open for writing land in the new name", () => {
+  const vfs = new Vfs(null);
+  const h = vfs.open("OLD.TXT", REWRITE);
+  assert.equal(vfs.write(h, Buffer.from("one")), 3);
+  assert.equal(vfs.rename("OLD.TXT", "NEW.TXT"), 0);
+  assert.equal(vfs.write(h, Buffer.from("two")), 3);
+  assert.equal(vfs.close(h), 0);
+  assert.equal(text(slurp(vfs, "NEW.TXT")), "onetwo");
+  assert.equal(vfs.open("OLD.TXT", RESET), NOT_FOUND);
+});
+
+test("a name freed by delete or rename can be created again", () => {
+  const vfs = new Vfs(aux);
+  assert.equal(vfs.rename("DATA.TXT", "MOVED.TXT"), 0);
+  create(vfs, "DATA.TXT", "fresh");
+  assert.equal(text(slurp(vfs, "DATA.TXT")), "fresh");
+  assert.equal(text(slurp(vfs, "MOVED.TXT")), "alpha\r\nbeta\r\n");
+  assert.equal(vfs.rename("DATA.TXT", "DATA.BAK"), 0);
+  assert.equal(vfs.delete("DATA.BAK"), 0);
+});
+
 let failed = 0;
 for (const [name, body] of tests) {
   try {

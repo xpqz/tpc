@@ -148,6 +148,8 @@ epilogue:  sp = fp + framesize
 | `fs_open` | `(namePtr, nameLen, mode) -> h` | VFS, text only; `h` < 0 is an error |
 | `fs_read` / `fs_write` | `(h, ptr, len) -> n` | VFS; `n` < 0 is an error |
 | `fs_close` | `(h) -> status` | VFS; 0, or < 0 on error |
+| `fs_delete` | `(namePtr, nameLen) -> status` | VFS; 0, or < 0 on error |
+| `fs_rename` | `(oldPtr, oldLen, newPtr, newLen) -> status` | VFS; 0, or < 0 on error |
 | `fmt_real` | `(f64, width, decimals, bufPtr) -> len` | TP-style real formatting; `width` and `decimals` are -1 when absent; the buffer holds 512 bytes; imported only by modules that use Real (`host/fmt_real.js`) |
 | `halt` | `(code)` | terminate with exit code |
 | `rterror` | `(code)` | runtime error report |
@@ -281,14 +283,19 @@ turns a negative result `-e` into `InOutRes := e`, so the codes are DOS error nu
   file); `fs_write(h, ptr, len)` returns `len`. Bytes are raw: the host does no line-ending or
   ^Z translation (TP writes CRLF itself and treats ^Z as end of file when reading text, so
   `System` does both).
+- `fs_delete(namePtr, nameLen)` removes the name; `fs_rename(oldPtr, oldLen, newPtr, newLen)`
+  gives the file a new name. Both return 0 or a negated error. An open handle is unaffected
+  by either: it keeps reading and writing the file (renamed, or unlinked after a delete; a
+  closed unlinked file is gone). A rename needs an existing source and a new name that does not
+  exist; the new name may not contain a path.
 - Several handles on one file have independent positions. At most 20 files are open at once.
 
 | Result | DOS error | Cause |
 |---|---|---|
-| -2 | 2 file not found | Reset or Append of a missing file; a name that is not a valid 8.3 name (any mode) |
-| -3 | 3 path not found | name with `\`, `/` or `:` |
+| -2 | 2 file not found | Reset or Append, `fs_delete` or the source of `fs_rename` of a missing file; a name that is not a valid 8.3 name (any mode) |
+| -3 | 3 path not found | name with `\`, `/` or `:` (in the new name of `fs_rename` only `:`) |
 | -4 | 4 too many open files | a 21st open handle |
-| -5 | 5 access denied | unknown mode; read on a Rewrite/Append handle; write on a Reset handle |
+| -5 | 5 access denied | `fs_rename` onto an existing name or to a new name with `\` or `/`; unknown mode; read on a Rewrite/Append handle; write on a Reset handle |
 | -6 | 6 invalid handle | `fs_read`, `fs_write` or `fs_close` on a handle that is not open (never opened or already closed) |
 
 - `readline(ptr, max)` stores the next input line at `ptr`, without its LF or CRLF, cut to
