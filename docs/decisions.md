@@ -614,3 +614,17 @@ The Crt cursor and horizontal scrolling use screen columns, the status line show
 Buffer column. Row 25 is written to column 79 only, because a character at column 80 of the
 last row scrolls the screen; `Reset` colours the whole screen so that cell matches the bar.
 Reason: simple and always correct; change tracking is the first step if the IDE feels slow.
+
+## 48. IDE Menu: bar, pull-downs, Options placeholder (accepted, #78)
+
+**Decision.** `Menu` draws the bar over View's placeholder (`Paint; DrawBar`) and `Run`
+opens the pull-down for `Keys.MenuLetter` (F10 opens the first). The bar has no Edit title
+(the plan lists no Edit command; Alt-E does nothing): File (New, Open F3, Save F2, Quit
+Alt-X), Run (Run Ctrl-F9), Compile (Compile F9), Options (one placeholder item that shows
+the message `No options yet` and returns `CmdNone`). Inside a menu: Up/Down and Left/Right
+wrap, Enter chooses, Esc and F10 cancel, an item's first letter chooses it, every other key
+is ignored. A pull-down is 20 columns wide, has no border, and closing or switching menus
+repaints the whole screen through View (decision 45) instead of saving what it covered.
+Titles and items are typed-constant record tables. `CmdNew = 7` lives in Menu; `Show` is
+public so a test can look at an open menu (a program blocked in `ReadKey` fails the corpus).
+**Reason.** Smallest menu that covers the plan; no screen-saving code.
