@@ -13,7 +13,7 @@ Integer := Word 40000: -25536
 Word 40000 < Integer -1: FALSE
 Word 40000 > Integer -1: TRUE
 Buf^[Word 60000]: 7
-Buf^[Word 65534]: 9 and [W - 1 + 1]: 9
+Buf^[Word 65520]: 9 and [W - 1 + 1]: 9
 for W := 65530 to 65535 runs 6 times
 for I := 32760 to 32767 runs 8 times
 Word := LongInt 65536: 0

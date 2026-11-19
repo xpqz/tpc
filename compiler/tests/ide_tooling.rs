@@ -1,4 +1,4 @@
-//! Tooling for the IDE (docs/prs/67.md): the draft host imports against the real compiler.wasm,
+//! Tooling for the IDE (decisions 40 to 44): the draft host imports against the real compiler.wasm,
 //! the draft browser key mapping against tools/crt/KEYS.TBL, and the TP 5.0 limit probes
 //! (tests/ide/limits) against this compiler. The tp_only probes are not run here: they record
 //! what only the real Turbo Pascal does.
@@ -61,7 +61,11 @@ fn draft_ide_imports_compile_and_run_with_the_real_compiler() {
 fn limit_probes_give_the_same_output_as_real_turbo_pascal() {
     let scratch = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ide_limits");
     std::fs::create_dir_all(&scratch).unwrap();
-    for name in ["getmem_largest_block", "index_arithmetic_above_32767"] {
+    for name in [
+        "getmem_largest_block",
+        "index_arithmetic_above_32767",
+        "longint_index_above_32767",
+    ] {
         let src = root().join(format!("tests/ide/limits/{name}.pas"));
         let wasm = scratch.join(format!("{name}.wasm"));
         let compile = Command::new(env!("CARGO_BIN_EXE_tp5c"))

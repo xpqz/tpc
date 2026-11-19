@@ -13,8 +13,9 @@ export async function loadCompiler(path) {
 }
 
 // Runs a program inside the IDE's call: a second Host shares the first one's console sink,
-// keys, screen and clock; it starts on a cleared screen (decision 40) and its file changes are
-// merged back into the IDE's file system (what a browser cannot do, see the decision).
+// keys, screen and clock; it starts on a cleared screen (decision 42). Its file changes are
+// discarded, as in the browser; `keepFiles` merges them into the IDE's file system and exists
+// only to show what that would cost.
 export function nestedRun(outer, { keepFiles }) {
   return (module, files) => {
     clearScreen(outer.screen.cells);
@@ -32,6 +33,6 @@ export function nestedRun(outer, { keepFiles }) {
   };
 }
 
-export function addIdeImports(host, compiler, { keepFiles = true } = {}) {
+export function addIdeImports(host, compiler, { keepFiles = false } = {}) {
   Object.assign(host.imports, ideImports(host, { compiler, runModule: nestedRun(host, { keepFiles }) }));
 }

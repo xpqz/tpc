@@ -1,3 +1,4 @@
-block of 65535 bytes, heap shrank by at least that: TRUE
-1 2
+heap shrank by at least 65521: TRUE
+sentinel bytes overwritten: 0
+85 85
 freed: 0

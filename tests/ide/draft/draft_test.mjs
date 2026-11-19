@@ -23,7 +23,7 @@ const expected = (name) => fs.readFileSync(new URL(`${name}.out`, ORACLE), "lati
 const bytes = (text) => Uint8Array.from(text, (c) => c.charCodeAt(0));
 
 // An IDE host: memory the "IDE" owns, a file system, scripted keys.
-function newIde({ files = new Map(), keys = "", keepFiles = true } = {}) {
+function newIde({ files = new Map(), keys = "", keepFiles = false } = {}) {
   const out = [];
   const host = new Host({
     write: (_fd, data) => out.push(Buffer.from(data)),
@@ -36,17 +36,17 @@ function newIde({ files = new Map(), keys = "", keepFiles = true } = {}) {
   return { host, memory, out };
 }
 
-// What the IDE's unit does: name as a Pascal string at 0, text at 64, result record at 40.
+// What the IDE's unit does: name as a Pascal string at 0, result record at 32, text at 64.
 function compile(ide, name, text) {
   const heap = new Uint8Array(ide.memory.buffer);
   heap.set([name.length, ...bytes(name)], 0);
   heap.set(text, 64);
-  ide.host.imports.ide_compile(0, 64, text.length, 40);
-  const view = new DataView(ide.memory.buffer, 40, 19);
-  const nameLength = heap[46];
+  ide.host.imports.ide_compile(0, 64, text.length, 32);
+  const view = new DataView(ide.memory.buffer, 32, 23);
+  const nameLength = heap[32 + 10];
   return {
-    code: view.getInt16(0, true), line: view.getInt16(2, true), col: view.getInt16(4, true),
-    file: String.fromCharCode(...heap.slice(47, 47 + nameLength)),
+    code: view.getInt16(0, true), line: view.getInt32(2, true), col: view.getInt32(6, true),
+    file: String.fromCharCode(...heap.slice(32 + 11, 32 + 11 + nameLength)),
   };
 }
 
@@ -84,15 +84,15 @@ test("a successful compile clears the result record; ide_run before one is -2", 
   assert.deepEqual([r.code, r.line, r.col, r.file], [0, 0, 0, ""]);
 });
 
-test("run: a runtime error ends the run with its code, and the file the program wrote is in the IDE's files", () => {
-  const ide = newIde();
+test("run: a runtime error ends the run with its code; with keepFiles (Node only) the file is kept", () => {
+  const ide = newIde({ keepFiles: true });
   compile(ide, "P.PAS", source("runtime_error_after_writing_a_file"));
   assert.equal(ide.host.imports.ide_run(), 200);
   const written = ide.host.vfs.files.get("OUT.TXT");
   assert.equal(Buffer.from(written.data).toString("latin1"), "written by the program\r\n");
 });
 
-test("run without keepFiles: the program's files are gone (the browser's behaviour)", () => {
+test("run: by default the program's files are gone, in Node as in the browser", () => {
   const ide = newIde({ keepFiles: false });
   compile(ide, "P.PAS", source("runtime_error_after_writing_a_file"));
   ide.host.imports.ide_run();
@@ -108,21 +108,23 @@ test("run: a Crt program starts on a cleared screen and reads the IDE's keyboard
   assert.equal(ide.host.keys.available(), false, "the program consumed the key");
 });
 
-test("canned compiler: the rules of the Pascal stub unit, on the toy editor's own texts", () => {
+// The texts and results are those of the toy editor's run on the real TP 5.0, whose log row
+// reads: Error 3 in P.PAS 2:1; Run -2; Compiled; Run 2; (tests/lang/crt_ide_oracle_pattern_*).
+test("canned compiler gives the results the Pascal stand-in gave under TP 5.0", () => {
   const ide = newIde();
   Object.assign(ide.host.imports, ideImports(ide.host, {
     compiler: cannedCompiler(), runModule: cannedRun }));
-  const bad = compile(ide, "P.PAS", bytes("begin\r\n  ERROR\r\nend.\r\n"));
-  assert.deepEqual([bad.code, bad.line, bad.col, bad.file], [3, 2, 3, "P.PAS"]);
+  const bad = compile(ide, "P.PAS", bytes("begin\r\nERROR\r\nend.\r\n"));
+  assert.deepEqual([bad.code, bad.line, bad.col, bad.file], [3, 2, 1, "P.PAS"]);
   assert.equal(ide.host.imports.ide_run(), -2);
   const good = compile(ide, "P.PAS", bytes("begin\r\nend.\r\n"));
   assert.deepEqual([good.code, good.line, good.col, good.file], [0, 0, 0, ""]);
-  assert.equal(ide.host.imports.ide_run(), 2, "two lines compiled, as the toy's Exit code 2");
+  assert.equal(ide.host.imports.ide_run(), 2, "two lines compiled: the toy's `Run 2`");
 });
 
 test("a bad pointer from the IDE is a host error, not a crash", () => {
   const ide = newIde();
-  assert.throws(() => ide.host.imports.ide_compile(0, 1 << 20, 10, 40), /out of bounds/);
+  assert.throws(() => ide.host.imports.ide_compile(0, 1 << 20, 10, 32), /out of bounds/);
 });
 
 let failed = 0;

@@ -1,17 +1,26 @@
 program LargestBlock;
-{ The largest block GetMem gives (a Word size: 65535) and a byte at both of its ends. }
+{ The largest block the Reference Guide allows, 65521 bytes (64K - $F), allocated after a small
+  one and filled to its last byte: the small block must come out untouched. }
 type
-  Bytes = array[0..65534] of Byte;
+  Bytes = array[0..65520] of Byte;
 var
-  P: ^Bytes;
+  Small: ^Bytes;
+  Big: ^Bytes;
+  I: Word;
+  Hits: Word;
   Before: LongInt;
 begin
+  GetMem(Small, 100);
+  for I := 0 to 99 do Small^[I] := $AA;
   Before := MemAvail;
-  GetMem(P, 65535);
-  WriteLn('block of 65535 bytes, heap shrank by at least that: ', Before - MemAvail >= 65535);
-  P^[0] := 1;
-  P^[65534] := 2;
-  WriteLn(P^[0], ' ', P^[65534]);
-  FreeMem(P, 65535);
+  GetMem(Big, 65521);
+  WriteLn('heap shrank by at least 65521: ', Before - MemAvail >= 65521);
+  for I := 0 to 65520 do Big^[I] := $55;
+  Hits := 0;
+  for I := 0 to 99 do
+    if Small^[I] <> $AA then Inc(Hits);
+  WriteLn('sentinel bytes overwritten: ', Hits);
+  WriteLn(Big^[0], ' ', Big^[65520]);
+  FreeMem(Big, 65521);
   WriteLn('freed: ', Before - MemAvail);
 end.

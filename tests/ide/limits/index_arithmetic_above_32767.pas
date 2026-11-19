@@ -2,7 +2,7 @@ program IndexArithmetic;
 { What Integer and Word do at 32767 and 65535, for the index types of a 64 KB gap buffer
   (range checking off, the default). }
 type
-  Bytes = array[0..65534] of Byte;
+  Bytes = array[0..65520] of Byte;
 var
   Buf: ^Bytes;
   I, J: Integer;
@@ -56,9 +56,9 @@ begin
   W := 60000;
   Buf^[W] := 7;
   WriteLn('Buf^[Word 60000]: ', Buf^[W]);
-  W := 65534;
+  W := 65520;
   Buf^[W] := 9;
-  WriteLn('Buf^[Word 65534]: ', Buf^[W], ' and [W - 1 + 1]: ', Buf^[W - 1 + 1]);
+  WriteLn('Buf^[Word 65520]: ', Buf^[W], ' and [W - 1 + 1]: ', Buf^[W - 1 + 1]);
   Count := 0;
   for W := 65530 to 65535 do Inc(Count);
   WriteLn('for W := 65530 to 65535 runs ', Count, ' times');

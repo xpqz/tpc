@@ -3,7 +3,7 @@
 // Chrome gets them over CDP (Input.dispatchKeyEvent goes straight to the renderer), Firefox
 // over WebDriver BiDi. Neither goes through the browser's own shortcut handling when headless
 // and driven, so "received" here means "the page would see it if the browser let it through";
-// docs/prs/67.md lists what real browsers keep for themselves.
+// decision 41 lists what real browsers keep for themselves.
 // Usage: BROWSER=chrome|firefox node tests/host/browser/chords.mjs
 import { withPage, publishProgram, sleep } from "./chrome.mjs";
 import { loopEchoProgram } from "../browser_helpers.mjs";

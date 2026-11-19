@@ -3,14 +3,16 @@
   canned behaviour, which the runner's canned compiler (tests/ide/canned.mjs) repeats:
     Compile fails with error 3 at the first line that contains the word ERROR (column of its
     first letter, the file named by Name); every other text compiles.
-    Run returns the number of lines of the last compiled text, modulo 256, and draws nothing. }
+    Run returns the number of lines of the last compiled text, modulo 256, and draws nothing;
+    it returns -2 when the last Compile failed or there was none. }
 unit IdeHost;
 
 interface
 
 type
   CompileResult = record
-    Code, Line, Col: Integer;
+    Code: Integer;
+    Line, Col: LongInt;
     FileName: string[12];
   end;
 
@@ -25,6 +27,7 @@ type
 
 var
   LinesCompiled: LongInt;
+  Compiled: Boolean;
 
 function StartsWord(var T: Bytes; At, Len: LongInt): Boolean;
 begin
@@ -38,6 +41,7 @@ var
   I, Line, LineStart: LongInt;
 begin
   T := Text;
+  Compiled := False;
   Result.Code := 0;
   Result.Line := 0;
   Result.Col := 0;
@@ -60,11 +64,12 @@ begin
     end;
   end;
   LinesCompiled := Line - 1;
+  Compiled := Result.Code = 0;
 end;
 
 function Run: Integer;
 begin
-  Run := LinesCompiled mod 256;
+  if Compiled then Run := LinesCompiled mod 256 else Run := -2;
 end;
 
 end.

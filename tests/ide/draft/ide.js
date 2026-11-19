@@ -3,10 +3,11 @@
 //   compiler    { compile(mainName, bytes, files) } (draft/compiler.js)
 //   runModule   (moduleBytes, files) -> exit code: runs a compiled program to its end, on the
 //               shared screen and keyboard, and returns how it ended (-1 when stopped)
-// Record layout of CompileResult in IDE memory (Pascal, packed): Code, Line, Col: Integer
-// (2 bytes each, little endian), FileName: string[12] (length byte, 12 characters).
-const RECORD_BYTES = 19;
-const NAME_AT = 6;
+// Record layout of CompileResult in IDE memory (Pascal, packed, little endian): Code: Integer
+// (2 bytes), Line and Col: LongInt (4 bytes each: a 64 KB buffer of short lines passes 32767
+// lines), FileName: string[12] (length byte, 12 characters).
+const RECORD_BYTES = 23;
+const NAME_AT = 10;
 
 const latin1 = (bytes) => String.fromCharCode(...bytes);
 const filesOf = (vfs) => new Map([...vfs.files].map(([name, file]) => [name, file.data]));
@@ -24,8 +25,8 @@ export function ideImports(host, { compiler, runModule }) {
       const record = host.bytesAt("ide_compile", resultPtr, RECORD_BYTES);
       const view = new DataView(record.buffer, record.byteOffset, RECORD_BYTES);
       view.setInt16(0, outcome.code ?? 0, true);
-      view.setInt16(2, outcome.line ?? 0, true);
-      view.setInt16(4, outcome.col ?? 0, true);
+      view.setInt32(2, outcome.line ?? 0, true);
+      view.setInt32(6, outcome.col ?? 0, true);
       const file = outcome.file ?? "";
       record[NAME_AT] = file.length;
       record.set(Uint8Array.from(file, (c) => c.charCodeAt(0)), NAME_AT + 1);

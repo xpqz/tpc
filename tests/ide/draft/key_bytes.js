@@ -23,7 +23,8 @@ const DEL = 128; // the first byte above ASCII
 // where Option makes a non-ASCII symbol (Option+X is U+2248) the physical key decides.
 function isAltChord({ key, code, altKey, ctrlKey }) {
   if (!altKey || ctrlKey || !/^Key[A-Z]$/.test(code)) return false;
-  const typedSymbol = key.length === 1 && key.charCodeAt(0) < DEL && key.toLowerCase() !== code[3].toLowerCase();
+  const isAscii = key.length === 1 && key.charCodeAt(0) < DEL;
+  const typedSymbol = isAscii && key.toLowerCase() !== code[3].toLowerCase();
   return !typedSymbol;
 }
 

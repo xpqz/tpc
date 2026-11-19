@@ -21,7 +21,7 @@ end.
 
 
 
-Ready; Error 3 in P.PAS; Compiled; Compiled; Exit code 2; Unknown ^K command;
+Ready; Error 3 in P.PAS 2:1; Run -2; Compiled; Run 2; Compiled; Exit code 2; Un
   2: 3  B2 K2  Unknown ^K command
 cursor 3 3
 exit 0

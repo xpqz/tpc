@@ -24,6 +24,7 @@ const
   KeyLeft = $4B00;
   KeyRight = $4D00;
   KeyF9 = $4300;
+  KeyF10 = $4400;
   KeyCtrlF9 = $6600;
   KeyAltX = $2D00;
 
@@ -144,7 +145,7 @@ function Compile: Boolean;
 var
   Text: Flat;
   Result: CompileResult;
-  Digits: string;
+  Digits, Report: string;
   Len: Integer;
 begin
   Len := FlattenText(Text);
@@ -159,7 +160,11 @@ begin
     Row := Result.Line;
     Col := Result.Col;
     Str(Result.Code, Digits);
-    Say('Error ' + Digits + ' in ' + Result.FileName);
+    Report := 'Error ' + Digits + ' in ' + Result.FileName;
+    Str(Result.Line, Digits);
+    Report := Report + ' ' + Digits;
+    Str(Result.Col, Digits);
+    Say(Report + ':' + Digits);
     Compile := False;
   end;
 end;
@@ -173,6 +178,15 @@ begin
   Code := Run;
   Str(Code, Digits);
   Say('Exit code ' + Digits);
+end;
+
+{ Runs whatever was compiled last, without compiling first. }
+procedure RunLastModule;
+var
+  Digits: string;
+begin
+  Str(Run, Digits);
+  Say('Run ' + Digits);
 end;
 
 { The key after ^K; its letter picks the command. }
@@ -214,6 +228,7 @@ begin
       KeyRight: if Col <= Length(Lines[Row]) then Inc(Col);
       KeyF9: if Compile then;
       KeyCtrlF9: RunProgram;
+      KeyF10: RunLastModule;
     else
       if (Key >= 32) and (Key < 127) then Insert(Chr(Key));
     end;
