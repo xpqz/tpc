@@ -478,9 +478,6 @@ impl Parser<'_> {
             let value = self.expr()?;
             return Ok(self.after(Kind::Assign(target, value)));
         }
-        if !matches!(self.ast.kind(target), Kind::Name(_)) {
-            return Err(self.err(code::ERROR_IN_STATEMENT));
-        }
         let (mut args, mut call_at) = (Vec::new(), self.pos());
         if self.sym(b"(") {
             (args, call_at) = self.arguments()?;

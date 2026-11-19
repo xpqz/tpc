@@ -29,8 +29,8 @@ use crate::ast::{Ast, Id, Kind, List, Op, Plan, NO_NAME};
 use crate::diag::{code, Diag};
 use crate::symbols::{Helper, SymbolError, Symbols, HELPERS, MAX_DATA};
 use crate::types::{
-    ConstValue, Field, Intrinsic, ParamType, Routine, Signature, Sym, SymKind, Symbol, Tag, Ty,
-    TypedConst, Types,
+    ConstValue, Field, Intrinsic, Origin, ParamType, Routine, Signature, Sym, SymKind, Symbol, Tag,
+    Ty, TypedConst, Types,
 };
 
 pub struct Info {
@@ -850,9 +850,16 @@ impl Cx<'_> {
                 }
                 let depth = self.symbols.depth() + 1;
                 let result_ptr = self.types.in_memory(signature.result);
-                let builtin = self.symbols.in_system_region();
+                // The runtime sources (System, Crt, Dos) have every token at line 0.
+                let origin = if self.symbols.in_system_region() {
+                    Origin::System
+                } else if self.ast.node(d).line == 0 {
+                    Origin::Unit
+                } else {
+                    Origin::User
+                };
                 self.routines
-                    .push(Routine::new(signature, depth, result_ptr, builtin));
+                    .push(Routine::new(signature, depth, result_ptr, origin));
                 if let Some(parent) = self.symbols.current_routine() {
                     self.routines[parent].has_children = true;
                 }
@@ -1279,6 +1286,11 @@ impl Cx<'_> {
     /// rewritten to what codegen expects: `Invoke`, `Indirect`, `Write`, `Exit`, or the
     /// assignment of a helper's result (see the module comment).
     fn call_statement(&mut self, id: Id, callee: Id, args: List) -> R<()> {
+        if !matches!(self.ast.kind(callee), Kind::Name(_)) {
+            // `a.b;` or `a[i];`: an unknown first name is error 3, else it is no statement.
+            self.expr(callee)?;
+            return Err(self.err(callee, code::ERROR_IN_STATEMENT));
+        }
         let (_, symbol) = self.resolve(callee, self.ast.name_of(callee))?;
         let kind = match symbol.kind {
             SymKind::Intrinsic(i @ (Intrinsic::Write | Intrinsic::WriteLn)) => {
@@ -1312,8 +1324,8 @@ impl Cx<'_> {
             }
             SymKind::Routine(r) if !self.routines[r as usize].is_function => {
                 let params = self.routines[r as usize].params.clone();
-                let builtin = self.routines[r as usize].builtin;
-                self.arguments(id, params, args, false, builtin)?;
+                let origin = self.routines[r as usize].origin;
+                self.arguments(id, params, args, false, origin)?;
                 Kind::Invoke(r, args)
             }
             SymKind::Routine(_) => return Err(self.err(id, code::INVALID_VARIABLE_REFERENCE)),
@@ -1337,10 +1349,10 @@ impl Cx<'_> {
         params: Vec<ParamType>,
         args: List,
         in_expr: bool,
-        builtin: bool,
+        origin: Origin,
     ) -> R<()> {
         let items = self.ast.items_vec(args);
-        match argument_count_error(params.len(), items.len(), in_expr, builtin) {
+        match argument_count_error(params.len(), items.len(), in_expr, origin) {
             Some(code::LEFT_PAREN_EXPECTED) => return Err(self.missing_argument_list(at)),
             Some(error) => return Err(self.err(at, error)),
             None => {}
@@ -1355,7 +1367,7 @@ impl Cx<'_> {
                 self.proc_value(at, param.ty, arg)?;
             } else {
                 self.expr(arg)?;
-                self.argument_assignable(at, param.ty, arg, builtin)?;
+                self.argument_assignable(at, param.ty, arg, origin)?;
             }
         }
         Ok(())
@@ -1372,9 +1384,9 @@ impl Cx<'_> {
     }
 
     /// `assignable` for an argument; TP names the kind of value that a System routine wants.
-    fn argument_assignable(&mut self, at: Id, ty: Ty, arg: Id, builtin: bool) -> R<()> {
+    fn argument_assignable(&mut self, at: Id, ty: Ty, arg: Id, origin: Origin) -> R<()> {
         self.assignable(at, ty, arg).map_err(|d| {
-            let code = if d.code != code::TYPE_MISMATCH || !builtin {
+            let code = if d.code != code::TYPE_MISMATCH || origin != Origin::System {
                 d.code
             } else if self.types.is_str(ty) {
                 code::STRING_EXPRESSION_EXPECTED
@@ -1400,7 +1412,7 @@ impl Cx<'_> {
         in_expr: bool,
     ) -> R<Kind> {
         let (sym, symbol) = self.resolve(callee, self.ast.name_of(callee))?;
-        self.arguments(at, params, args, in_expr, false)?;
+        self.arguments(at, params, args, in_expr, Origin::User)?;
         self.symbols.capture(sym, false);
         self.ast.resolve(callee, Kind::Var(sym), symbol.ty);
         Ok(Kind::Indirect(callee, args))
@@ -1664,13 +1676,13 @@ impl Cx<'_> {
     /// the node TP reports a procedure used as a value at.
     fn function_call(&mut self, e: Id, not_function_at: Id, r: u32, args: List) -> R<(Kind, Ty)> {
         let routine = &self.routines[r as usize];
-        let (is_function, result, builtin) = (routine.is_function, routine.result, routine.builtin);
+        let (is_function, result, origin) = (routine.is_function, routine.result, routine.origin);
         if !is_function {
             return Err(self.err(not_function_at, code::INVALID_PROCEDURE_REFERENCE));
         }
         let params = routine.params.clone();
         let args = self.default_input(e, r, args);
-        self.arguments(e, params, args, true, builtin)?;
+        self.arguments(e, params, args, true, origin)?;
         Ok((Kind::Invoke(r, args), result))
     }
 
@@ -1719,7 +1731,7 @@ impl Cx<'_> {
         if result == Ty::NONE {
             return Err(self.err(callee, code::INVALID_PROCEDURE_REFERENCE));
         }
-        self.arguments(e, params, args, true, false)?;
+        self.arguments(e, params, args, true, Origin::User)?;
         Ok((Kind::Indirect(callee, args), result))
     }
 
@@ -1727,7 +1739,7 @@ impl Cx<'_> {
     /// folded, so it is recognised by its name.
     fn folded_length(&self, callee: Id, r: u32, args: List) -> Option<(Kind, Ty)> {
         let name = &self.ast.names[self.ast.name_of(callee) as usize];
-        if !self.routines[r as usize].builtin || name != b"LENGTH" {
+        if self.routines[r as usize].origin != Origin::System || name != b"LENGTH" {
             return None;
         }
         let Kind::StrLit(s) = self.ast.kind(*self.ast.items(args).first()?) else {
@@ -2069,7 +2081,7 @@ impl Cx<'_> {
         };
         for (arg, wanted) in others {
             self.expr(arg)?;
-            self.argument_assignable(at, wanted, arg, true)?;
+            self.argument_assignable(at, wanted, arg, Origin::System)?;
         }
         let helper = if is_insert {
             Helper::StrInsert
@@ -2093,7 +2105,7 @@ impl Cx<'_> {
         let step = match items.get(1) {
             Some(&n) => {
                 self.expr(n)?;
-                self.argument_assignable(at, Ty::LONGINT, n, true)?;
+                self.argument_assignable(at, Ty::LONGINT, n, Origin::System)?;
                 n
             }
             None => self.ast.typed(Kind::IntLit(1), Ty::INTEGER, at),
@@ -2166,7 +2178,7 @@ impl Cx<'_> {
             .val_type(ty)
             .map_err(|code| self.err(target, code))?;
         self.expr(source)?;
-        self.argument_assignable(at, Ty::STRING, source, true)?;
+        self.argument_assignable(at, Ty::STRING, source, Origin::System)?;
         self.var_arg(at, error_code, Ty::INTEGER)
             .map_err(|d| Diag {
                 code: if d.code == code::TYPE_MISMATCH {
@@ -2199,7 +2211,7 @@ impl Cx<'_> {
         let p = items[0];
         if which == Intrinsic::RunError {
             self.expr(p)?;
-            self.argument_assignable(at, Ty::INTEGER, p, true)?;
+            self.argument_assignable(at, Ty::INTEGER, p, Origin::System)?;
             return Ok(Kind::RunErr(p));
         }
         let ty = self.variable(p)?;
@@ -2210,7 +2222,7 @@ impl Cx<'_> {
         let size = match items.get(1) {
             Some(&size) => {
                 self.expr(size)?;
-                self.argument_assignable(at, Ty::LONGINT, size, true)?;
+                self.argument_assignable(at, Ty::LONGINT, size, Origin::System)?;
                 size
             }
             None => {
@@ -2240,10 +2252,10 @@ impl Cx<'_> {
 
 /// TP's error for the number of arguments in a call, or None if it matches. A routine with
 /// no parameters takes no parentheses: error 85, or 89 inside an expression.
-fn argument_count_error(params: usize, args: usize, in_expr: bool, builtin: bool) -> Option<u16> {
+fn argument_count_error(params: usize, args: usize, in_expr: bool, origin: Origin) -> Option<u16> {
     match (params, args) {
         (0, 0) => None,
-        (0, _) if in_expr && !builtin => Some(code::RIGHT_PAREN_EXPECTED),
+        (0, _) if in_expr && origin == Origin::User => Some(code::RIGHT_PAREN_EXPECTED),
         (0, _) => Some(code::SEMICOLON_EXPECTED),
         (_, 0) => Some(code::LEFT_PAREN_EXPECTED),
         (p, a) if a < p => Some(code::COMMA_EXPECTED),

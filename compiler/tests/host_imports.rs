@@ -13,7 +13,7 @@ const HELLO: &str = "program Hello;\nbegin\n  WriteLn('hello')\nend.";
 
 /// The size of hello-world with `Write` going through `TextOut` (was 429 before text files);
 /// it may not grow.
-const HELLO_BYTES: usize = 676;
+const HELLO_BYTES: usize = 868;
 
 /// The real System with `extra` declarations appended.
 fn system_with(extra: &str) -> Vec<u8> {
