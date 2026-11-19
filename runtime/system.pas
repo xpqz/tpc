@@ -973,6 +973,13 @@ begin
   else if f.Mode < ModeConsoleInput then InOutRes := IoNotOpen
 end;
 
+{ Output is never buffered here (docs/deviations.md D31), so Flush has nothing to write; it only
+  checks, as TP does, that the file is open. A pending error is left alone. }
+procedure Flush(var f: Text);
+begin
+  if (InOutRes = 0) and (f.Mode < ModeInput) then InOutRes := IoNotOpen
+end;
+
 procedure EchoKey(ch: Char);
 begin
   ConsoleWrite(LongInt(@ch), 1)

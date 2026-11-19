@@ -47,6 +47,14 @@ const
   White = 15;
   Blink = 128;
 
+  { Video modes for TextMode and LastMode. }
+  BW40 = 0;
+  CO40 = 1;
+  BW80 = 2;
+  CO80 = 3;
+  Mono = 7;
+  Font8x8 = 256;
+
 var
   TextAttr: Byte;
   WindMin, WindMax: Word;
@@ -71,6 +79,8 @@ function KeyPressed: Boolean;
 procedure Delay(ms: Word);
 procedure Sound(hertz: Word);
 procedure NoSound;
+procedure TextMode(mode: Integer);
+procedure AssignCrt(var f: Text);
 
 implementation
 
@@ -240,6 +250,12 @@ begin
   WhereY := CursorRow - WindowTop + 1
 end;
 
+procedure FullWindow;
+begin
+  WindMin := 0;
+  WindMax := (Columns - 1) + (Rows - 1) * 256
+end;
+
 { An invalid rectangle is ignored. The cursor goes to the new window's top left corner. }
 procedure Window(x1, y1, x2, y2: Byte);
 begin
@@ -280,6 +296,23 @@ end;
 procedure NormVideo;
 begin
   TextAttr := StartAttr
+end;
+
+{ Switching mode starts the screen afresh: normal colours, the whole screen as the window, and
+  the cursor at its top left corner. The screen is always 80 by 25 (docs/deviations.md D44),
+  so the mode is only recorded in LastMode. }
+procedure TextMode(mode: Integer);
+begin
+  LastMode := mode;
+  TextAttr := StartAttr;
+  FullWindow;
+  ClrScr
+end;
+
+{ The Crt screen is the console (an empty file name, decision 50), which Crt has hooked. }
+procedure AssignCrt(var f: Text);
+begin
+  Assign(f, '')
 end;
 
 { The host returns the bytes of ReadKey; an extended key is 0 and then its scan code. }
@@ -350,9 +383,8 @@ end;
 
 begin
   TextAttr := StartAttr;
-  WindMin := 0;
-  WindMax := (Columns - 1) + (Rows - 1) * 256;
-  LastMode := 3;
+  FullWindow;
+  LastMode := CO80;
   CheckBreak := True;
   CheckEof := False;
   CheckSnow := True;

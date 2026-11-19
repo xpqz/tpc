@@ -5,6 +5,10 @@
   FSearch, DiskSize, DiskFree, ChDir, GetFAttr, GetFTime. SearchRec is declared so that
   programs can name it; DosError is declared and never set.
 
+  There is no DOS environment: the program sees none, so GetEnv gives the empty string and
+  EnvCount is 0 (docs/deviations.md D43). DosVersion reports DOS 5.0, the version the
+  oracle runs under.
+
   File names are plain string work. The current directory of every drive is its root, so
   FExpand puts the root of the drive in front of a relative name (the real oracle runs with
   C:\ as its current directory too).
@@ -62,6 +66,10 @@ procedure UnpackTime(Time: LongInt; var T: DateTime);
 procedure FSplit(Path: PathStr; var Dir: DirStr; var Name: NameStr; var Ext: ExtStr);
 function FExpand(Path: PathStr): PathStr;
 procedure GetDir(Drive: Byte; var Path: string);
+function DosVersion: Word;
+function GetEnv(EnvVar: String): String;
+function EnvCount: Integer;
+function EnvStr(Index: Integer): String;
 
 implementation
 
@@ -241,6 +249,27 @@ begin
   if Drive = 0 then
     Drive := 3;
   Path := Chr(64 + Drive) + ':\'
+end;
+
+{ The low byte is the major version, the high byte the minor: DOS 5.0. }
+function DosVersion: Word;
+begin
+  DosVersion := 5
+end;
+
+function GetEnv(EnvVar: String): String;
+begin
+  GetEnv := ''
+end;
+
+function EnvCount: Integer;
+begin
+  EnvCount := 0
+end;
+
+function EnvStr(Index: Integer): String;
+begin
+  EnvStr := ''
 end;
 
 end.

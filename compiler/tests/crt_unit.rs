@@ -58,9 +58,9 @@ fn crt_corpus(kind: &str) -> PathBuf {
         }
     }
     let want = match kind {
-        "lang" => 46,
+        "lang" => 51,
         "rt" => 4,
-        _ => 12,
+        _ => 13,
     };
     assert_eq!(count, want, "crt_* programs in tests/{kind}");
     dir

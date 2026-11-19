@@ -180,6 +180,7 @@ pub enum Intrinsic {
     Sqr,
     Exit,
     SizeOf,
+    Addr,
     Concat,
     Delete,
     Insert,
@@ -223,7 +224,10 @@ impl Intrinsic {
     /// An intrinsic that is a function (`Random` takes none or one argument), never a statement
     /// or a variable.
     pub fn is_function(self) -> bool {
-        self.unary_op().is_some() || self.is_real_function() || self == Intrinsic::Random
+        self.unary_op().is_some()
+            || self.is_real_function()
+            || self == Intrinsic::Random
+            || self == Intrinsic::Addr
     }
 
     /// The operator behind an intrinsic function of one argument.
