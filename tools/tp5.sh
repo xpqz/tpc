@@ -1,8 +1,17 @@
 #!/bin/sh
-# Usage: tools/tp5.sh prog.pas
-# Compiles and runs prog.pas with the real Turbo Pascal 5.0 compiler (TPC.EXE) under
-# DOSBox-X. Prints the program's output (LF line endings, exit 0), or the compiler's
-# `P.PAS(LINE): Error N: Message.` line (exit 1). The TP 5.0 files are not in the repo;
+# Usage: tools/tp5.sh DIR/NAME.pas
+# Compiles and runs NAME.pas (as P.PAS) with the real Turbo Pascal 5.0 compiler (TPC.EXE)
+# under DOSBox-X. Prints the program's output (LF line endings, exit 0), or the compiler's
+# `FILE(LINE): Error N: Message.` line (exit 1), where FILE is P.PAS or the unit or
+# include file that contains the error.
+#
+# Multi-file fixtures (decision 26): the files of the directory DIR/NAME/ are copied next
+# to the program, so units and include files are found (`tpc /M` compiles used units from
+# source) and data files can be opened by the program. Files named *.PAS and *.INC are
+# given CRLF line endings, as the compiler expects; all others are copied byte for byte.
+# If DIR/NAME.in exists, it is the program's stdin (LF is converted to CRLF); stdin and
+# stdout are both redirected, which DOSBox-X supports. Without it stdin is not redirected.
+# Files the program creates are discarded. The TP 5.0 files are not in the repo;
 # see docs/references.md. TP5_HOME overrides their location. A run is killed after
 # TP5_TIMEOUT seconds (default 60) and reported as a timeout (exit 3).
 set -e
@@ -13,8 +22,20 @@ w=$(mktemp -d "${TMPDIR:-/tmp}/tp5.XXXXXX")
 trap 'rm -rf "$w"' EXIT
 cp "$home/TPC.EXE" "$home/TURBO.TPL" "$w/"
 sed 's/$/\r/' "$1" > "$w/P.PAS"
-dosbox-x -silent -nogui -nomenu -exit -c "mount c $w" -c "c:" -c "tpc P.PAS > TPC.TXT" \
-  -c "if exist P.EXE P > RUN.TXT" >/dev/null 2>&1 &
+base=${1%.pas}
+if [ -d "$base" ]; then
+  cp "$base"/* "$w/"
+  for f in "$w"/*.[Pp][Aa][Ss] "$w"/*.[Ii][Nn][Cc]; do
+    [ -f "$f" ] && sed 's/$/\r/' "$f" > "$f.crlf" && mv "$f.crlf" "$f"
+  done
+fi
+run="P > RUN.TXT"
+if [ -f "$base.in" ]; then
+  sed 's/$/\r/' "$base.in" > "$w/P.IN"
+  run="P < P.IN > RUN.TXT"
+fi
+dosbox-x -silent -nogui -nomenu -exit -c "mount c $w" -c "c:" -c "tpc /M P.PAS > TPC.TXT" \
+  -c "if exist P.EXE $run" >/dev/null 2>&1 &
 pid=$!
 n=0
 while kill -0 $pid 2>/dev/null; do
@@ -27,6 +48,7 @@ done
 if [ -f "$w/P.EXE" ]; then
   tr -d '\r' < "$w/RUN.TXT"
 else
-  tr -d '\r' < "$w/TPC.TXT" | grep -ao 'P.PAS([0-9]*): Error .*'
+  # TPC prefixes the line with a progress `NAME(0)` per file compiled, separated by CR.
+  tr -d '\r' < "$w/TPC.TXT" | grep -ao '[A-Za-z0-9_]*\.[A-Za-z]*([0-9]*): Error .*'
   exit 1
 fi

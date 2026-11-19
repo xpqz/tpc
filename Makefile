@@ -9,6 +9,8 @@ build:
 test:
 	cargo test --no-fail-fast
 	sh tests/tools/loc_test.sh
+	sh tests/tools/tp5_test.sh
+	sh tests/tools/oracle_test.sh
 
 fmt:
 	cargo fmt

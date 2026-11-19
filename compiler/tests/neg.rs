@@ -82,3 +82,40 @@ fn real_compiler_diagnostic_mismatch_is_reported() {
     let f = check_neg(&fixture("neg/real_wrong"), &real_compile);
     assert_eq!(f, ["real_wrong: exit 1, got `3 1`, want `5 1`"]);
 }
+
+#[test]
+fn error_in_another_file_needs_the_file_name_in_the_err_file() {
+    assert_eq!(neg("unit_error"), Vec::<String>::new());
+}
+
+#[test]
+fn err_without_file_does_not_match_an_error_in_a_unit() {
+    assert_eq!(
+        neg("unit_error_without_file"),
+        ["p: exit 1, got `3 7 BAD.PAS`, want `3 7`"]
+    );
+}
+
+#[test]
+fn err_with_file_does_not_match_an_error_in_the_main_program() {
+    assert_eq!(
+        neg("main_error_with_file"),
+        ["p: exit 1, got `3 7`, want `3 7 P.PAS`"]
+    );
+}
+
+#[test]
+fn wrong_file_is_reported() {
+    assert_eq!(
+        neg("unit_error_wrong_file"),
+        ["p: exit 1, got `3 7 BAD.PAS`, want `3 7 OTHER.PAS`"]
+    );
+}
+
+#[test]
+fn wrong_line_in_a_unit_is_reported() {
+    assert_eq!(
+        neg("unit_error_wrong_line"),
+        ["p: exit 1, got `3 7 BAD.PAS`, want `3 8 BAD.PAS`"]
+    );
+}
