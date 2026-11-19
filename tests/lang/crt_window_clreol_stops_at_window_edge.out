@@ -1,0 +1,29 @@
+abcdefghijklmnopqrstuvwxyz0123456789
+abcdefghijklmnopqrstuvwxyz0123456789
+abcdef3,2   mnopqrstuvwxyz0123456789
+abcd        mnopqrstuvwxyz0123456789
+abcdefghijklmnopqrstuvwxyz0123456789
+abcdefghijklmnopqrstuvwxyz0123456789
+
+
+
+after
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+cursor 6 10
+exit 0
+attr 4 5 8 47
+attr 10 1 5 47

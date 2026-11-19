@@ -1,0 +1,30 @@
+left margin kept
+                                                 1 2 3 4 5 6
+
+
+                   line 6
+                   line 7
+                   line 8
+                   line 9
+                   end 4,5
+
+
+
+
+
+1,15
+
+
+
+
+
+
+
+
+bottom kept
+
+cursor 5 15
+exit 0
+attr 2 50 11 1F
+attr 3 50 1 1F
+attr 15 1 4 1F

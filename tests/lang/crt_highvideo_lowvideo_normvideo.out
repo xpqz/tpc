@@ -1,0 +1,32 @@
+start 18
+high 26
+low 18
+high twice 26
+norm 7
+low 228
+norm 7
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+cursor 1 8
+exit 0
+attr 1 1 8 12
+attr 2 1 7 1A
+attr 3 1 6 12
+attr 4 1 13 1A
+attr 6 1 7 E4
