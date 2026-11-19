@@ -1,0 +1,32 @@
+1    -7 -123456 TRUE    x
+   3.142 abcd
+
+
+
+
+
+
+
+                                            -123456  TRUEtai
+                                       l-that-wraps-around
+                                       65535 65
+
+
+
+
+
+
+
+
+
+
+
+
+
+cursor 48 12
+exit 0
+attr 1 1 25 1E
+attr 2 1 13 1E
+attr 10 40 21 1F
+attr 11 40 19 1F
+attr 12 40 8 1F
