@@ -34,6 +34,8 @@ pub struct Tok {
     pub real: f64,
 }
 
+/// The reserved words, upper case and space separated; `word` scans the list for each
+/// identifier, which is fast enough for source files of this size.
 const KEYWORDS: &str = "\
     AND ARRAY ASM BEGIN CASE CONST DIV DO DOWNTO ELSE END FILE FOR FUNCTION GOTO IF \
     IMPLEMENTATION IN INLINE INTERFACE LABEL MOD NIL NOT OF OR PACKED PROCEDURE PROGRAM RECORD \

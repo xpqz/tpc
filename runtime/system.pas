@@ -1,3 +1,16 @@
+{ The System unit: the declaration part that is parsed ahead of every program, so its routines
+  are visible to all of them. Only the routines a program reaches are compiled in.
+
+  Two kinds of routine live here. Some are standard Pascal and Turbo Pascal routines (Length,
+  Copy, Pos, UpCase, ...). The others are helpers that the compiler calls on its own, found by
+  name after this part is checked (compiler/src/check.rs, `Helper`): AbsLong, RangeChk, StrCat,
+  StrCmp, StrAssign, StrInt, ValLong, ValReal, StrDelete, StrInsert, SetOp, SetAdd, SetIn,
+  SetCmp, HeapGet, HeapPut, HeapMark, HeapRelease. HeapOrg is also found by name.
+
+  Strings are length-prefixed byte arrays, so a `var` parameter of type String accepts a string
+  of any declared size and the helpers read and write the length in byte 0. A function that
+  returns a String receives the address of its result as a hidden first parameter. }
+
 var
   ExitCode: Integer;
 
@@ -91,7 +104,8 @@ begin
   d[0] := Chr(n)
 end;
 
-{ Str(v:w, s) of an integer is s := StrInt(v, w, max), max the capacity of s: a wider field is
+{ Digits are produced last first into r, then copied reversed into t after the padding.
+  Str(v:w, s) of an integer is s := StrInt(v, w, max), max the capacity of s: a wider field is
   cut to it. }
 function StrInt(v: LongInt; w, max: Integer): String;
 var r, t: String; i, n, pad, d: Integer; neg: Boolean;
@@ -322,15 +336,28 @@ end;
 { Heap (decision 18): from HeapOrg up to the stack limit, 8-byte blocks. HeapOrg and HeapPtr are
   adjacent and both set to the end of static data by the compiler. A free block holds its size
   and the address of the next free block; the list is first-fit and unordered. }
-const HeapLimit = 983040;
+const HeapLimit = 983040; { the 64 KB below the top of memory belong to the stack }
 type PLong = ^LongInt;
 var HeapOrg, HeapPtr, FreeList: LongInt;
 
+function BlockSize(block: LongInt): LongInt;
+begin
+  BlockSize := PLong(block)^
+end;
+
+function NextFree(block: LongInt): LongInt;
+begin
+  NextFree := PLong(block + 4)^
+end;
+
+{ Removes the free block that follows `prev` (the list head when prev is 0), whose successor
+  is `next`. }
 procedure HeapUnlink(prev, next: LongInt);
 begin
   if prev = 0 then FreeList := next else PLong(prev + 4)^ := next
 end;
 
+{ Blocks are a multiple of 8 bytes, at least 8: (n + 7) and -8 rounds up. }
 function HeapSize(n: LongInt): LongInt;
 begin
   n := (n + 7) and -8;
@@ -347,20 +374,20 @@ begin
   cur := FreeList;
   while cur <> 0 do
   begin
-    if PLong(cur)^ >= n then
+    if BlockSize(cur) >= n then
     begin
-      if PLong(cur)^ > n then
+      if BlockSize(cur) > n then
       begin
-        PLong(cur + n)^ := PLong(cur)^ - n;
-        PLong(cur + n + 4)^ := PLong(cur + 4)^;
+        PLong(cur + n)^ := BlockSize(cur) - n;
+        PLong(cur + n + 4)^ := NextFree(cur);
         HeapUnlink(prev, cur + n)
       end
-      else HeapUnlink(prev, PLong(cur + 4)^);
+      else HeapUnlink(prev, NextFree(cur));
       HeapGet := Pointer(cur);
       Exit
     end;
     prev := cur;
-    cur := PLong(cur + 4)^
+    cur := NextFree(cur)
   end;
   if HeapLimit - HeapPtr < n then RunError(203);
   HeapGet := Pointer(HeapPtr);
@@ -394,8 +421,8 @@ begin
   cur := FreeList;
   while cur <> 0 do
   begin
-    if cur >= mark then HeapUnlink(prev, PLong(cur + 4)^) else prev := cur;
-    cur := PLong(cur + 4)^
+    if cur >= mark then HeapUnlink(prev, NextFree(cur)) else prev := cur;
+    cur := NextFree(cur)
   end
 end;
 
@@ -406,8 +433,8 @@ begin
   cur := FreeList;
   while cur <> 0 do
   begin
-    n := n + PLong(cur)^;
-    cur := PLong(cur + 4)^
+    n := n + BlockSize(cur);
+    cur := NextFree(cur)
   end;
   MemAvail := n
 end;
@@ -419,8 +446,8 @@ begin
   cur := FreeList;
   while cur <> 0 do
   begin
-    if PLong(cur)^ > n then n := PLong(cur)^;
-    cur := PLong(cur + 4)^
+    if BlockSize(cur) > n then n := BlockSize(cur);
+    cur := NextFree(cur)
   end;
   MaxAvail := n
 end;

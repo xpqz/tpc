@@ -164,10 +164,10 @@ pub fn push_dec(out: &mut String, n: i64) {
 /// `NAME(LINE,COL): Error N: MESSAGE`, without a trailing newline.
 pub fn render(name: &str, d: &Diag) -> String {
     let mut s = String::from(name);
-    for (open, n) in [("(", d.line), (",", d.col)] {
-        s.push_str(open);
-        push_dec(&mut s, n as i64);
-    }
+    s.push('(');
+    push_dec(&mut s, d.line as i64);
+    s.push(',');
+    push_dec(&mut s, d.col as i64);
     s.push_str("): Error ");
     push_dec(&mut s, d.code as i64);
     s.push_str(": ");
