@@ -666,3 +666,10 @@ User direction: the checker may borrow from components with spare lines. Checker
 the total at 15,000. The plan's checkpoint (pair at most 5,200) is unchanged. Readability
 still comes first (decision 31): the extra room is for Phase 8's compatibility work, not
 for denser code elsewhere.
+
+## 52. Rebalance: 200 lines from the IDE to the Pascal runtime
+
+Under the user's borrowing rule (decision 51): the IDE is feature-complete at 1,378 lines and
+its plan checkpoint stops features at 2,200, so its limit goes from 2,500 to 2,300; the
+System/Crt/Dos runtime (1,396 of 1,500 after the Dos additions, with `Random` and the
+empty-name `Assign` still to come) goes from 1,500 to 1,700. Total unchanged at 15,000.
