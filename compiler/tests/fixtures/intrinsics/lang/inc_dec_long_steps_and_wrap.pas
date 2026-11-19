@@ -1,0 +1,44 @@
+program IncDecWrap;
+var i: Integer; l: LongInt; w: Word; b: Byte; k: Integer;
+begin
+  i := 100;
+  l := 70000;
+  Inc(i, l);
+  WriteLn(i);
+  l := 5;
+  w := 65535;
+  Inc(l, w);
+  WriteLn(l);
+  Dec(l, w);
+  WriteLn(l);
+  l := -2147483647;
+  Dec(l, 2);
+  WriteLn(l);
+  Inc(l, 2);
+  WriteLn(l);
+  w := 3;
+  Dec(w, 5);
+  WriteLn(w);
+  Inc(w, 2);
+  WriteLn(w);
+  b := 3;
+  Dec(b, 5);
+  WriteLn(b);
+  k := 0;
+  while k < 5 do Inc(k);
+  WriteLn(k);
+  repeat Dec(k, 2) until k < 0;
+  WriteLn(k);
+  i := 3;
+  Inc(i, Ord('A') - Ord('a'));
+  WriteLn(i);
+  Inc(i, Hi(1000) * 2);
+  WriteLn(i);
+  Inc(i, -i);
+  WriteLn(i);
+  b := 200;
+  Inc(b, 100);
+  WriteLn(b);
+  Dec(b, 1000);
+  WriteLn(b)
+end.
