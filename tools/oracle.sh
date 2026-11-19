@@ -1,7 +1,8 @@
 #!/bin/sh
 # Re-derives every corpus expectation with the real TP 5.0 (tools/tp5.sh) and reports
 # differences. Covers tests/{lang,abi,neg} and the per-feature fixture sets under
-# compiler/tests/fixtures/*/{lang,neg}. .out must equal TP5 output; .err must equal TP5's
+# compiler/tests/fixtures/*/{lang,neg,rt}. Runtime-error programs drop TP5's
+# " at XXXX:YYYY." suffix, as the runner prints `Runtime error N` only. .out must equal TP5 output; .err must equal TP5's
 # "N LINE", except unsupported_* (TP5 accepts or differs by design).
 cd "$(dirname "$0")/.." || exit 2
 bad=0
@@ -10,6 +11,13 @@ NEG="tests/neg $(ls -d compiler/tests/fixtures/*/neg | grep -v fixtures/neg)"
 for d in $LANG; do
   for f in "$d"/*.pas; do
     tools/tp5.sh "$f" > tmp/oracle.out 2>&1
+    cmp -s tmp/oracle.out "${f%.pas}.out" || { echo "DIFF $f"; bad=1; }
+  done
+done
+RT="tests/rt $(ls -d compiler/tests/fixtures/*/rt 2>/dev/null | grep -v fixtures/rt)"
+for d in $RT; do
+  for f in "$d"/*.pas; do
+    tools/tp5.sh "$f" | sed -E 's/(Runtime error [0-9]+) at [0-9A-F]{4}:[0-9A-F]{4}\.$/\1/' > tmp/oracle.out 2>&1
     cmp -s tmp/oracle.out "${f%.pas}.out" || { echo "DIFF $f"; bad=1; }
   done
 done

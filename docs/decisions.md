@@ -274,3 +274,42 @@ size.
 `Dispose` of a pointer already disposed is runtime error 204 in TP 5.0; detecting it needs
 free-list bookkeeping beyond the plan's allocator. Not detected (deviation D13).
 `Dispose(nil)`, `FreeMem(nil, n)` and pointers outside the heap are 204, as in TP 5.0.
+
+## 26. Multi-file test fixtures
+
+**Decision.** A test program `DIR/NAME.pas` may have a sibling directory `DIR/NAME/` with
+auxiliary files (units, include files, data files; DOS 8.3 upper-case names) and a
+sibling `DIR/NAME.in` used as console input. `tools/tp5.sh`, `tools/oracle.sh`, the test
+drivers and `tests/run.mjs` all use this convention: the auxiliary files are available to
+the compiler (units, includes) and to the program (data files, via the runner's
+directory-backed VFS); `.in` is stdin. Program-created files are observed only by the
+program reading them back and printing.
+
+## 27. The compiler receives all files before compiling
+
+**Decision.** The host registers every source file (units, includes) by name before
+calling `compile`; the compiler looks units and includes up in that table and never calls
+back into the host. The wasm API gains `add_file(name_ptr, name_len, src_ptr, src_len)`
+(plan §3 amended); the native CLI registers the files in the input's directory.
+**Reason.** `ffi.rs` holds its state borrow for all of `compile`; a re-entrant callback
+would abort, and a pre-registered table is simpler.
+
+## 28. Diagnostics carry a file
+
+**Decision.** `Diag` gains a file index (0 = the main program); the CLI prints
+`FILE(LINE,COL): Error N: MESSAGE` with the file's own name; the wasm API gains
+`err_file()` returning the registered index. `.err` files keep `N LINE` for errors in the
+main program and use `N LINE FILE` for errors in another file. System stays line 0.
+
+## 29. Host imports declared in runtime sources
+
+**Decision.** A routine declared `external` in an embedded runtime source (System, later
+Crt and Dos) becomes an import from module `host` with the routine's name, emitted only
+when reachable (DCE). This replaces per-import index shifts. `external` in user code stays
+error 200.
+**Reason.** Phase 5 and 6 add about a dozen host imports; one mechanism is shorter.
+
+## 30. Phase 5 checker allowance
+
+About 300 checker lines for the whole phase (decision 22 pacing); loading, ordering,
+cycles, includes and conditionals live in `units.rs` (Driver component, ~850 lines free).
