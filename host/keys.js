@@ -25,7 +25,9 @@ export function pushKeys(queue, bytes) {
 export const keyPressed = (queue) =>
   Atomics.load(queue, HEAD) !== Atomics.load(queue, TAIL) ? 1 : 0;
 
-// Crt's ReadKey: sleeps until a key is queued, then takes it.
+// Crt's ReadKey: sleeps until a key is queued, then takes it. Atomics.wait returns at once
+// when TAIL no longer equals `head`, so a key pushed between the check and the wait is not
+// missed.
 export function readKey(queue) {
   const head = Atomics.load(queue, HEAD);
   while (Atomics.load(queue, TAIL) === head) Atomics.wait(queue, TAIL, head);
@@ -40,7 +42,7 @@ const EXTENDED = { ArrowUp: 72, ArrowLeft: 75, ArrowRight: 77, ArrowDown: 80, Ho
   PageUp: 73, PageDown: 81, Insert: 82, Delete: 83 };
 const FUNCTION_KEY = /^F([1-9]|10)$/;
 const F1_SCAN = 59;
-const DEL = 128; // the first byte above ASCII
+const FIRST_HIGH_CODE = 128; // the first byte above ASCII
 
 // The bytes ReadKey returns for a keydown event; none for keys a DOS program never sees.
 export function keyBytes({ key, ctrlKey }) {
@@ -51,7 +53,7 @@ export function keyBytes({ key, ctrlKey }) {
   if (key.length !== 1) return [];
   const code = key.charCodeAt(0);
   if (ctrlKey && /[a-z]/i.test(key)) return [(code | 0x20) - 96];
-  if (code < DEL) return [code];
-  const cp437 = CP437.indexOf(key, DEL);
+  if (code < FIRST_HIGH_CODE) return [code];
+  const cp437 = CP437.indexOf(key, FIRST_HIGH_CODE);
   return cp437 < 0 ? [] : [cp437];
 }

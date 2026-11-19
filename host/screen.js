@@ -5,18 +5,17 @@
 // and attribute state live in the Crt unit; this model only stores what Crt draws. The test
 // runner prints it with tests/screen_dump.mjs.
 import { HostError } from "./error.js";
-import { COLS, ROWS, CURSOR, GRID_BYTES, DEFAULT_ATTR, clearScreen } from "./terminal.js";
+import {
+  COLS, ROWS, CURSOR, GRID_BYTES, DEFAULT_ATTR, BEL, BS, LF, CR, cellOffset, clearScreen,
+} from "./terminal.js";
 
 const BLANK = 0x20;
 const OP_PUT = 0;
 const OP_SCROLL_UP = 1;
 const OP_SCROLL_DOWN = 2;
 const OP_CURSOR = 3;
-const BEL = 7;
-const BS = 8;
-const LF = 10;
-const CR = 13;
 
+// Operands of `screen` are 16-bit words that pack two bytes.
 const low = (word) => word & 0xff;
 const high = (word) => (word >> 8) & 0xff;
 
@@ -37,7 +36,7 @@ export class Screen {
     if (col < 0 || col >= COLS || row < 0 || row >= ROWS) {
       throw new HostError(`host.screen: cell (${col}, ${row}) is off the screen`);
     }
-    return (row * COLS + col) * 2;
+    return cellOffset(col, row);
   }
 
   put(col, row, char, attr) {

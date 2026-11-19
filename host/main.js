@@ -1,5 +1,16 @@
 // The page: owns the shared screen and key queue, starts and stops the program Worker.
 // `?wasm=URL` names the program to run.
+//
+// How the browser host fits together. Two threads: this page and a Worker (worker.js) that
+// runs the compiled program. They share two SharedArrayBuffers and send no messages while
+// the program runs:
+//   screen grid  the Worker's Screen writes cells (a Crt program draws them itself); the page
+//                repaints the grid every animation frame (terminal.js)
+//   key ring     the page pushes the bytes of each keydown (keys.js); the program's `readkey`
+//                import sleeps in Atomics.wait while the ring is empty and the page wakes it
+//                with Atomics.notify
+// A synchronous program cannot be interrupted, so Stop is Worker.terminate(), which ends even
+// a program blocked in `readkey` or spinning. Only the end of the run comes back as a message.
 import { Terminal, GRID_BYTES, clearScreen } from "./terminal.js";
 import { newKeyQueue, pushKeys, keyBytes } from "./keys.js";
 

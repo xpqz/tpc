@@ -5,7 +5,10 @@
 //   input             has readLine(max), the console line source (null at the end)
 //   files             maps file names to bytes, the starting file system (see vfs.js)
 //   clock             { nowMs(), advance(ms) }: the local time in milliseconds since
-//                     1970-01-01 00:00:00, and a way to move it forward (`sleep`)
+//                     1970-01-01 00:00:00, and a way to move it forward (`sleep`). The test
+//                     runner's clock is virtual: `advance` only adds to the reading and
+//                     nothing waits, so `Delay` is instant and a test's time is repeatable.
+//                     The browser's clock is real: `advance` waits.
 //   keys              { available(), next() }: the keyboard as ReadKey bytes; `next` blocks,
 //                     or returns null when no key can come any more
 //   screen            the Screen grid (default: a private one), kept as `host.screen`; a
@@ -25,14 +28,11 @@ class Halt {
 }
 
 const MS_PER_DAY = 86400000;
-const LATIN1 = (bytes) => String.fromCharCode(...bytes);
-const TEXT = (string) => Uint8Array.from(string, (c) => c.charCodeAt(0));
+const latin1 = (bytes) => String.fromCharCode(...bytes);
+const text = (string) => Uint8Array.from(string, (c) => c.charCodeAt(0));
 
 // Exit code of a program that reads a key after the scripted keys ran out.
 export const KEYS_EXHAUSTED = 255;
-
-// Imports no environment provides yet.
-const UNAVAILABLE = ["compile"];
 
 export class Host {
   constructor({ write, input, files = null, clock, keys, screen = new Screen() }) {
@@ -70,7 +70,7 @@ export class Host {
   }
 
   reportRuntimeError(code) {
-    this.sink(1, TEXT(`Runtime error ${String(code).padStart(3, "0")}\n`));
+    this.sink(1, text(`Runtime error ${String(code).padStart(3, "0")}\n`));
   }
 
   // A view of `len` bytes of program memory at `ptr`; the view is only valid until the
@@ -83,7 +83,8 @@ export class Host {
   }
 
   // `time(0)` takes a reading of the clock and returns its days; 1 and 2 return the seconds
-  // since midnight and the hundredths of a second of that same reading (docs/abi.md).
+  // since midnight and the hundredths of a second of that same reading (docs/abi.md), so the
+  // date and time a program fetches in three calls agree.
   time(what) {
     if (what === 0) this.reading = this.clock.nowMs();
     const msOfDay = this.reading % MS_PER_DAY;
@@ -94,7 +95,7 @@ export class Host {
   }
 
   makeImports() {
-    const imports = {
+    return {
       time: (what) => this.time(what),
       sleep: (ms) => this.clock.advance(ms),
       screen: (op, a, b, c) => this.screen.apply(op, a, b, c),
@@ -119,7 +120,7 @@ export class Host {
         throw new Halt(code);
       },
       fs_open: (namePtr, nameLen, mode) => {
-        const name = LATIN1(this.bytesAt("fs_open", namePtr, nameLen));
+        const name = latin1(this.bytesAt("fs_open", namePtr, nameLen));
         return this.vfs.open(name, mode);
       },
       fs_read: (handle, ptr, len) => {
@@ -129,9 +130,8 @@ export class Host {
         target.set(chunk);
         return chunk.length;
       },
-      fs_write: (handle, ptr, len) => {
-        return this.vfs.write(handle, this.bytesAt("fs_write", ptr, len).slice());
-      },
+      fs_write: (handle, ptr, len) =>
+        this.vfs.write(handle, this.bytesAt("fs_write", ptr, len).slice()),
       fs_close: (handle) => this.vfs.close(handle),
       readline: (ptr, max) => {
         const target = this.bytesAt("readline", ptr, max);
@@ -140,12 +140,10 @@ export class Host {
         target.set(line);
         return line.length;
       },
+      // No environment provides the compiler yet.
+      compile: () => {
+        throw new HostError("host import compile not available in test runner");
+      },
     };
-    for (const name of UNAVAILABLE) {
-      imports[name] = () => {
-        throw new HostError(`host import ${name} not available in test runner`);
-      };
-    }
-    return imports;
   }
 }
