@@ -1806,6 +1806,7 @@ impl Cx<'_> {
                 None => return Err(self.err(e, code::RIGHT_PAREN_EXPECTED)),
             },
             SymKind::Intrinsic(Intrinsic::SizeOf) => self.size_of(e, args)?,
+            SymKind::Intrinsic(Intrinsic::Addr) => self.addr_call(e, args)?,
             SymKind::Intrinsic(i) if i.is_real_function() => self.real_function(e, i, args)?,
             SymKind::Intrinsic(Intrinsic::Concat) => self.concat(e, args)?,
             SymKind::Intrinsic(Intrinsic::Random) => self.random_call(e, args)?,
@@ -1992,6 +1993,15 @@ impl Cx<'_> {
         }
         let node = self.ast.node(sum);
         Ok((node.kind, node.ty))
+    }
+
+    /// `Addr(x)` is `@x`: the checker builds the same address-of node and checks it the same way.
+    fn addr_call(&mut self, at: Id, args: List) -> R<(Kind, Ty)> {
+        let items = self.ast.items_vec(args);
+        self.expect_arg_count(at, items.len(), 1, 1)?;
+        let address = self.ast.typed(Kind::AddrOf(items[0]), Ty::POINTER, at);
+        self.expr(address)?;
+        Ok((self.ast.kind(address), Ty::POINTER))
     }
 
     /// `SizeOf(type name or variable)`, a constant.

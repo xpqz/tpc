@@ -1,0 +1,31 @@
+to the screen
+abc
+4 2
+
+         next0
+         12 3.5 TRUE
+         0
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+cursor 10 8
+exit 0
+attr 5 10 5 0E
+attr 6 10 11 0E
+attr 7 10 1 0E
+attr 8 10 31 0E

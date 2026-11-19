@@ -99,7 +99,7 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
-| D32 | Crt names left out | `TextMode`, `LastMode`, `AssignCrt` and the mode constants `BW40` to `Font8x8` exist | They are error 3 (Unknown identifier) | No text modes: the screen is always 80x25 colour. `CheckBreak`, `CheckEof`, `CheckSnow`, `DirectVideo` exist as variables and change nothing |
+| D32 | (retired by #99) Crt names left out | `TextMode`, `LastMode`, `AssignCrt` and the mode constants `BW40` to `Font8x8` exist | They exist now: see D41 (`LastMode`, `TextMode`, the mode constants) and D44 | The screen is always 80x25 colour. `CheckBreak`, `CheckEof`, `CheckSnow`, `DirectVideo` exist as variables and change nothing |
 | D33 | Sound and ReadLn length | `Sound` makes a tone; a `ReadLn` line is at most 127 characters | `Sound` and `NoSound` do nothing; the line editor takes up to 254 characters (as D29) | |
 | D34 | A parameterless function called with arguments inside `if`, `[]`, `for` bounds or `case` | Error 40, 93, 58 or 54 (the next token the construct expects) | Error 85 | Matching needs an expected-token context through `expr` (#81); assignment and argument positions match TP |
 | D35 | DOS device names in Assign (COM1, LPT1, PRN, AUX, CON, NUL) | Devices | Ordinary file names | Decision 50 |
@@ -117,7 +117,7 @@ D5 to D7 apply to what `SizeOf` and memory layout reveal. Intermediate-expressio
 |---|---|---|---|---|
 | D38 | `{$A B D F L O S V}` switches and `{$M stack,heapmin,heapmax}` | Change code generation, the stack and the heap | Checked as TP checks them (stack 1024 to 65520, heap sizes 0 to 655360) and ignored | `{$N+}` and `{$E+}`, which TP accepts, stay error 200 (8087 code is omitted); their `-` forms are accepted and ignored; other letters are error 17 as in TP, wherever they stand in a list (an `E+` before a bad letter does not hide it). Odd forms TP tolerates (`{$A++}`, `{$A+B-}`, a `;` between the `$M` numbers) are error 17 here |
 | D40 | `SetTextBuf(f, buf[, size])` | Gives the file a program-supplied buffer | Checked as TP checks it (a Text variable, any variable, an optional Word size) and ignored: buffering is internal to System. Output is the same unless the program relies on the buffer's contents | `lang/settextbuf_with_and_without_size_is_ignored` |
-| D41 | `LastMode` and `TextMode` | `LastMode` is the video mode before the program started; `TextMode(m)` switches mode, clears the screen and sets `LastMode` to `m` | `LastMode` is a Word variable fixed at 3 (`CO80`); `TextMode` is omitted (error 3) | `lang/swag_crt_lastmode` |
+| D41 | `LastMode` at start | `LastMode` is the video mode before the program started | A Word variable that starts as 3 (`CO80`); `TextMode(m)` sets it to `m` (see D48) | `lang/swag_crt_lastmode` |
 | D42 | A file assigned the empty name (`Assign(f, '')`) | Reset, Rewrite and Append bind it to DOS standard input or output. Reads are block-buffered, so a second reader of standard input (Input, or `Reset` again) finds the data already consumed; under Crt the output goes through DOS, so Crt's `WhereX`/`WhereY` do not see it, and typed input is echoed by DOS | It is the console exactly as `Input` and `Output` are: one line at a time from standard input (Crt's line editor under Crt), output through the same writer as `Output` (Crt's screen and cursor under Crt). Close does not close the console | `lang/assign_empty_*` test only the cases that do not depend on the buffering: one reader, whole lines, numbers, Eof, Eoln, wrong-direction errors 104/105 |
 
 ## Dos file names (#88)
@@ -145,8 +145,16 @@ An include whose name has a directory part (`{$I c:\ra\x.inc}`) that cannot be f
 as in TP when the directory is missing; TP says 15 when the directory exists and the file does
 not, which a flat file table cannot tell apart (14 is reported).
 
+## Cheap standard routines (#99)
+
+| # | Deviation | TP5 | This compiler | Notes |
+|---|---|---|---|---|
+| D47 | `GetEnv`, `EnvCount`, `EnvStr`; `DosVersion` | The program sees the DOS environment (the oracle's holds `PATH`, `COMSPEC` and one more; `EnvCount` is 3, `EnvStr(1)` is `COMSPEC=Z:\COMMAND.COM`); `DosVersion` is `$0005` (DOS 5.0) under the oracle | There is no environment: `GetEnv` returns `''`, `EnvCount` is 0, `EnvStr(i)` is `''` for every `i`. `DosVersion` returns 5, as the oracle does | `lang/dos_getenv_and_dosversion` (the agreeing cases: an unset name, `EnvStr` out of range); `compiler/tests/cheap_routines.rs` |
+| D48 | `TextMode(m)` for modes with another screen size | `CO40` and `BW40` give a 40-column screen (`WindMax` column 39), `Font8x8` added to a mode gives 43 or 50 lines | `TextMode` always leaves the 80x25 screen: it clears it, sets `TextAttr` to 7, the window to the whole screen and the cursor to the top left, and sets `LastMode` to `m` (any `m`), as TP does for `BW80`, `CO80` and `Mono` | `lang/crt_textmode_*` for the modes that agree; `compiler/tests/cheap_routines.rs` for the others |
+| D49 | `Erase` and `Rename` | Delete and rename a file | Omitted (error 3): the host file system has no delete or rename import and Host glue is at its 600 line budget (decision 54) | `Erase` and `Rename` were 74 and 38 of the SWAG files |
+
 ## Additions (#100)
 
 | # | Deviation | TP5 | This compiler | Notes |
 |---|---|---|---|---|
-| D47 | The `Utils` unit | No such unit: `uses Utils` is error 15 unless the program supplies its own `UTILS.PAS` | An embedded unit (`runtime/utils.pas`) with `Power`, `Tan`, `ArcSin`, `ArcCos`, `Log10`, `Hex`, `TrimLeft`, `TrimRight`, `Trim`, `UpperCase`, `LowerCase`, `Min`, `Max`, `LeadingZero` | An addition, not a change of TP behaviour (decision 53). The unit is plain TP 5.0 Pascal, so the oracle compiles the same file (`NAME.dirs` names `runtime/utils.pas`) and the tests `tests/*/utils_*` have TP 5.0 output. A program that has its own `UTILS.PAS` next to it still gets the embedded unit, as for `Crt` and `Dos` |
+| D50 | The `Utils` unit | No such unit: `uses Utils` is error 15 unless the program supplies its own `UTILS.PAS` | An embedded unit (`runtime/utils.pas`) with `Power`, `Tan`, `ArcSin`, `ArcCos`, `Log10`, `Hex`, `TrimLeft`, `TrimRight`, `Trim`, `UpperCase`, `LowerCase`, `Min`, `Max`, `LeadingZero` | An addition, not a change of TP behaviour (decision 53). The unit is plain TP 5.0 Pascal, so the oracle compiles the same file (`NAME.dirs` names `runtime/utils.pas`) and the tests `tests/*/utils_*` have TP 5.0 output. A program that has its own `UTILS.PAS` next to it still gets the embedded unit, as for `Crt` and `Dos` |

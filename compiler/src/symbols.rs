@@ -182,6 +182,7 @@ const PREDEFINED: &[(&[u8], SymKind, Ty)] = &[
     (b"SQR", SymKind::Intrinsic(Intrinsic::Sqr), Ty::NONE),
     (b"EXIT", SymKind::Intrinsic(Intrinsic::Exit), Ty::NONE),
     (b"SIZEOF", SymKind::Intrinsic(Intrinsic::SizeOf), Ty::NONE),
+    (b"ADDR", SymKind::Intrinsic(Intrinsic::Addr), Ty::NONE),
     (b"CONCAT", SymKind::Intrinsic(Intrinsic::Concat), Ty::NONE),
     (b"DELETE", SymKind::Intrinsic(Intrinsic::Delete), Ty::NONE),
     (b"INSERT", SymKind::Intrinsic(Intrinsic::Insert), Ty::NONE),
