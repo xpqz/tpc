@@ -54,7 +54,6 @@ const HOST: &[(&str, &[u8], &[u8])] = &[
     ("rterror", &[I32], &[]),
     ("time", &[], &[I32]),
     ("sleep", &[I32], &[]),
-    ("compile", &[], &[]),
 ];
 
 enum Step<'a> {
@@ -62,7 +61,6 @@ enum Step<'a> {
     WriteRaw(i32, i32, i32),
     Halt(i32),
     RtError(i32),
-    Call(&'a str),
     Trap,
 }
 
@@ -117,12 +115,6 @@ fn emit(b: &Build) -> Vec<u8> {
             }
             Step::RtError(code) => {
                 c.i32_const(*code).idx(CALL, index["rterror"]);
-            }
-            Step::Call(name) => {
-                c.idx(CALL, index[name]);
-                if !HOST.iter().find(|h| h.0 == *name).unwrap().2.is_empty() {
-                    c.op(0x1A); // drop
-                }
             }
             Step::Trap => {
                 c.op(UNREACHABLE);
@@ -397,22 +389,6 @@ fn missing_files_and_bad_usage_exit_2() {
     let o = runner(&[]);
     assert_eq!(o.status.code(), Some(2));
     assert!(stderr(&o).contains("usage"), "{}", stderr(&o));
-}
-
-#[test]
-fn stubbed_import_instantiates_and_reports_message_when_called() {
-    let w = build(
-        &["write", "compile"],
-        vec![Step::Write(1, b"hi"), Step::Call("compile")],
-    );
-    let o = run_with("compile_stub", &w, None);
-    assert_eq!(o.status.code(), Some(2));
-    assert!(
-        stderr(&o).contains("host import compile not available in test runner"),
-        "{}",
-        stderr(&o)
-    );
-    assert_eq!(o.stdout, b"hi", "output before the stub call is kept");
 }
 
 #[test]

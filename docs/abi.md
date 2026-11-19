@@ -152,7 +152,8 @@ epilogue:  sp = fp + framesize
 | `halt` | `(code)` | terminate with exit code |
 | `rterror` | `(code)` | runtime error report |
 | `time` | `(what) -> i32` | the local clock for `GetDate` and `GetTime` (below); `Delay` will need its own contract |
-| `compile` | IDE worker only | invokes `compiler.wasm` |
+| `ide_compile` | `(namePtr, textPtr, textLen, resultPtr)` | IDE only (unit `IdeHost`, decision 42): compiles the buffer as the main program; `namePtr` is a Pascal string, `resultPtr` a 23-byte packed `CompileResult` (Code: Integer, Line and Col: LongInt, FileName: string[12], little endian) |
+| `ide_run` | `() -> i32` | IDE only: runs the last compiled module and returns when it ends: exit code 0..255, -1 stopped, -2 nothing to run |
 
 ### How a host import is declared
 
@@ -311,8 +312,11 @@ turns a negative result `-e` into `InOutRes := e`, so the codes are DOS error nu
 - Command line: `run.mjs [--dir AUXDIR] [--in INPUT] [--keys KEYS] prog.wasm [expected.out]`;
   `--dir` and `--in` supply the file system and the console input described above, `--keys` a
   key script (tools/tp5.sh documents the format: whitespace-separated key names and printable
-  characters) for `readkey` and `keypressed`. The JS API is `run(bytes, { files, input, keys })`
-  with the directory path and two Buffers (all default to null). A missing directory, input
+  characters) for `readkey` and `keypressed`, `--compiler` the compiler of an IDE program (the
+  path of a `compiler.wasm`, or `canned`, the canned compiler of the oracle tests). The JS API is
+  `run(bytes, { files, input, keys, compiler, onSaved })` with the directory path (or a Map of
+  name to bytes) and two Buffers (all default to null), a `Compiler` or `"canned"`, and a
+  callback for the files the program closes after writing them. A missing directory, input
   or key file, or an unknown key in the script, is a runner error. The drivers pass
   `NAME.keys` when it exists, as they pass `NAME.in`.
 - The clock is virtual (decision 38): it starts at `TP5_NOW_MS`, else at the real local time,
@@ -322,8 +326,10 @@ turns a negative result `-e` into `InOutRes := e`, so the codes are DOS error nu
   2 on runner error (stderr prefix `run.mjs:`). A program `halt(2)` is indistinguishable by code.
 - A host `RangeError` (engine stack exhausted by recursion in routines without a frame) is
   reported as `Runtime error 202`, exit code 202, the same as the shadow-stack overflow.
-- `compile` is a stub that fails with `host import compile not available in test runner`;
-  unknown imports fail instantiation.
+- `ide_compile` and `ide_run` exist only with `--compiler`; `ide_run` is a nested run of the
+  compiled program on the same screen, keys and clock, starting on a cleared screen; its console
+  output is drawn on the screen and its file changes are discarded. Unknown imports fail
+  instantiation.
 
 ## 9. Runtime errors
 

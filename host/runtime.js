@@ -13,6 +13,7 @@
 //                     or returns null when no key can come any more
 //   screen            the Screen grid (default: a private one), kept as `host.screen`; a
 //                     runner prints its dump after the program ends
+//   onWritten         (name, bytes) called when a file opened for writing is closed
 import { HostError } from "./error.js";
 import { fmtReal } from "./fmt_real.js";
 import { Screen } from "./screen.js";
@@ -35,10 +36,10 @@ const text = (string) => Uint8Array.from(string, (c) => c.charCodeAt(0));
 export const KEYS_EXHAUSTED = 255;
 
 export class Host {
-  constructor({ write, input, files = null, clock, keys, screen = new Screen() }) {
+  constructor({ write, input, files = null, clock, keys, screen = new Screen(), onWritten }) {
     this.sink = write;
     this.input = input;
-    this.vfs = new Vfs(files);
+    this.vfs = new Vfs(files, onWritten);
     this.clock = clock;
     this.keys = keys;
     this.screen = screen;
@@ -139,10 +140,6 @@ export class Host {
         if (line === null) return -1;
         target.set(line);
         return line.length;
-      },
-      // No environment provides the compiler yet.
-      compile: () => {
-        throw new HostError("host import compile not available in test runner");
       },
     };
   }

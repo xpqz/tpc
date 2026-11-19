@@ -1,6 +1,5 @@
-//! Tooling for the IDE (decisions 40 to 44): the draft host imports against the real compiler.wasm,
-//! the draft browser key mapping against tools/crt/KEYS.TBL, and the TP 5.0 limit probes
-//! (tests/ide/limits) against this compiler. The tp_only probes are not run here: they record
+//! Tooling for the IDE (decisions 40 to 44): the TP 5.0 limit probes (tests/ide/limits) against
+//! this compiler. The tp_only probes are not run here: they record
 //! what only the real Turbo Pascal does.
 use std::path::PathBuf;
 use std::process::Command;
@@ -21,40 +20,6 @@ fn node(args: &[&str]) {
         String::from_utf8_lossy(&o.stdout),
         String::from_utf8_lossy(&o.stderr)
     );
-}
-
-#[test]
-fn draft_browser_key_mapping_agrees_with_the_key_table() {
-    node(&["tests/ide/draft/key_bytes_test.mjs"]);
-}
-
-#[test]
-fn draft_ide_imports_compile_and_run_with_the_real_compiler() {
-    let target = Command::new("sh")
-        .arg(root().join("scripts/cargo-target.sh"))
-        .output()
-        .unwrap();
-    let target = String::from_utf8(target.stdout).unwrap();
-    let target = target.trim();
-    let build = Command::new("cargo")
-        .args([
-            "build",
-            "--release",
-            "--lib",
-            "--target",
-            "wasm32-unknown-unknown",
-        ])
-        .current_dir(root())
-        .env("CARGO_TARGET_DIR", target)
-        .output()
-        .unwrap();
-    assert!(
-        build.status.success(),
-        "{}",
-        String::from_utf8_lossy(&build.stderr)
-    );
-    let wasm = PathBuf::from(target).join("wasm32-unknown-unknown/release/tp5c.wasm");
-    node(&["tests/ide/draft/draft_test.mjs", wasm.to_str().unwrap()]);
 }
 
 #[test]

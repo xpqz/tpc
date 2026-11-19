@@ -1,14 +1,14 @@
-// Every named key of tools/crt/KEYS.TBL, as a browser event, must map (draft/key_bytes.js)
+// Every named key of tools/crt/KEYS.TBL, as a browser event, must map (host/keys.js)
 // to the bytes the runner serves for that name (tests/keys.mjs), so the scripted keys of the
 // Node runner and a real keyboard in the browser cannot drift apart. Also checks the old
 // plain keys, modifier combinations that are not DOS keys, and that the table matches the
 // Reference Guide's Table C.2 for a spread of codes.
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { KeyScript, parseKeys } from "../../keys.mjs";
-import { keyBytes } from "./key_bytes.js";
+import { KeyScript, parseKeys } from "../keys.mjs";
+import { keyBytes } from "../../host/keys.js";
 
-const TABLE = fs.readFileSync(new URL("../../../tools/crt/KEYS.TBL", import.meta.url), "latin1");
+const TABLE = fs.readFileSync(new URL("../../tools/crt/KEYS.TBL", import.meta.url), "latin1");
 const NAMES = TABLE.split("\n").filter((line) => line !== "").map((line) => line.split(" ")[0]);
 
 const KEY_OF = { Left: "ArrowLeft", Right: "ArrowRight", Up: "ArrowUp", Down: "ArrowDown",
@@ -18,7 +18,7 @@ const base = { ctrlKey: false, altKey: false, shiftKey: false };
 // The keydown event a browser sends for a key name of the table (null: no such key event).
 function eventFor(name) {
   if (name === "Ctrl-PrtSc") return null; // browsers do not deliver PrintScreen with Ctrl
-  if (/^Alt-[0-9=-]$/.test(name)) return null; // Alt+digit is left out (draft/key_bytes.js)
+  if (/^Alt-[0-9=-]$/.test(name)) return null; // Alt+digit is left out (host/keys.js)
   const caret = /^\^([A-Z])$/.exec(name);
   if (caret) return { ...base, ctrlKey: true, key: caret[1].toLowerCase(), code: `Key${caret[1]}` };
   const [, modifier, rest] = /^(?:(Ctrl|Alt|Shift)-)?(.+)$/.exec(name);

@@ -437,7 +437,7 @@ behaviour (compile fails with error 3 at the first line containing `ERROR`; run 
 line count modulo 256, -2 when the last compile failed or there was none). The compiler finds embedded units first (`driver.rs`, `EMBEDDED_UNITS`), so with the
 embedded `IdeHost` in place TP compiles the stand-in and this compiler compiles the embedded
 unit; the Node runner then injects a canned compiler with the same two rules
-(`tests/ide/draft/canned.mjs`; its test replays the texts and results of the toy editor's
+(`host/ (promoted from the #67 drafts in tests/ide/draft/) canned.mjs`; its test replays the texts and results of the toy editor's
 run on TP 5.0: `Error 3 in P.PAS 2:1; Run -2; Compiled; Run 2`). `tools/tp5.sh` gains
 `DIR/NAME.dirs`: directories (from the repository root) whose files are copied before the
 fixture's own, so an IDE module under `ide/` is found by TP and a fixture's `IDEHOST.PAS`
@@ -464,11 +464,11 @@ word `scan*256 + n`, ReadKey returns 1..26), `Alt-A`..`Alt-Z`, `Alt-1`..`Alt-=`,
 `F11` as the example of an unknown key in three runner tests.
 **Proposal (browser).** `host/keys.js` `keyBytes` today maps Ctrl+letter correctly but
 turns Shift/Ctrl/Alt+F-key into the plain F-key, Alt+letter into the letter, Ctrl-cursor
-into the cursor key and Shift-Tab into Tab. The replacement in `tests/ide/draft/key_bytes.js`
+into the cursor key and Shift-Tab into Tab. The replacement in `host/ (promoted from the #67 drafts in tests/ide/draft/) key_bytes.js`
 (38 lines against 19 now, +20 in `host/keys.js`) follows Table C.2, identifies Alt+letter by
 `event.code` (Option changes `event.key` on macOS), lets typing win where a layout makes Alt
 or AltGr (Ctrl+Alt) produce a character, and leaves Alt+digit out. A test
-(`tests/ide/draft/key_bytes_test.mjs`) builds the event of every table key and compares the
+(`host/ (promoted from the #67 drafts in tests/ide/draft/) key_bytes_test.mjs`) builds the event of every table key and compares the
 bytes with the runner's, so the two cannot drift. Applying it makes `F11`/`F12` mapped keys
 (extended 133/134): the negative case in `tests/host/keys.mjs` moves to `F13`.
 **Reachability.** Measured: Chrome 157 (CDP) and Firefox 160 (WebDriver BiDi) deliver all
@@ -538,10 +538,10 @@ textLen, resultPtr)` and `ide_run() -> i32` of module `host`, present only in th
 - **Node runner.** `tests/run.mjs --compiler compiler.wasm` adds the imports to the `Host`:
   the compiler is instantiated once, `ide_run` is a nested synchronous run (a second `Host`
   sharing screen, keys, sink and clock; no Stop). For oracle tests `--compiler canned`
-  injects `tests/ide/draft/canned.mjs`. A nested run discards the program's files
-  (`keepFiles` exists in the draft only to show the cost of the alternative). `tests/ide/draft/` holds working drafts of
+  injects `host/ (promoted from the #67 drafts in tests/ide/draft/) canned.mjs`. A nested run discards the program's files
+  (`keepFiles` exists in the draft only to show the cost of the alternative). `host/ (promoted from the #67 drafts in tests/ide/draft/) ` holds working drafts of
   `compiler.js` and `ide.js` (42 + 25 lines) with 9 tests against the real compiler.wasm.
-**Proof so far.** `tests/ide/draft/draft_test.mjs`: error in main (code 3, line 3 and the
+**Proof so far.** `host/ (promoted from the #67 drafts in tests/ide/draft/) draft_test.mjs`: error in main (code 3, line 3 and the
 file; the oracle line from TP), error in a unit (file `U.PAS`, line 7), the unsaved buffer
 beats a saved file of the same name, nothing to run is -2, a runtime-error run returns 200, run after a failed compile is -2 (the stand-in and
 the canned compiler agree, from TP's run),

@@ -91,7 +91,7 @@ test("keyBytes: extended keys are 0 then the scan code", () => {
 });
 
 test("keyBytes: modifiers alone, unmapped keys and characters outside CP437 give nothing", () => {
-  for (const key of ["Shift", "Control", "Alt", "CapsLock", "F11", "F12", "€", "Dead", "ContextMenu"]) {
+  for (const key of ["Shift", "Control", "Alt", "CapsLock", "F13", "€", "Dead", "ContextMenu"]) {
     assert.deepEqual(ev(key), [], key);
   }
 });

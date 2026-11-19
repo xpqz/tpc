@@ -1,12 +1,21 @@
-// Test runner: node tests/run.mjs [--dir AUXDIR] [--in INPUT] [--keys KEYS] prog.wasm [expected.out]
+// Test runner: node tests/run.mjs [--dir AUXDIR] [--in INPUT] [--keys KEYS] [--compiler C]
+//   prog.wasm [expected.out]
 // AUXDIR holds the files the program can open (a snapshot; see tests/vfs.mjs); INPUT is the
 // text readline returns, by default the process stdin; KEYS is a key script (NAME.keys, see
 // tests/keys.mjs) that readkey and keypressed serve, by default no keys. A program that
 // imports `screen` ends with the screen dump on stdout, as tools/tp5.sh prints it.
+// C gives an IDE program (the one that uses IdeHost) its compiler: the path of a compiler.wasm,
+// whose compile runs and whose run is a nested run of the compiled program on the same screen
+// and keyboard (decision 42), or `canned`, the canned compiler of the oracle tests
+// (tests/ide/canned.mjs). Without C, the imports ide_compile and ide_run are unknown.
 // Exit: program code on match or print mode, 1 on output mismatch, 2 on runner error.
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { Host, HostError } from "../host/runtime.js";
+import { Compiler } from "../host/compiler.js";
+import { ideImports } from "../host/ide.js";
+import { clearScreen } from "../host/terminal.js";
+import { cannedCompiler, cannedRun } from "./ide/canned.mjs";
 import { dump } from "./screen_dump.mjs";
 import { KeyScript, KeyScriptError, parseKeys } from "./keys.mjs";
 import { Input, loadSnapshot } from "./vfs.mjs";
@@ -26,6 +35,39 @@ function virtualClock() {
   return { nowMs: () => now, advance: (ms) => (now += ms) };
 }
 
+export const CANNED = "canned";
+
+export async function loadCompiler(path) {
+  const { instance } = await WebAssembly.instantiate(read(path), {});
+  return new Compiler(instance);
+}
+
+// Runs a compiled program inside the IDE's call: a second Host shares the IDE's screen, keys
+// and clock and starts on a cleared screen; its console output is drawn on that screen, as in
+// the browser. The program's file changes are discarded, also as in the browser.
+function nestedRun(outer) {
+  return (module, files) => {
+    clearScreen(outer.screen.cells);
+    const inner = new Host({
+      write: (_fd, bytes) => outer.screen.print(bytes), input: outer.input, files,
+      clock: outer.clock, keys: outer.keys, screen: outer.screen,
+    });
+    const instance = new WebAssembly.Instance(new WebAssembly.Module(module), {
+      host: inner.imports,
+    });
+    inner.attach(instance);
+    return inner.runMain(instance).code;
+  };
+}
+
+// Adds ide_compile and ide_run to `host.imports`; `compiler` is a Compiler or CANNED.
+export function addIdeImports(host, compiler) {
+  const parts = compiler === CANNED
+    ? { compiler: cannedCompiler(), runModule: cannedRun }
+    : { compiler, runModule: nestedRun(host) };
+  Object.assign(host.imports, ideImports(host, parts));
+}
+
 // The INT 16h words of the key script in `text` (a Buffer, or null for no keys).
 function keyWords(text) {
   try {
@@ -36,9 +78,12 @@ function keyWords(text) {
   }
 }
 
-// `files` is the aux directory path or null; `input` is a Buffer of console input or null
-// for the process stdin; `keys` is a Buffer holding a key script, or null for no keys.
-export async function run(bytes, { files = null, input = null, keys = null } = {}) {
+// `files` is the aux directory path, a Map of name -> bytes, or null; `input` is a Buffer of
+// console input or null for the process stdin; `keys` is a Buffer holding a key script, or
+// null for no keys; `compiler` is a Compiler, CANNED or null; `onSaved(name, bytes)` hears of
+// every file the program closes after writing it.
+export async function run(
+  bytes, { files = null, input = null, keys = null, compiler = null, onSaved } = {}) {
   let module;
   try {
     module = await WebAssembly.compile(bytes);
@@ -54,10 +99,12 @@ export async function run(bytes, { files = null, input = null, keys = null } = {
   const host = new Host({
     write: sink,
     input: new Input(input),
-    files: loadSnapshot(files),
+    files: files instanceof Map ? files : loadSnapshot(files),
     clock: virtualClock(),
     keys: new KeyScript(keyWords(keys)),
+    onWritten: onSaved,
   });
+  if (compiler !== null) addIdeImports(host, compiler);
   for (const imp of WebAssembly.Module.imports(module)) {
     if (imp.module !== "host" || imp.kind !== "function" || !(imp.name in host.imports)) {
       throw new RunnerError(`unknown import ${imp.module}.${imp.name}`);
@@ -125,12 +172,13 @@ function read(path) {
   }
 }
 
-const USAGE = "usage: run.mjs [--dir AUXDIR] [--in INPUT] [--keys KEYS] prog.wasm [expected.out]";
-const OPTIONS = { "--dir": "dir", "--in": "input", "--keys": "keys" };
+const USAGE =
+  "usage: run.mjs [--dir AUXDIR] [--in INPUT] [--keys KEYS] [--compiler C] prog.wasm [expected.out]";
+const OPTIONS = { "--dir": "dir", "--in": "input", "--keys": "keys", "--compiler": "compiler" };
 
 // Splits the command line into its options and the positional arguments.
 function parseArgs(args) {
-  const options = { dir: null, input: null, keys: null };
+  const options = { dir: null, input: null, keys: null, compiler: null };
   const positional = [];
   for (let i = 0; i < args.length; i++) {
     if (Object.hasOwn(OPTIONS, args[i])) {
@@ -153,7 +201,9 @@ async function main(argv) {
   }
   const input = options.input === null ? null : read(options.input);
   const keys = options.keys === null ? null : read(options.keys);
-  const { stdout, code } = await run(wasm, { files: options.dir, input, keys });
+  const compiler = options.compiler === null || options.compiler === CANNED
+    ? options.compiler : await loadCompiler(options.compiler);
+  const { stdout, code } = await run(wasm, { files: options.dir, input, keys, compiler });
   if (expected === null) {
     process.stdout.write(stdout);
   } else if (!stdout.equals(expected)) {

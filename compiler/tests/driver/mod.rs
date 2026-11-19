@@ -268,7 +268,8 @@ fn expect_ok(r: &Res, what: &str) -> Result<(), String> {
 
 /// Runs `wasm` under tests/run.mjs against `expected`. A directory `STEM/` next to the source
 /// `STEM.pas` holds the program's files and `STEM.in` is its console input (decision 26);
-/// `STEM.keys` is the key script of a Crt program (tools/tp5.sh documents the format).
+/// `STEM.keys` is the key script of a Crt program (tools/tp5.sh documents the format) and
+/// `STEM.compiler` names the compiler an IDE program is given (`canned`, see tests/run.mjs).
 fn run_wasm(src: &Path, wasm: &Path, expected: &Path) -> Res {
     let mut cmd = Command::new("node");
     cmd.arg(root().join("tests/run.mjs"));
@@ -282,6 +283,11 @@ fn run_wasm(src: &Path, wasm: &Path, expected: &Path) -> Res {
     let keys = src.with_extension("keys");
     if keys.is_file() {
         cmd.arg("--keys").arg(keys);
+    }
+    let compiler = src.with_extension("compiler");
+    if compiler.is_file() {
+        cmd.arg("--compiler")
+            .arg(std::fs::read_to_string(compiler).unwrap().trim());
     }
     res(cmd
         .arg(wasm)
