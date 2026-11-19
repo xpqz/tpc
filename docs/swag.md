@@ -31,7 +31,7 @@ minutes rather than hours. The full run is the one reported here.
 | same | 67 | both run, output equal |
 | differ | 12 | both run, output differs |
 | needs input | 35 | a Crt program blocks in `ReadKey` (or TP times out and ours ends `exit 255`); compared on compile only |
-| timeout | 22 | a side timed out at 20 s (TP in 21, ours in 8; see Timeouts) |
+| timeout | 22 | a side timed out at 20 s (TP in 21, ours in 7; see Timeouts) |
 | TP rejects, ours accepts | 4 | accepting invalid code |
 | TP no dump | 4 | Crt program whose run left no screen dump in TP (`tools/tp5.sh` prints nothing); ours gives a compile error in all 4 |
 
@@ -136,14 +136,15 @@ Run-time gaps found among programs that compile:
 
 ## Timeouts and input
 
-22 timeouts: TP timed out in 21 and ours in 8 (7 in both: programs that retry reading input
-until a valid answer, or wait for a keypress the key script does not model;
+22 timeouts: TP timed out in 21 and ours in 6 of the same (programs that retry reading
+input until a valid answer, or wait for a keypress the key script does not model;
 `entry/0016.pas`, `math/0031.pas`, `screen/0009.pas`, `sound/0108.pas`); 11 of TP's timeouts
-have a compile error on our side anyway. Three where only TP is slow: `math/0028.pas` is a
-prime search that needs more than 20 s on the emulated 8086 and ends at once here;
-`pointers/0003.pas` reads an uninitialised pointer (TP hangs, ours writes through nil);
-`pointers/0013.pas` (ours ran out of memory in node and aborted, recorded as `ok` with exit
--6 because the tool only treats a runner message as a failure). One where only ours loops:
+have a compile error on our side anyway. Two where TP times out and ours aborts: `entry/0030.pas`
+and `pointers/0013.pas` exhaust node's 4 GB heap (an allocation loop; TP's heap would end in
+runtime error 203, ours grows the linear memory without bound: proposed issue 13, to be
+checked). Two where only TP is slow or hangs: `math/0028.pas` is a prime search that needs
+more than 20 s on the emulated 8086 and ends at once here; `pointers/0003.pas` reads an
+uninitialised pointer (TP hangs, ours writes through nil). One where only ours loops:
 `comm/0039.pas` writes to `COM2`: TP ends with runtime error 2 (no such device), ours opens a
 file of that name (proposed issue 12).
 
@@ -196,6 +197,10 @@ where the first token is not Pascal). Diagnostics numbers in `tests/neg` are exa
     so the five SWAG "differ" programs are known and tests do not depend on it.
 11. **Typed and untyped files are the largest omission (53 programs, 74 %).** Not a bug; the
     cost/benefit of `file of T`, `BlockRead`, `BlockWrite` belongs to the plan owner.
+13. **Unbounded heap growth aborts the host.** `entry/0030.pas`, `pointers/0013.pas`: a
+    program that allocates in a loop exhausts the node heap instead of ending with runtime
+    error 203 (needs a reduced reproducer; not confirmed against TP, which also timed out
+    in 20 s).
 12. **Device names.** `Assign(f, 'COM2')` or `LPT1` opens a file here; TP reports error 2 in the
     oracle. Optional.
 
