@@ -35,6 +35,10 @@ procedure MoveDown;
 procedure MoveToLineStart;
 procedure MoveToLineEnd;
 
+{ True after any edit since the last Clear, Load or Save (or SetModified(False)). }
+function Modified: Boolean;
+procedure SetModified(Value: Boolean);
+
 function IsFull: Boolean;
 procedure InsertChar(Ch: Char);
 procedure DeleteBefore;
@@ -62,6 +66,7 @@ var
   CursorPos: LongInt;
   WantedColumn: LongInt; { the column a run of vertical moves aims for }
   KeepColumn: Boolean;   { True while the last move was vertical, so WantedColumn is current }
+  Changed: Boolean;      { an edit happened since the text was cleared, loaded or saved }
 
 function TextLength: LongInt;
 begin
@@ -73,8 +78,19 @@ begin
   Cursor := CursorPos;
 end;
 
+function Modified: Boolean;
+begin
+  Modified := Changed;
+end;
+
+procedure SetModified(Value: Boolean);
+begin
+  Changed := Value;
+end;
+
 procedure Clear;
 begin
+  Changed := False;
   GapStart := 0;
   GapEnd := MaxText;
   CursorPos := 0;
@@ -271,6 +287,7 @@ begin
     MoveGapTo(CursorPos);
     Data^[GapStart] := Ch;
     Inc(GapStart);
+    Changed := True;
     SetCursor(CursorPos + 1);
   end;
 end;
@@ -282,6 +299,7 @@ begin
   begin
     MoveGapTo(CursorPos);
     Dec(GapStart);
+    Changed := True;
     SetCursor(CursorPos - 1);
   end;
 end;
@@ -293,6 +311,7 @@ begin
   begin
     MoveGapTo(CursorPos);
     Inc(GapEnd);
+    Changed := True;
     KeepColumn := False;
   end;
 end;
@@ -336,7 +355,10 @@ begin
     if Result <> 0 then
       Clear
     else
+    begin
       SetCursor(0);
+      Changed := False;
+    end;
   end;
   {$I+}
   Load := Result;
@@ -362,6 +384,8 @@ begin
         Write(F, CharAt(Pos));
     Close(F);
     Result := IOResult;
+    if Result = 0 then
+      Changed := False;
   end;
   {$I+}
   Save := Result;
