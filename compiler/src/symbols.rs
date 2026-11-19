@@ -87,6 +87,8 @@ pub enum Helper {
     Sin,
     Cos,
     ArcTan,
+    RandomWord,
+    RandomReal,
 }
 
 /// Each `Helper` with the name of its routine in `runtime/system.pas`, upper-cased.
@@ -130,6 +132,8 @@ pub const HELPERS: &[(Helper, &[u8])] = &[
     (Helper::Sin, b"SINREAL"),
     (Helper::Cos, b"COSREAL"),
     (Helper::ArcTan, b"ARCTANREAL"),
+    (Helper::RandomWord, b"RANDOMWORD"),
+    (Helper::RandomReal, b"RANDOMREAL"),
 ];
 
 /// The most bytes of one structure, of all globals, or of one routine's locals.
@@ -213,6 +217,7 @@ const PREDEFINED: &[(&[u8], SymKind, Ty)] = &[
     (b"SIN", SymKind::Intrinsic(Intrinsic::Sin), Ty::NONE),
     (b"COS", SymKind::Intrinsic(Intrinsic::Cos), Ty::NONE),
     (b"ARCTAN", SymKind::Intrinsic(Intrinsic::ArcTan), Ty::NONE),
+    (b"RANDOM", SymKind::Intrinsic(Intrinsic::Random), Ty::NONE),
     (
         b"MAXINT",
         SymKind::Const(ConstValue::Int(32767)),

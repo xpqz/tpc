@@ -207,6 +207,7 @@ pub enum Intrinsic {
     Sin,
     Cos,
     ArcTan,
+    Random,
 }
 
 impl Intrinsic {
@@ -218,9 +219,10 @@ impl Intrinsic {
         )
     }
 
-    /// An intrinsic that is a function of one argument, never a statement or a variable.
+    /// An intrinsic that is a function (`Random` takes none or one argument), never a statement
+    /// or a variable.
     pub fn is_function(self) -> bool {
-        self.unary_op().is_some() || self.is_real_function()
+        self.unary_op().is_some() || self.is_real_function() || self == Intrinsic::Random
     }
 
     /// The operator behind an intrinsic function of one argument.
