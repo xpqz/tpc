@@ -73,6 +73,9 @@ pub mod code {
     pub const INVALID_QUALIFIER: u16 = 121;
     pub const INVALID_VARIABLE_REFERENCE: u16 = 122;
     pub const HEADER_MISMATCH: u16 = 131;
+    pub const PROCEDURE_TYPE_NOT_ALLOWED: u16 = 99;
+    pub const STRING_LENGTH_MISMATCH: u16 = 100;
+    pub const INVALID_FIELD_ORDER: u16 = 101;
     pub const CANNOT_EVALUATE: u16 = 133;
     pub const INVALID_PROCEDURE_REFERENCE: u16 = 143;
     pub const NOT_SUPPORTED: u16 = 200;
@@ -135,6 +138,9 @@ pub const TABLE: &[(u16, &str)] = &[
     (96, "Too many variables"),
     (97, "Invalid FOR control variable"),
     (98, "Integer variable expected"),
+    (99, "Files and procedure types are not allowed here"),
+    (100, "String length mismatch"),
+    (101, "Invalid ordering of fields"),
     (112, "CASE constant out of range"),
     (113, "Error in statement"),
     (121, "Invalid qualifier"),

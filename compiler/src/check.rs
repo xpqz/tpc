@@ -22,7 +22,7 @@ use crate::ast::{Ast, Id, Kind, List, Op, NO_NAME};
 use crate::diag::{code, Diag};
 use crate::types::{
     ConstValue, Field, FrameCopy, Intrinsic, ParamType, Routine, Signature, Sym, SymKind, Symbol,
-    Tag, Ty, Types,
+    Tag, Ty, TypedConst, Types,
 };
 
 /// The System routines that the compiler calls on its own behalf, bound by name right after
@@ -121,6 +121,8 @@ pub struct Info {
     pub routines: Vec<Routine>,
     /// First address after the globals.
     pub data_end: u32,
+    /// The typed constants in address order.
+    pub typed_consts: Vec<TypedConst>,
     /// The routine index of each `Helper`.
     helpers: [u32; Helper::ALL.len()],
     /// Address of System's `HeapOrg`; the next 4 bytes are `HeapPtr`.
@@ -225,6 +227,7 @@ struct Cx<'a> {
     first_user_scope: usize,
     /// First address after the globals declared so far.
     data_end: u32,
+    typed_consts: Vec<TypedConst>,
     routines: Vec<Routine>,
     /// The routines being checked, outermost first; its length is the current depth.
     routine_stack: Vec<usize>,
@@ -247,6 +250,7 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
         scope: Vec::new(),
         first_user_scope: 0,
         data_end: GLOBALS,
+        typed_consts: Vec::new(),
         routines: Vec::new(),
         routine_stack: Vec::new(),
         next_local: 0,
@@ -287,6 +291,7 @@ pub fn check(ast: &mut Ast, root: Id) -> R<Info> {
         syms: cx.syms,
         routines: cx.routines,
         data_end: cx.data_end,
+        typed_consts: cx.typed_consts,
         helpers: cx.helpers,
         heap,
     })
@@ -453,6 +458,9 @@ impl Cx<'_> {
         }
         match self.ast.kind(d) {
             Kind::ConstDecl(name, value) => self.const_decl(d, name, value),
+            Kind::TypedConst(name, type_name, init) => {
+                self.typed_const_decl(d, name, type_name, init)
+            }
             Kind::VarDecl(name, type_name) => self.var_decl(d, name, type_name),
             Kind::TypeDecl(name, spec) => {
                 let ty = self.spec(spec, name)?;
@@ -478,6 +486,121 @@ impl Cx<'_> {
             _ => return Err(self.err(value, code::CANNOT_EVALUATE)),
         };
         self.declare(d, name, Symbol::new(SymKind::Const(constant), ty))?;
+        Ok(())
+    }
+
+    /// `name: type = init`: a variable in static storage, even inside a routine, so its value
+    /// outlives each call. The initialiser is checked here; codegen lays out its bytes
+    /// (`static_image`) when a live body names the constant.
+    fn typed_const_decl(&mut self, d: Id, name: u32, type_name: u32, init: Id) -> R<()> {
+        let ty = self.type_of(d, type_name)?;
+        if self.types.sig(ty).is_some() {
+            return Err(self.err(d, code::PROCEDURE_TYPE_NOT_ALLOWED));
+        }
+        self.initial_value(ty, init)?;
+        let address = self.data_end;
+        let symbol = self.global_variable(d, ty, self.types.size(ty))?;
+        self.typed_consts.push(TypedConst { address, ty, init });
+        self.declare(d, name, symbol)?;
+        Ok(())
+    }
+
+    /// Checks that `init` is a constant of type `ty`, following the shape of the type.
+    fn initial_value(&mut self, ty: Ty, init: Id) -> R<()> {
+        if matches!(self.ast.kind(init), Kind::RecordInit(_)) && !self.types.is_record(ty) {
+            return Err(self.err(init, code::TYPE_MISMATCH));
+        }
+        if self.types.is_record(ty) {
+            return self.record_initialiser(ty, init);
+        }
+        match self.types.array_of(ty) {
+            Some((_, lo, hi, elem)) if !self.types.is_str(ty) => {
+                self.array_initialiser(init, (hi - lo + 1) as usize, elem)
+            }
+            _ => self.scalar_initialiser(ty, init),
+        }
+    }
+
+    /// `(a, b, c)` with exactly `count` elements, or a string for an array of Char.
+    fn array_initialiser(&mut self, init: Id, count: usize, elem: Ty) -> R<()> {
+        let Kind::ArrayInit(items) = self.ast.kind(init) else {
+            return self.char_array_string(init, count, elem);
+        };
+        let items = self.ast.items_vec(items);
+        for (n, &item) in items.iter().enumerate() {
+            if n == count {
+                return Err(self.err(item, code::RIGHT_PAREN_EXPECTED));
+            }
+            self.initial_value(elem, item)?;
+        }
+        if items.len() < count {
+            return Err(self.err(init, code::COMMA_EXPECTED));
+        }
+        Ok(())
+    }
+
+    /// `array[1..4] of Char = 'ABCD'`: the string must have exactly as many characters as the
+    /// array has elements.
+    fn char_array_string(&mut self, init: Id, count: usize, elem: Ty) -> R<()> {
+        self.expr(init)?;
+        self.coerce_str(init);
+        match self.ast.kind(init) {
+            Kind::StrLit(s) if self.types.tag(elem) == Some(Tag::Char) => {
+                if self.ast.strs[s as usize].len() == count {
+                    return Ok(());
+                }
+                Err(self.err(init, code::STRING_LENGTH_MISMATCH))
+            }
+            _ => Err(self.err(init, code::TYPE_MISMATCH)),
+        }
+    }
+
+    /// `(f: a; g: b)`: the entries name the first fields of the record, in declaration order.
+    fn record_initialiser(&mut self, ty: Ty, init: Id) -> R<()> {
+        let Kind::RecordInit(entries) = self.ast.kind(init) else {
+            return Err(self.err(init, code::FIELD_IDENTIFIER_EXPECTED));
+        };
+        let fields = self.types.record_fields(ty);
+        for (n, entry) in self.ast.items_vec(entries).into_iter().enumerate() {
+            let Kind::FieldInit(name, value) = self.ast.kind(entry) else {
+                unreachable!("a record initialiser holds field entries")
+            };
+            let Some(field) = fields.get(n).filter(|field| field.name == name) else {
+                let is_a_field = self.types.field(ty, name).is_some();
+                let code = if is_a_field {
+                    code::INVALID_FIELD_ORDER
+                } else {
+                    code::FIELD_IDENTIFIER_EXPECTED
+                };
+                return Err(self.err(entry, code));
+            };
+            self.initial_value(field.ty, value)?;
+        }
+        Ok(())
+    }
+
+    /// A scalar, string, set or pointer: a constant expression assignable to `ty`. `(value)`
+    /// becomes the value itself.
+    fn scalar_initialiser(&mut self, ty: Ty, init: Id) -> R<()> {
+        if let Kind::ArrayInit(items) = self.ast.kind(init) {
+            let &[inner] = self.ast.items(items) else {
+                return Err(self.err(init, code::RIGHT_PAREN_EXPECTED));
+            };
+            self.scalar_initialiser(ty, inner)?;
+            let value = self.ast.node(inner);
+            self.ast.resolve(init, value.kind, value.ty);
+            return Ok(());
+        }
+        self.expr(init)?;
+        self.assignable(init, ty, init)?;
+        let is_constant = match self.ast.kind(init) {
+            Kind::IntLit(_) | Kind::RealLit(_) | Kind::StrLit(_) => true,
+            Kind::SetLit(items) => self.ast.items(items).iter().all(|&i| self.is_constant(i)),
+            _ => false,
+        };
+        if !is_constant {
+            return Err(self.err(init, code::CANNOT_EVALUATE));
+        }
         Ok(())
     }
 
@@ -1738,7 +1861,10 @@ impl Cx<'_> {
     fn call_expr(&mut self, e: Id, callee: Id, args: List) -> R<(Kind, Ty)> {
         let (_, symbol) = self.resolve(callee, self.name_of(callee))?;
         Ok(match symbol.kind {
-            SymKind::Routine(r) => self.function_call(e, callee, r, args)?,
+            SymKind::Routine(r) => {
+                let call = self.function_call(e, callee, r, args)?;
+                self.folded_length(callee, r, args).unwrap_or(call)
+            }
             kind if kind.is_variable() => match self.types.sig(symbol.ty) {
                 Some((_, Ty::NONE)) => {
                     return Err(self.err(callee, code::INVALID_PROCEDURE_REFERENCE))
@@ -1759,6 +1885,17 @@ impl Cx<'_> {
             SymKind::Intrinsic(_) => return Err(self.err(callee, code::ERROR_IN_EXPRESSION)),
             _ => return Err(self.err(e, code::RIGHT_PAREN_EXPECTED)),
         })
+    }
+
+    /// System's `Length` of a string constant is a constant.
+    fn folded_length(&self, callee: Id, r: u32, args: List) -> Option<(Kind, Ty)> {
+        let is_length = self.routines[r as usize].builtin
+            && self.ast.names[self.name_of(callee) as usize] == b"LENGTH";
+        let Kind::StrLit(s) = self.ast.kind(*self.ast.items(args).first()?) else {
+            return None;
+        };
+        let length = self.ast.strs[s as usize].len() as i64;
+        is_length.then(|| (Kind::IntLit(length), self.types.const_ty(length)))
     }
 
     /// `[a, b..c]`: the base type is the type of the elements, which must agree.

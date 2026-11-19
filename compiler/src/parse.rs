@@ -722,7 +722,9 @@ impl Parser {
         if !starts_constant {
             return Err(self.err(code::IDENTIFIER_EXPECTED));
         }
-        let lo = self.expr()?;
+        // A simple expression: a relational operator after a type name (`of Integer = (1, 2)`)
+        // belongs to the declaration, not to the type.
+        let lo = self.simple()?;
         if !self.sym(b"..") {
             // Not a range: the expression must have been a lone type name.
             return match self.ast.kind(lo) {
@@ -730,7 +732,7 @@ impl Parser {
                 _ => Err(self.err(code::SYNTAX_ERROR)),
             };
         }
-        let hi = self.expr()?;
+        let hi = self.simple()?;
         Ok(self.ast.add(Kind::Range(lo, hi), line, col))
     }
 
@@ -874,19 +876,97 @@ impl Parser {
         }
     }
 
-    /// After `CONST`: `name = expr;` entries while an identifier follows.
+    /// After `CONST`: `name = expr;` or the typed form `name: type = initialiser;` while an
+    /// identifier follows.
     fn const_section(&mut self, out: &mut Vec<Id>) -> R<()> {
         loop {
             let (line, col) = self.pos();
             let name = self.ident()?;
-            self.expect_sym(b"=", code::EQUALS_EXPECTED)?;
-            let value = self.expr()?;
+            let kind = if self.sym(b":") {
+                let type_name = self.declared_type(b"=", out)?;
+                self.expect_sym(b"=", code::EQUALS_EXPECTED)?;
+                Kind::TypedConst(name, type_name, self.initialiser()?)
+            } else {
+                self.expect_sym(b"=", code::EQUALS_EXPECTED)?;
+                Kind::ConstDecl(name, self.expr()?)
+            };
             self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
-            out.push(self.ast.add(Kind::ConstDecl(name, value), line, col));
+            out.push(self.ast.add(kind, line, col));
             if self.tok().kind != Tk::Ident {
                 return Ok(());
             }
         }
+    }
+
+    /// The type after `name:` of a variable or typed constant: the handle of a type name, or
+    /// of an anonymous type declared by a `TypeDecl` pushed to `out`. `end` is the symbol
+    /// that follows the type.
+    fn declared_type(&mut self, end: &[u8], out: &mut Vec<Id>) -> R<u32> {
+        let names_a_type = self.tok().kind == Tk::Ident
+            && self.peek(1).kind == Tk::Sym
+            && self.peek(1).text == end;
+        if names_a_type {
+            return self.type_name();
+        }
+        let name = self.ast.anonymous_name();
+        let (line, col) = self.pos();
+        let spec = self.type_spec()?;
+        out.push(self.ast.add(Kind::TypeDecl(name, spec), line, col));
+        Ok(name)
+    }
+
+    /// The value of a typed constant: an expression, or a parenthesised list. A `(` may also
+    /// start an expression such as `(1 + 2) * 3`, so the list is tried first and the parser
+    /// goes back to the `(` when what follows the `)` does not end the initialiser.
+    fn initialiser(&mut self) -> R<Id> {
+        if self.is(Tk::Sym, b"(") {
+            let start = self.pos;
+            if let Ok(list) = self.initialiser_list() {
+                let ends = [b";".as_slice(), b")", b","];
+                if ends.iter().any(|end| self.is(Tk::Sym, end)) {
+                    return Ok(list);
+                }
+            }
+            self.pos = start;
+        }
+        self.expr()
+    }
+
+    /// `(a, b, c)` is an `ArrayInit`; `(f: a; g: b)` (an identifier and a colon first) is a
+    /// `RecordInit`.
+    fn initialiser_list(&mut self) -> R<Id> {
+        self.advance();
+        let is_record = self.tok().kind == Tk::Ident && self.peek(1).text == b":";
+        let separator: &[u8] = if is_record { b";" } else { b"," };
+        let mut items = Vec::new();
+        loop {
+            items.push(if is_record {
+                self.field_initialiser()?
+            } else {
+                self.initialiser()?
+            });
+            if !self.sym(separator) {
+                break;
+            }
+        }
+        let items = self.ast.list(&items);
+        let kind = if is_record {
+            Kind::RecordInit(items)
+        } else {
+            Kind::ArrayInit(items)
+        };
+        let (line, col) = self.pos();
+        self.expect_sym(b")", code::RIGHT_PAREN_EXPECTED)?;
+        Ok(self.ast.add(kind, line, col))
+    }
+
+    /// `field: initialiser`.
+    fn field_initialiser(&mut self) -> R<Id> {
+        let (line, col) = self.pos();
+        let name = self.ident()?;
+        self.expect_sym(b":", code::COLON_EXPECTED)?;
+        let value = self.initialiser()?;
+        Ok(self.ast.add(Kind::FieldInit(name, value), line, col))
     }
 
     /// After `TYPE`: `name = type;` entries while an identifier follows.
@@ -910,18 +990,7 @@ impl Parser {
         loop {
             let names = self.identifier_list()?;
             self.expect_sym(b":", code::COLON_EXPECTED)?;
-            let names_a_type = self.tok().kind == Tk::Ident
-                && self.peek(1).kind == Tk::Sym
-                && self.peek(1).text == b";";
-            let type_name = if names_a_type {
-                self.type_name()?
-            } else {
-                let name = self.ast.anonymous_name();
-                let (line, col) = self.pos();
-                let spec = self.type_spec()?;
-                out.push(self.ast.add(Kind::TypeDecl(name, spec), line, col));
-                name
-            };
+            let type_name = self.declared_type(b";", out)?;
             self.unsupported(&[b"ABSOLUTE"])?;
             self.expect_sym(b";", code::SEMICOLON_EXPECTED)?;
             for IdentAt { name, line, col } in names {

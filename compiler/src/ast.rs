@@ -140,6 +140,15 @@ pub enum Kind {
         body: Id,
     },
     ConstDecl(u32, Id),
+    /// `name: type = init`: constant name, type name, initialiser (an expression, `ArrayInit`
+    /// or `RecordInit`).
+    TypedConst(u32, u32, Id),
+    /// `(a, b, c)`, stamped at the closing parenthesis, where TP reports a list that is too short.
+    ArrayInit(List),
+    /// `(f: a; g: b)`: `FieldInit` entries, stamped at the closing parenthesis.
+    RecordInit(List),
+    /// `name: value` in a record initialiser.
+    FieldInit(u32, Id),
     /// A procedure or function, stamped after its header. `params` is None when the header
     /// has no parameter list, `result` is `NO_NAME` when it has no result type, `block` is
     /// None for a `forward` or `external` declaration. `external`, allowed only in the runtime

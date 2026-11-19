@@ -38,7 +38,7 @@ operators, `Neg`, `Not` and the unary intrinsics `Ord Chr Succ Pred Odd Abs Sqr`
 
 Node kinds, by group:
 
-- **Declarations.** `Program(name, decls, body)`, `ConstDecl`, `VarDecl(name, type name)`,
+- **Declarations.** `Program(name, decls, body)`, `ConstDecl`, `TypedConst(name, type name, init)` (initialisers: an expression, `ArrayInit(items)`, `RecordInit(FieldInit(name, value)...)`, the lists stamped at their `)`), `VarDecl(name, type name)`,
   `TypeDecl(name, def)`, `Routine(name, params, result type, is_func, block)` (block `None` for
   `forward`), `Param(name, type name, by_ref)`, `Block(decls, body)`.
 - **Type definitions** (the `def` of a `TypeDecl`, or a type position): `Name`, `Range`, `Enum`,
@@ -262,3 +262,16 @@ records them; `F+`/`F-` are ignored). Codegen's `check(e, lo, hi)` calls the Sys
 is on, unless `e` is a constant or its type already lies in `lo..hi`. It is applied to the value of an
 ordinal assignment, to value arguments (`push_args`) and to array and string indexes (`addr`). The
 `Inc`/`Dec` rewrite positions its value node at line 0, so those assignments are never checked (D21).
+
+## Typed constants
+
+`name: type = init` is a static variable (`SymKind::Var`, also inside a routine, so its value
+survives calls). The checker (`typed_const_decl`) walks the initialiser along the type: arrays
+count their elements (87 at the `)`, 89 at the first extra), a character array takes a string of
+its length (100), a record's entries must be its first fields in order (101, 44), anything else is a
+constant expression assignable to the type (`(v)` becomes `v`); a procedural type is 99. It records
+`(address, type, init)` in `Info::typed_consts`. Codegen builds the byte image (`static_image`, its
+doc comment gives the layout) and emits one data segment for each constant a live body names:
+`Gen::base` marks a `Var` address that is a typed constant, like a literal used by live code.
+`Length` of a string constant folds to a constant. A subrange bound is a simple expression, so
+`array[1..3] of Integer = (...)` does not read `= (...)` as part of the element type.

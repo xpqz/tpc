@@ -147,7 +147,7 @@ fn occurrences(module: &[u8], pattern: &[u8]) -> usize {
 }
 
 fn program(decls: &str, body: &str) -> String {
-    format!("program T;\n{decls}\nbegin\n  {body}\nend.")
+    format!("program Check;\n{decls}\nbegin\n  {body}\nend.")
 }
 
 /// The initial memory image of each kind of constant is in the module exactly once, laid out
@@ -199,7 +199,7 @@ fn initial_values_are_laid_out_like_variables() {
             set,
         ),
         (
-            "type R = record a: Integer; b: Char; c: string[2]; end;\nconst r: R = (a: 258; b: 'Z'; c: 'q');",
+            "type TRec = record a: Integer; b: Char; c: string[2]; end;\nconst r: TRec = (a: 258; b: 'Z'; c: 'q');",
             "r.a := 0",
             vec![2, 1, b'Z', 1, b'q', 0],
         ),

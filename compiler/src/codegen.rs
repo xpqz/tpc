@@ -167,6 +167,9 @@ struct Layout {
     literal_addr: Vec<Option<u32>>,
     /// The bytes of those literals, from `data_end` on.
     literals: Vec<u8>,
+    /// Whether a live body names each typed constant (`Info::typed_consts`); only those are
+    /// emitted as data.
+    typed_const_used: Vec<bool>,
     data_end: u32,
     /// True during the mark phase: routines are reached as the bodies mention them.
     marking: bool,
@@ -192,6 +195,7 @@ impl Layout {
         Layout {
             literal_addr: vec![None; ast.strs.len()],
             literals: Vec::new(),
+            typed_const_used: vec![false; info.typed_consts.len()],
             data_end: info.data_end,
             marking: true,
             reached: Vec::new(),
@@ -409,11 +413,85 @@ fn emit(ast: &Ast, info: &Info, root: Id, reached: &Reached) -> Vec<u8> {
     };
     emit_table_and_exports(&mut m, info, &layout, trap_stub, main_function);
     m.data(HEADER, b"\n FALSETRUE");
+    emit_typed_constants(&mut m, ast, info, &layout);
     m.data(info.data_end, &layout.literals);
     // The heap starts, 8-aligned, after the literals: `HeapOrg` and `HeapPtr` both hold it.
     let heap_start = align_up(info.data_end + layout.literals.len() as u32, 8).to_le_bytes();
     m.data(info.heap, &[heap_start, heap_start].concat());
     m.finish()
+}
+
+/// One data segment, at its variable's address, for each typed constant a live body names.
+fn emit_typed_constants(m: &mut Module, ast: &Ast, info: &Info, layout: &Layout) {
+    for (constant, &used) in info.typed_consts.iter().zip(&layout.typed_const_used) {
+        if used {
+            let image = static_image(ast, info, constant.ty, constant.init);
+            m.data(constant.address, &image);
+        }
+    }
+}
+
+/// The initial memory of a typed constant of type `ty`: the bytes a variable of that type
+/// holds, `Types::size(ty)` of them. Integers, Booleans, Chars, enumerations and pointers
+/// are little-endian in their storage size; a Real is an f64; a string is its length byte,
+/// the characters cut to the capacity and zero padding up to it; a set is 32 bytes with bit
+/// `i % 8` of byte `i / 8` for element `i`; a character array is the string's characters;
+/// an array is its elements one after another; a record is zeros with each initialised field
+/// placed at its offset, the entries being the first fields in order.
+fn static_image(ast: &Ast, info: &Info, ty: Ty, init: Id) -> Vec<u8> {
+    let types = &info.types;
+    match ast.kind(init) {
+        Kind::IntLit(value) => value.to_le_bytes()[..types.ord(ty).size as usize].to_vec(),
+        Kind::RealLit(value) => value.to_le_bytes().to_vec(),
+        Kind::StrLit(s) if types.is_str(ty) => {
+            let text = &ast.strs[s as usize];
+            let capacity = types.capacity(ty) as usize;
+            let length = text.len().min(capacity);
+            let mut image = vec![0; capacity + 1];
+            image[0] = length as u8;
+            image[1..=length].copy_from_slice(&text[..length]);
+            image
+        }
+        Kind::StrLit(s) => ast.strs[s as usize].clone(),
+        Kind::SetLit(items) => {
+            let mut image = vec![0u8; SET_TEMP as usize];
+            for &item in ast.items(items) {
+                let (first, last) = match ast.kind(item) {
+                    Kind::Range(lo, hi) => (lo, hi),
+                    _ => (item, item),
+                };
+                let (Kind::IntLit(first), Kind::IntLit(last)) = (ast.kind(first), ast.kind(last))
+                else {
+                    unreachable!("the checker accepts only constant set elements")
+                };
+                for element in first..=last {
+                    image[element as usize / 8] |= 1 << (element % 8);
+                }
+            }
+            image
+        }
+        Kind::ArrayInit(items) => {
+            let (_, _, _, element) = types.array_of(ty).expect("an array initialiser");
+            let image = ast.items(items).iter();
+            image
+                .flat_map(|&item| static_image(ast, info, element, item))
+                .collect()
+        }
+        Kind::RecordInit(entries) => {
+            let mut image = vec![0; types.size(ty) as usize];
+            let fields = types.record_fields(ty);
+            for (&entry, field) in ast.items(entries).iter().zip(&fields) {
+                let Kind::FieldInit(_, value) = ast.kind(entry) else {
+                    unreachable!("a record initialiser holds field entries")
+                };
+                let bytes = static_image(ast, info, field.ty, value);
+                let start = field.offset as usize;
+                image[start..start + bytes.len()].copy_from_slice(&bytes);
+            }
+            image
+        }
+        _ => unreachable!("the checker accepts only constant initialisers"),
+    }
 }
 
 /// One WASM import from module `host` for each `external` routine the program reaches: a Real
@@ -870,11 +948,21 @@ impl Gen<'_> {
         }
     }
 
+    /// A body names the static variable at `address`; if it is a typed constant its initial
+    /// image must be emitted.
+    fn mark_typed_const(&mut self, address: u32) {
+        let constants = &self.info.typed_consts;
+        if let Ok(i) = constants.binary_search_by_key(&address, |c| c.address) {
+            self.layout.typed_const_used[i] = true;
+        }
+    }
+
     /// Pushes the address base of a variable in memory and returns the constant offset to add
     /// to it.
     fn base(&mut self, s: Symbol) -> u32 {
         match s.kind {
             SymKind::Var(address) => {
+                self.mark_typed_const(address);
                 self.code.i32_const(address as i32);
                 0
             }
