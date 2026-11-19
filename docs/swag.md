@@ -165,8 +165,8 @@ where the first token is not Pascal). Diagnostics numbers in `tests/neg` are exa
 Re-run after #94 (`tools/swag.sh` cache, tp5c from this branch, error number and line must both
 match): 72 of 134 agreed before, 103 after. Fixed: error 17 against 200 for a `{$A+,...,G+}` list
 whose bad letter follows `N`/`E` (23 files), and TP 36/11 and others against our scanner errors
-(about 8 files; scanning errors are now deferred, see D42 to D45 in deviations.md). The 31 left are 20
-omitted features that TP accepts (D45), 6 syntax errors after a semantic one (D42), and
+(about 8 files; scanning errors are now deferred, see D43 to D46 in deviations.md). The 31 left are 20
+omitted features that TP accepts (D46), 6 syntax errors after a semantic one (D43), and
 `{$L}`, `extended`, `FindFirst`, and a data segment overflow.
 
 ## Proposed bug issues (for the lead to file)
