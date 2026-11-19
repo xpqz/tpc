@@ -12,9 +12,7 @@ fn root() -> PathBuf {
 }
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = root().join("tmp/runner_crt");
-    std::fs::create_dir_all(&dir).unwrap();
-    dir.join(name)
+    fresh_dir("runner_crt").join(name)
 }
 
 const PUT: i32 = 0;
