@@ -1,7 +1,7 @@
 { Main: the editor loop that ties the IDE modules together.
 
-  One pass of the loop paints the window (View), draws the menu bar and the file name over it
-  (Menu, Main), waits for one command (Keys) and carries it out. Keys edits the Buffer itself;
+  One pass of the loop paints the window (View), draws the menu bar, with the file name, over it
+  (Menu), waits for one command (Keys) and carries it out. Keys edits the Buffer itself;
   what it returns is the commands that need another module: the menu (Menu), the files
   (Files) and the host (IdeHost).
 
@@ -31,7 +31,6 @@ uses Crt, Buffer, View, Keys, Menu, Files, IdeHost, Errors;
 
 const
   ScreenWidth = 80;
-  TitleRow = 1;
   PromptRow = 25;
 
 function NumberText(Value: LongInt): string;
@@ -40,24 +39,6 @@ var
 begin
   Str(Value, Digits);
   NumberText := Digits;
-end;
-
-{ ---- The file name ---- }
-
-{ Writes the current file name at the right end of the menu bar. The cursor stays where it
-  was. }
-procedure DrawTitle;
-var
-  Title: string;
-  SavedX, SavedY: Byte;
-begin
-  SavedX := WhereX;
-  SavedY := WhereY;
-  Title := ' ' + CurrentName + ' ';
-  TextAttr := BarAttr;
-  GotoXY(ScreenWidth - Length(Title) + 1, TitleRow);
-  Write(Title);
-  GotoXY(SavedX, SavedY);
 end;
 
 { ---- Compile ---- }
@@ -173,7 +154,6 @@ begin
   repeat
     Paint;
     DrawBar;
-    DrawTitle;
     Command := ReadCommand;
     if Command = CmdMenu then
       Command := Menu.Run(MenuLetter);

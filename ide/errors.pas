@@ -20,7 +20,7 @@ type
   end;
 
 const
-  EntryCount = 75;
+  EntryCount = 76;
   Entries: array[1..EntryCount] of ErrorEntry = (
     (Code: 2; Text: 'Identifier expected'),
     (Code: 3; Text: 'Unknown identifier'),
@@ -31,6 +31,7 @@ const
     (Code: 8; Text: 'String constant exceeds line'),
     (Code: 9; Text: 'Too many nested files'),
     (Code: 10; Text: 'Unexpected end of file'),
+    (Code: 11; Text: 'Line too long'),
     (Code: 12; Text: 'Type identifier expected'),
     (Code: 15; Text: 'File not found'),
     (Code: 17; Text: 'Invalid compiler directive'),

@@ -116,6 +116,7 @@ pub const TABLE: &[(u16, &str)] = &[
     (8, "String constant exceeds line"),
     (9, "Too many nested files"),
     (10, "Unexpected end of file"),
+    (11, "Line too long"),
     (12, "Type identifier expected"),
     (15, "File not found"),
     (17, "Invalid compiler directive"),

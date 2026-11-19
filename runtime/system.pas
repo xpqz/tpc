@@ -7,7 +7,7 @@
   StrCmp, StrAssign, StrInt, ValLong, ValReal, StrDelete, StrInsert, SetOp, SetAdd, SetIn,
   SetCmp, HeapGet, HeapPut, HeapMark, HeapRelease, HostWrite, RtError, HostHalt, Fmt_Real, TextOut,
   TextNewLine, TextFlush, CheckIo, Assign, Eof, Eoln, ReadChar, ReadLong, ReadReal, ReadStr,
-  ReadLnEnd.
+  ReadLnEnd, ExpReal, LnReal, SinReal, CosReal, ArcTanReal.
   HeapOrg, Text and Input are also found by name.
 
   The console hooks (ConsoleOut, ConsoleLine, ConsoleHooked) are how Crt takes over Write and
@@ -84,6 +84,212 @@ end;
 function ParamStr(n: LongInt): String;
 begin
   ParamStr := ''
+end;
+
+function Pi: Real;
+begin
+  Pi := 3.14159265358979323846
+end;
+
+{ The transcendental functions. The compiler calls ExpReal, LnReal, SinReal, CosReal and
+  ArcTanReal for Exp, Ln, Sin, Cos and ArcTan. Each reduces its argument to a small range,
+  where a Taylor series converges to full double precision in a few terms, and then undoes
+  the reduction. Their results agree with a correctly rounded value to about 1E-15 (relative)
+  for arguments of moderate size. }
+
+const
+  Ln2 = 0.693147180559945309417;
+  { Ln2 as a high part with trailing zero bits and a small remainder, so that K * Ln2High is
+    exact for any integer K the reduction in ExpReal produces. }
+  Ln2High = 6.93147180369123816490E-01;
+  Ln2Low = 1.90821492927058770002E-10;
+  HalfPi = 1.57079632679489661923;
+  { The same split for Pi / 2, used to reduce the argument of SinReal and CosReal. }
+  HalfPiHigh = 1.57079632673412561417;
+  HalfPiLow = 6.07710050650619224932E-11;
+
+{ e ** x. Write x = k * Ln2 + r with |r| <= Ln2 / 2; then e ** x = 2 ** k * e ** r, and
+  e ** r is the series 1 + r + r**2 / 2! + ... }
+function ExpReal(x: Real): Real;
+var
+  k, i: Integer;
+  r, term, sum: Real;
+begin
+  if x > 709.78 then
+    RunError(205);
+  if x < -745 then
+  begin
+    ExpReal := 0;
+    Exit
+  end;
+  if x >= 0 then
+    k := Trunc(x / Ln2 + 0.5)
+  else
+    k := -Trunc(-x / Ln2 + 0.5);
+  r := (x - k * Ln2High) - k * Ln2Low;
+  term := 1;
+  sum := 1;
+  for i := 1 to 17 do
+  begin
+    term := term * r / i;
+    sum := sum + term
+  end;
+  { Scaling by two is exact, so it is done one step at a time. }
+  while k > 0 do
+  begin
+    sum := sum * 2;
+    k := k - 1
+  end;
+  while k < 0 do
+  begin
+    sum := sum / 2;
+    k := k + 1
+  end;
+  ExpReal := sum
+end;
+
+{ Natural logarithm. Scale x by powers of two into [0.7071, 1.4142), so that x = m * 2 ** e
+  and ln x = e * Ln2 + ln m. With s = (m - 1) / (m + 1), |s| <= 0.1716 and
+  ln m = 2 * (s + s**3 / 3 + s**5 / 5 + ...). Zero and negative arguments are error 207. }
+function LnReal(x: Real): Real;
+var
+  e, i: Integer;
+  s, s2, power, sum: Real;
+begin
+  if x <= 0 then
+    RunError(207);
+  e := 0;
+  while x >= 1.41421356237309505 do
+  begin
+    x := x / 2;
+    e := e + 1
+  end;
+  while x < 0.707106781186547524 do
+  begin
+    x := x * 2;
+    e := e - 1
+  end;
+  s := (x - 1) / (x + 1);
+  s2 := s * s;
+  power := s;
+  sum := 0;
+  for i := 0 to 14 do
+  begin
+    sum := sum + power / (2 * i + 1);
+    power := power * s2
+  end;
+  LnReal := e * Ln2 + 2 * sum
+end;
+
+{ Sine of r for |r| <= Pi / 4: r - r**3 / 3! + r**5 / 5! - ... }
+function SinSeries(r: Real): Real;
+var
+  i: Integer;
+  term, sum: Real;
+begin
+  term := r;
+  sum := r;
+  for i := 1 to 10 do
+  begin
+    term := -term * r * r / ((2 * i) * (2 * i + 1));
+    sum := sum + term
+  end;
+  SinSeries := sum
+end;
+
+{ Cosine of r for |r| <= Pi / 4: 1 - r**2 / 2! + r**4 / 4! - ... }
+function CosSeries(r: Real): Real;
+var
+  i: Integer;
+  term, sum: Real;
+begin
+  term := 1;
+  sum := 1;
+  for i := 1 to 10 do
+  begin
+    term := -term * r * r / ((2 * i - 1) * (2 * i));
+    sum := sum + term
+  end;
+  CosSeries := sum
+end;
+
+{ Writes x = n * Pi / 2 + r with |r| <= Pi / 4 and returns n mod 4 as the quadrant (0 to 3).
+  The sign and swap rules of the quadrants are in SinReal and CosReal. Accurate while
+  |x| is below about 1E9; beyond that the multiple of Pi / 2 is not exact. }
+function Reduce(x: Real; var r: Real): Integer;
+var
+  n, whole: Real;
+  quadrant: Integer;
+begin
+  if x >= 0 then
+    n := Int(x / HalfPi + 0.5)
+  else
+    n := -Int(-x / HalfPi + 0.5);
+  r := (x - n * HalfPiHigh) - n * HalfPiLow;
+  whole := n - 4 * Int(n / 4);
+  quadrant := Trunc(whole);
+  if quadrant < 0 then
+    quadrant := quadrant + 4;
+  Reduce := quadrant
+end;
+
+function SinReal(x: Real): Real;
+var
+  r: Real;
+begin
+  case Reduce(x, r) of
+    0: SinReal := SinSeries(r);
+    1: SinReal := CosSeries(r);
+    2: SinReal := -SinSeries(r);
+  else
+    SinReal := -CosSeries(r)
+  end
+end;
+
+function CosReal(x: Real): Real;
+var
+  r: Real;
+begin
+  case Reduce(x, r) of
+    0: CosReal := CosSeries(r);
+    1: CosReal := -SinSeries(r);
+    2: CosReal := -CosSeries(r);
+  else
+    CosReal := SinSeries(r)
+  end
+end;
+
+{ Arc tangent. For |x| > 1, ArcTan x = Pi / 2 - ArcTan (1 / x). Then the identity
+  ArcTan x = 2 * ArcTan (x / (1 + Sqrt (1 + x**2))) is applied three times, shrinking |x| to
+  at most 0.1, where the series x - x**3 / 3 + x**5 / 5 - ... converges quickly. }
+function ArcTanReal(x: Real): Real;
+var
+  i: Integer;
+  negative, inverted: Boolean;
+  x2, power, sum: Real;
+begin
+  negative := x < 0;
+  if negative then
+    x := -x;
+  inverted := x > 1;
+  if inverted then
+    x := 1 / x;
+  for i := 1 to 3 do
+    x := x / (1 + Sqrt(1 + x * x));
+  x2 := x * x;
+  power := x;
+  sum := 0;
+  for i := 0 to 8 do
+  begin
+    sum := sum + power / (2 * i + 1);
+    power := -power * x2
+  end;
+  sum := sum * 8;
+  if inverted then
+    sum := HalfPi - sum;
+  if negative then
+    sum := -sum;
+  ArcTanReal := sum
 end;
 
 function UpCase(c: Char): Char;

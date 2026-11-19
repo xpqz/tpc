@@ -129,3 +129,23 @@ end;
 procedure ReadLnEnd(var f: Text);
 begin
 end;
+function ExpReal(x: Real): Real;
+begin
+  ExpReal := 0
+end;
+function LnReal(x: Real): Real;
+begin
+  LnReal := 0
+end;
+function SinReal(x: Real): Real;
+begin
+  SinReal := 0
+end;
+function CosReal(x: Real): Real;
+begin
+  CosReal := 0
+end;
+function ArcTanReal(x: Real): Real;
+begin
+  ArcTanReal := 0
+end;

@@ -51,6 +51,7 @@ pub mod op {
     pub const PREFIX_FC: u8 = 0xFC;
     pub const I32_TRUNC_SAT_F64_S: u8 = 0x02;
     pub const MEMORY_COPY: u8 = 0x0A;
+    pub const MEMORY_FILL: u8 = 0x0B;
 }
 
 /// Unsigned LEB128: seven bits per byte, low bits first, the high bit set on every byte but
@@ -172,6 +173,11 @@ impl Code {
     /// `memory.copy` of (dest, src, len) on the stack, memory 0 to memory 0.
     pub fn memory_copy(&mut self) -> &mut Self {
         self.idx(op::PREFIX_FC, op::MEMORY_COPY as u32).op(0).op(0)
+    }
+
+    /// `memory.fill` of (address, byte, len) on the stack.
+    pub fn memory_fill(&mut self) -> &mut Self {
+        self.idx(op::PREFIX_FC, op::MEMORY_FILL as u32).op(0)
     }
 
     /// `i32.trunc_sat_f64_s`: the f64 on the stack to i32, clamping instead of trapping.
