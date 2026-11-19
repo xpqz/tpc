@@ -11,23 +11,24 @@ use std::path::Path;
 
 const USAGE: &str = "usage: tp5c in.pas -o out.wasm [--dir AUXDIR]";
 
-/// The units of the runtime that `uses` finds without a file (docs/decisions.md).
+/// The units of the runtime that `uses` finds without a file (docs/decisions.md), as `build.rs`
+/// writes them: comments removed.
 const EMBEDDED_UNITS: &[EmbeddedUnit] = &[
     EmbeddedUnit {
         name: "CRT",
-        source: include_bytes!("../../runtime/crt.pas"),
+        source: include_bytes!(concat!(env!("OUT_DIR"), "/crt.pas")),
     },
     EmbeddedUnit {
         name: "DOS",
-        source: include_bytes!("../../runtime/dos.pas"),
+        source: include_bytes!(concat!(env!("OUT_DIR"), "/dos.pas")),
     },
     EmbeddedUnit {
         name: "UTILS",
-        source: include_bytes!("../../runtime/utils.pas"),
+        source: include_bytes!(concat!(env!("OUT_DIR"), "/utils.pas")),
     },
     EmbeddedUnit {
         name: "IDEHOST",
-        source: include_bytes!("../../runtime/idehost.pas"),
+        source: include_bytes!(concat!(env!("OUT_DIR"), "/idehost.pas")),
     },
 ];
 
@@ -39,7 +40,11 @@ pub fn compile(src: &[u8]) -> Result<Vec<u8>, Diag> {
 /// Compiles the program `src`; `files` are the registered source files, whose n-th entry is
 /// file number n + 1 in diagnostics.
 pub fn compile_files(src: &[u8], files: &[SourceFile]) -> Result<Vec<u8>, Diag> {
-    build(include_bytes!("../../runtime/system.pas"), src, files)
+    build(
+        include_bytes!(concat!(env!("OUT_DIR"), "/system.pas")),
+        src,
+        files,
+    )
 }
 
 /// `compile` with `system` as the source of the System declaration part.

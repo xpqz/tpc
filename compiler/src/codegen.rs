@@ -141,25 +141,38 @@ enum RealArgs {
     ByValue,
 }
 
+/// The built-in functions beyond `write_string` that the program needs; each is defined only
+/// if a body calls it.
+#[derive(Clone, Copy, Default)]
+struct Builtins {
+    write_integer: bool,
+    quotient: bool,
+    real_div: bool,
+}
+
 /// What the mark phase found: the defined routines to emit and the `external` routines to
-/// import, each in the order they were reached, and whether the program divides Reals.
+/// import, each in the order they were reached, and the built-in functions needed.
 struct Reached {
     routines: Vec<u32>,
     imports: Vec<u32>,
-    uses_real_div: bool,
+    builtins: Builtins,
+    /// Whether a body calls through each procedural type, by `Ty` index; only those types get
+    /// a WASM type.
+    called_types: Vec<bool>,
 }
 
-/// WASM function numbers: the imports first, in the order they were reached (`write` and
-/// `rterror` always lead, because the built-in functions call them), then the defined
-/// functions: the three built-in helpers, `rdiv` if used, the reached routines, the main
-/// program and the table's trap stub.
+/// WASM function numbers: the imports first, in the order they were reached (`write` always
+/// leads, because `write_string` calls it through `TextOut`), then the defined functions:
+/// `write_string`, the other built-in functions the program needs, the reached routines, the
+/// main program and the table's trap stub.
 struct Indexes {
-    host_rterror: u32,
+    /// Present once the program reaches `rterror`; the division helpers do.
+    host_rterror: Option<u32>,
     /// System's `TextOut`, which the built-in output functions call.
     text_out: u32,
     write_string: u32,
-    write_integer: u32,
-    quotient: u32,
+    write_integer: Option<u32>,
+    quotient: Option<u32>,
     real_div: Option<u32>,
     first_routine: u32,
 }
@@ -168,20 +181,34 @@ impl Indexes {
     /// `text_out_position` is the position of `TextOut` among the reached routines.
     fn new(
         import_count: u32,
-        host_rterror: u32,
+        host_rterror: Option<u32>,
         text_out_position: u32,
-        uses_real_div: bool,
+        builtins: Builtins,
     ) -> Self {
-        let first_defined = import_count;
-        let first_routine = first_defined + 3 + uses_real_div as u32;
+        let write_string = import_count;
+        let mut next = write_string + 1;
+        // Numbered in this order, each only if the program needs it.
+        let (mut write_integer, mut quotient, mut real_div) = (None, None, None);
+        if builtins.write_integer {
+            write_integer = Some(next);
+            next += 1;
+        }
+        if builtins.quotient {
+            quotient = Some(next);
+            next += 1;
+        }
+        if builtins.real_div {
+            real_div = Some(next);
+            next += 1;
+        }
         Indexes {
             host_rterror,
-            text_out: first_routine + text_out_position,
-            write_string: first_defined,
-            write_integer: first_defined + 1,
-            quotient: first_defined + 2,
-            real_div: uses_real_div.then_some(first_defined + 3),
-            first_routine,
+            text_out: next + text_out_position,
+            write_string,
+            write_integer,
+            quotient,
+            real_div,
+            first_routine: next,
         }
     }
 }
@@ -206,10 +233,12 @@ struct Layout {
     position: Vec<Option<u32>>,
     /// Whether each routine is `external`.
     external: Vec<bool>,
-    uses_real_div: bool,
+    builtins: Builtins,
     indexes: Indexes,
-    /// WASM type of each procedural type, by `Ty` index.
+    /// WASM type of each procedural type that is called through, by `Ty` index.
     wasm_types: Vec<u32>,
+    /// Marking: whether a body calls through each procedural type, by `Ty` index.
+    called_types: Vec<bool>,
     /// Table index of each routine whose address is taken, 0 for the others.
     table_slots: Vec<u32>,
 }
@@ -227,9 +256,10 @@ impl Layout {
             imports: Vec::new(),
             position: vec![None; info.routines.len()],
             external: info.routines.iter().map(|r| r.import.is_some()).collect(),
-            uses_real_div: false,
-            indexes: Indexes::new(0, 0, 0, false),
+            builtins: Builtins::default(),
+            indexes: Indexes::new(0, None, 0, Builtins::default()),
             wasm_types: vec![0; info.types.count()],
+            called_types: vec![false; info.types.count()],
             table_slots: vec![0; info.routines.len()],
         }
     }
@@ -242,20 +272,20 @@ impl Layout {
                 position[r as usize] = Some(at as u32);
             }
         }
-        // The mark phase reaches these three helpers first of all.
-        let position_of = |helper| position[info.helper(helper) as usize].expect("always reached");
+        // The mark phase reaches `write` and `TextOut` first of all; `rterror` only if used.
+        let position_of = |helper| position[info.helper(helper) as usize];
         let indexes = Indexes::new(
             reached.imports.len() as u32,
             position_of(Helper::HostRtError),
-            position_of(Helper::TextOut),
-            reached.uses_real_div,
+            position_of(Helper::TextOut).expect("always reached"),
+            reached.builtins,
         );
         Layout {
             marking: false,
             reached: reached.routines.clone(),
             imports: reached.imports.clone(),
             position,
-            uses_real_div: reached.uses_real_div,
+            builtins: reached.builtins,
             indexes,
             wasm_types,
             table_slots: table_slots(info),
@@ -291,9 +321,25 @@ impl Layout {
         }
     }
 
-    /// The function number of the Real division helper, which marks it as needed.
+    /// The WASM type of the procedural type `ty`; asking marks it as called through.
+    fn procedural_type_index(&mut self, ty: Ty) -> u32 {
+        self.called_types[ty.0 as usize] = true;
+        self.wasm_types[ty.0 as usize]
+    }
+
+    /// The function numbers of the built-in functions; asking marks the function as needed.
+    fn write_integer_index(&mut self) -> u32 {
+        self.builtins.write_integer = true;
+        self.indexes.write_integer.unwrap_or_default()
+    }
+
+    fn quotient_index(&mut self) -> u32 {
+        self.builtins.quotient = true;
+        self.indexes.quotient.unwrap_or_default()
+    }
+
     fn real_div_index(&mut self) -> u32 {
-        self.uses_real_div = true;
+        self.builtins.real_div = true;
         self.indexes.real_div.unwrap_or_default()
     }
 
@@ -364,16 +410,20 @@ pub fn gen(ast: &Ast, info: &Info, root: Id) -> Vec<u8> {
 /// The mark phase: generates every body, discarding the code, to find what is reached.
 fn mark(ast: &Ast, info: &Info, root: Id) -> Reached {
     let mut layout = Layout::for_marking(ast, info);
-    // `rterror` is called by the built-in functions and `write` by `TextOut`, which they call, so
-    // every module imports both, first.
+    // `write_string` always calls `TextOut`, which calls `write`, so every module has them, with
+    // `write` the first import.
     layout.routine_index(info.helper(Helper::HostWrite));
-    layout.routine_index(info.helper(Helper::HostRtError));
     layout.routine_index(info.helper(Helper::TextOut));
     generate_bodies(ast, info, root, &mut layout);
+    // The division helpers raise runtime error 200 through `rterror`.
+    if layout.builtins.quotient || layout.builtins.real_div {
+        layout.routine_index(info.helper(Helper::HostRtError));
+    }
     Reached {
         routines: layout.reached,
         imports: layout.imports,
-        uses_real_div: layout.uses_real_div,
+        builtins: layout.builtins,
+        called_types: layout.called_types,
     }
 }
 
@@ -398,10 +448,13 @@ fn generate_bodies(ast: &Ast, info: &Info, root: Id, layout: &mut Layout) -> (Bo
     (main, routines)
 }
 
-/// The WASM function type of each procedural type, registered in `m`.
-fn register_procedural_types(m: &mut Module, info: &Info) -> Vec<u32> {
+/// The WASM function type of each procedural type that is called through, registered in `m`.
+fn register_procedural_types(m: &mut Module, info: &Info, called: &[bool]) -> Vec<u32> {
     let mut wasm_types = vec![0; info.types.count()];
     for (i, t) in info.types.iter().enumerate() {
+        if !called[i] {
+            continue;
+        }
         if let Type::Proc { params, result } = t {
             let results: &[u8] = if *result == Ty::NONE { &[] } else { &[I32] };
             wasm_types[i] = m.ty(&vec![I32; params.len()], results);
@@ -413,7 +466,7 @@ fn register_procedural_types(m: &mut Module, info: &Info) -> Vec<u32> {
 /// The emit phase: the module with the routines found by `mark`, numbered.
 fn emit(ast: &Ast, info: &Info, root: Id, reached: &Reached) -> Vec<u8> {
     let mut m = Module::new();
-    let wasm_types = register_procedural_types(&mut m, info);
+    let wasm_types = register_procedural_types(&mut m, info, &reached.called_types);
     let mut layout = Layout::for_emitting(ast, info, reached, wasm_types);
     emit_imports(&mut m, ast, info, reached);
     m.memory(PAGES);
@@ -555,19 +608,31 @@ fn emit_imports(m: &mut Module, ast: &Ast, info: &Info, reached: &Reached) {
     }
 }
 
-/// The functions every module defines, in function-number order: `write_string`,
-/// `write_integer`, `quotient`, and `real_quotient` if the program divides Reals.
+/// The built-in functions, in function-number order: `write_string` in every module, then
+/// `write_integer`, `quotient` and `real_quotient` when the program needs them.
 fn emit_builtin_functions(m: &mut Module, layout: &Layout) {
     let write = m.ty(&[I32, I32, I32, I32], &[]);
     m.func(write, &[], write_string(layout.indexes.text_out));
-    let three_params = m.ty(&[I32, I32, I32], &[]);
-    let write_integer_code = write_integer(layout.indexes.write_string);
-    m.func(three_params, &[I32, I32, I32], write_integer_code);
-    let quotient_type = m.ty(&[I32, I32, I32], &[I32]);
-    m.func(quotient_type, &[], quotient(layout.indexes.host_rterror));
-    if layout.uses_real_div {
+    if layout.builtins.write_integer {
+        let three_params = m.ty(&[I32, I32, I32], &[]);
+        let write_integer_code = write_integer(layout.indexes.write_string);
+        m.func(three_params, &[I32, I32, I32], write_integer_code);
+    }
+    if layout.builtins.quotient {
+        let rterror = layout
+            .indexes
+            .host_rterror
+            .expect("division reaches rterror");
+        let quotient_type = m.ty(&[I32, I32, I32], &[I32]);
+        m.func(quotient_type, &[], quotient(rterror));
+    }
+    if layout.builtins.real_div {
+        let rterror = layout
+            .indexes
+            .host_rterror
+            .expect("division reaches rterror");
         let real_div = m.ty(&[F64, F64], &[F64]);
-        m.func(real_div, &[], real_quotient(layout.indexes.host_rterror));
+        m.func(real_div, &[], real_quotient(rterror));
     }
 }
 
@@ -840,9 +905,10 @@ impl Gen<'_> {
             .op(I32_SUB);
         self.code.local_tee(fp).i32_const(STACK_LIMIT).op(I32_LT_U);
         self.code.if_(VOID);
+        let rterror = self.helper_index(Helper::HostRtError);
         self.code
             .i32_const(ERROR_STACK_OVERFLOW)
-            .call(self.layout.indexes.host_rterror)
+            .call(rterror)
             .end();
         self.code.local_get(fp).idx(GLOBAL_SET, SP);
         if routine.is_some() && self.depth > 1 {
@@ -1341,8 +1407,8 @@ impl Gen<'_> {
         let (params, _) = self.info.types.sig(ty).expect("procedural callee");
         self.push_args(args, &params, RealArgs::ByAddress);
         self.expr(callee);
-        self.code
-            .call_indirect(self.layout.wasm_types[ty.0 as usize]);
+        let wasm_type = self.layout.procedural_type_index(ty);
+        self.code.call_indirect(wasm_type);
     }
 
     /// A unary operator or intrinsic of result type `ty`.
@@ -1416,7 +1482,7 @@ impl Gen<'_> {
             }
             Kind::RunErr(code) => {
                 self.expr(code);
-                self.code.call(self.layout.indexes.host_rterror);
+                self.helper(Helper::HostRtError);
             }
             Kind::InitPart(body) => {
                 // `Exit` in a unit's initialisation leaves that part only.
@@ -1657,7 +1723,8 @@ impl Gen<'_> {
                 self.code.local_get(file);
                 self.expr(value);
                 self.width(width);
-                self.code.call(self.layout.indexes.write_integer);
+                let write_integer = self.layout.write_integer_index();
+                self.code.call(write_integer);
             }
             (Some(Tag::Char), _) => self.write_char(file, value, width),
             _ => self.write_boolean(file, value, width),
@@ -1777,9 +1844,10 @@ impl Gen<'_> {
     fn sqrt(&mut self, t: u32) {
         self.reload(t);
         self.code.f64_const(0.0).op(F64_LT).if_(VOID);
+        let rterror = self.helper_index(Helper::HostRtError);
         self.code
             .i32_const(ERROR_INVALID_FLOATING_POINT)
-            .call(self.layout.indexes.host_rterror)
+            .call(rterror)
             .end();
         self.reload(t);
         self.code.op(F64_SQRT);
@@ -1981,9 +2049,8 @@ impl Gen<'_> {
         if matches!(op, Op::Div | Op::Mod) {
             let remainder = if op == Op::Mod { QUOT_REMAINDER } else { 0 };
             let sixteen_bit = if ty == Ty::INTEGER { QUOT_16_BIT } else { 0 };
-            self.code
-                .i32_const(remainder + sixteen_bit)
-                .call(self.layout.indexes.quotient);
+            let quotient = self.layout.quotient_index();
+            self.code.i32_const(remainder + sixteen_bit).call(quotient);
             return;
         }
         self.code.op(binary_op(op));

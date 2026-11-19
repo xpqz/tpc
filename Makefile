@@ -31,6 +31,7 @@ check: no-conflict-markers
 
 wasm:
 	cargo build --release --lib --target wasm32-unknown-unknown
+	node tools/wasm_sections.mjs --no-custom $(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/tp5c.wasm
 
 loc:
 	tools/loc.sh

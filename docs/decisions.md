@@ -714,3 +714,14 @@ already has its expected output from the real TP 5.0 (tools/tp5.sh), so each one
 differential test, and a second directory would hold the same kind of file. `tests/diff/` is
 therefore not created; `tests/lang/` is the differential corpus. Rejected: moving the larger
 programs (the SWAG-derived ones) into `tests/diff/`, which would split one kind of test by size.
+
+## 57. Size targets in decimal bytes; runtime sources embedded without comments
+
+The size targets say KB without defining it. A KB is 1,000 bytes, so the compiler target is
+250,000 B stripped. With custom sections stripped (`strip = true`), the compiler measured
+254,558 B, of which 59 KB was the embedded runtime sources and about 21 KB of that their
+comments. compiler/build.rs (counted) writes the runtime units without comments to OUT_DIR,
+and the driver embeds those copies. Directives, string literals and every newline are kept, so
+line numbers are unchanged. The compiler is now 234,407 B. Decision 11 still holds: the
+sources are counted where they live in runtime/. Rejected: reading KB as 1,024 B to pass
+without a change, and trimming comments in runtime/ itself, which would cost readability.
