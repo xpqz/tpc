@@ -1,7 +1,7 @@
 CARGO_TARGET_DIR := $(shell scripts/cargo-target.sh)
 export CARGO_TARGET_DIR
 
-.PHONY: no-conflict-markers build test test-browser fmt clippy check wasm loc hooks oracle oracle-tables ide site deploy-site test-site demo-gif
+.PHONY: no-conflict-markers build test test-browser test-vscode vscode fmt clippy check wasm loc hooks oracle oracle-tables ide site deploy-site test-site demo-gif
 
 build:
 	cargo build
@@ -17,6 +17,16 @@ test:
 # Drives the installed Chrome headless; needs a machine that can run it, so not part of `check`.
 test-browser:
 	node tests/host/browser/run.mjs
+
+# Runs the extension in the installed VS Code (VSCODE_BIN overrides where it is) and checks it
+# through the real editor API. Opens a window, so not part of `check`.
+test-vscode: wasm
+	node tests/vscode/editor/run.mjs
+
+# The extension as a self-contained directory, tmp/vscode-ext/, and as tmp/tp5-pascal-VERSION.vsix.
+# Install it with `code --install-extension tmp/tp5-pascal-VERSION.vsix`.
+vscode: wasm
+	node tools/package_vscode.mjs $(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/tp5c.wasm
 
 fmt:
 	cargo fmt

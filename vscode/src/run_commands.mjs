@@ -1,6 +1,7 @@
 // The commands Compile, Run and Stop. `vscode` is the API object handed in by extension.mjs;
 // `compileDocument(document)` compiles a document (and publishes its diagnostics) and returns
-// the compile result of compiler_service.mjs.
+// the compile result of compiler_service.mjs. `runs` is filled with the pseudoterminal of each
+// program that is started.
 import fs from "node:fs";
 import path from "node:path";
 import { createRunPty } from "./run_terminal.mjs";
@@ -15,8 +16,7 @@ export function errorMessage(result) {
   return `${file}(${line}): Error ${code}: ${message}`;
 }
 
-export function registerRunCommands(vscode, { compileDocument, isCompilable, settings }) {
-  const runs = new Set(); // the pseudoterminals of programs that were started
+export function registerRunCommands(vscode, { compileDocument, isCompilable, settings, runs }) {
 
   // The compiled module of the active Pascal file, written beside it; undefined (after saying
   // why) when it does not compile.

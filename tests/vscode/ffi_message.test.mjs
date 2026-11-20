@@ -38,23 +38,23 @@ const wasmMessage = (exports, source) => {
   return { code: exports.err_code(), message: Buffer.from(text).toString("latin1") };
 };
 
-test("the wasm error message equals the native tp5c message", async () => {
+// Compiled and instantiated synchronously: the asynchronous forms sometimes never settle on
+// Node 23 (see tests/run.mjs).
+test("the wasm error message equals the native tp5c message", () => {
   const tp5c = buildNative();
-  const module = await WebAssembly.compile(fs.readFileSync(buildWasm()));
+  const module = new WebAssembly.Module(fs.readFileSync(buildWasm()));
   for (const { code, source } of cases) {
     const native = nativeMessage(tp5c, source);
     assert.equal(native.code, code);
     assert.notEqual(native.message, "");
-    const { exports } = await WebAssembly.instantiate(module);
+    const { exports } = new WebAssembly.Instance(module);
     assert.deepEqual(wasmMessage(exports, source), native, `error ${code}`);
   }
 });
 
-test("an error number without a table entry has the message Unknown error", async () => {
+test("an error number without a table entry has the message Unknown error", () => {
   // Before any compile the stored error is the default Diag with code 0, which has no entry.
-  const { exports } = await WebAssembly.instantiate(
-    await WebAssembly.compile(fs.readFileSync(buildWasm())),
-  );
+  const { exports } = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(buildWasm())));
   const text = new Uint8Array(exports.memory.buffer, exports.err_message_ptr(), exports.err_message_len());
   assert.equal(Buffer.from(text).toString("latin1"), "Unknown error");
 });

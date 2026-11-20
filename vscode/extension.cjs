@@ -7,7 +7,7 @@ let extension;
 
 async function activate(context) {
   extension = await import("./src/extension.mjs");
-  extension.activate(vscode, context);
+  return extension.activate(vscode, context);
 }
 
 function deactivate() {

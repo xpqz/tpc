@@ -2,7 +2,7 @@
 // because the compiler aborts on a panic (the instance is then unusable) and the host's
 // Compiler keeps every file ever registered.
 import fs from "node:fs";
-import { Compiler } from "../../host/compiler.js";
+import { Compiler } from "./host.mjs";
 import { decodeLatin1 } from "./latin1.mjs";
 
 export class CompilerService {

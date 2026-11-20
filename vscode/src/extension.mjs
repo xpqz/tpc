@@ -16,7 +16,10 @@ const DEBOUNCE_MS = 300;
 
 let disposables = [];
 
+// Returns { runs }, the pseudoterminals of the programs run so far, for the in-editor tests
+// (tests/vscode/editor), which watch `running` on them.
 export function activate(vscode, context) {
+  const runs = new Set();
   const diagnostics = vscode.languages.createDiagnosticCollection("tp5");
   const shownBy = new Map(); // main file path -> file paths it has diagnostics on
   let service; // the CompilerService, created on first use and after a setting change
@@ -110,7 +113,7 @@ export function activate(vscode, context) {
 
   disposables = [
     diagnostics,
-    ...registerRunCommands(vscode, { compileDocument: check, isCompilable, settings }),
+    ...registerRunCommands(vscode, { compileDocument: check, isCompilable, settings, runs }),
     vscode.workspace.onDidOpenTextDocument((d) => isCompilable(d) && check(d)),
     vscode.workspace.onDidSaveTextDocument((d) => isCompilable(d) && check(d)),
     vscode.workspace.onDidChangeTextDocument(({ document }) => {
@@ -131,6 +134,7 @@ export function activate(vscode, context) {
   ];
   context.subscriptions.push({ dispose: deactivate });
   vscode.workspace.textDocuments.filter(isCompilable).forEach((d) => check(d));
+  return { runs };
 }
 
 export function deactivate() {

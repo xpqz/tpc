@@ -3,7 +3,7 @@
   "displayName": "Turbo Pascal 5.0 (TP5-WASM)",
   "description": "Turbo Pascal 5.0 language support and compiler diagnostics, from the TP5-WASM compiler.",
   "version": "0.1.0",
-  "publisher": "tp5-wasm",
+  "publisher": "xpqz",
   "license": "Apache-2.0",
   "engines": {
     "vscode": "^1.90.0"
