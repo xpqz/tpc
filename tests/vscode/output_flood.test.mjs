@@ -23,7 +23,7 @@ test("a million lines arrive complete, in order, in a bounded number of messages
   assert.ok(chunks.length > 2, "more than one chunk: the bytes did not wait for the end");
   assert.ok(chunks.length < 2000, `${chunks.length} messages`);
   const lines = chunks.join("").split("\r\n");
-  assert.equal(lines.length, 1_000_000 + 1 + 1 + 1 + 1, "lines, then an empty one, 'exit code 0' and the end");
+  assert.equal(lines.length, 1_000_000 + 3, "the lines, an empty one, exit code 0 and the empty rest");
   for (let i = 0; i < 1_000_000; i++) {
     if (lines[i] !== `line ${i + 1}`) assert.fail(`line ${i + 1} is ${JSON.stringify(lines[i])}`);
   }

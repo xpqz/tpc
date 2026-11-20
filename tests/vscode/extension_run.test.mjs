@@ -128,6 +128,8 @@ test("run of a program that uses Crt opens a terminal and draws on the alternate
     const { pty } = vscode.terminals[0].options;
     pty.onDidWrite((text) => written.push(text));
     pty.open({ columns: 80, rows: 25 });
+    await until("the end", () => !vscode.terminals[0].options.pty.running);
+    pty.handleInput(" ");
     await until("the end", () => written.join("").includes("exit code 0"));
     assert.ok(written.join("").startsWith("\x1b[?1049h"));
   });

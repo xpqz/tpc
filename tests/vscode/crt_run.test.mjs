@@ -38,18 +38,32 @@ async function feed(session, bytes) {
 }
 
 const langDirectory = path.join(root, "tests/lang");
+// Programs that need the IDE's compiler or shared directories (.compiler, .dirs) are left to
+// the test runner of tests/lang; a fixture directory beside the program holds its units.
+const needsRunnerSupport = (name) =>
+  ["compiler", "dirs"].some((extension) => fs.existsSync(path.join(langDirectory, `${name}.${extension}`)));
 const oracleCases = fs
   .readdirSync(langDirectory)
   .filter((name) => /^crt_.*\.pas$/.test(name))
-  .map((name) => name.slice(0, -4));
+  .map((name) => name.slice(0, -4))
+  .filter((name) => !needsRunnerSupport(name));
+
+// The program compiled in a scratch directory with its fixture files beside it.
+function compileFixture(name) {
+  const directory = scratchDirectory("crt-fixture-");
+  fs.copyFileSync(path.join(langDirectory, `${name}.pas`), path.join(directory, `${name}.pas`));
+  const fixtures = path.join(langDirectory, name);
+  if (fs.existsSync(fixtures)) fs.cpSync(fixtures, directory, { recursive: true });
+  return compileProgram(path.join(directory, `${name}.pas`));
+}
 
 test("there are oracle programs to compare with", () => {
-  assert.ok(oracleCases.length >= 40, `found ${oracleCases.length}`);
+  assert.ok(oracleCases.length >= 45, `found ${oracleCases.length}`);
 });
 
 for (const name of oracleCases) {
   test(`${name}: the grid and the terminal text equal the real TP 5.0 screen dump`, async () => {
-    const wasm = compileProgram(path.join(langDirectory, `${name}.pas`));
+    const wasm = compileFixture(name);
     const keysFile = path.join(langDirectory, `${name}.keys`);
     const keys = fs.existsSync(keysFile) ? keyBytes(fs.readFileSync(keysFile, "utf8")) : [];
     const expected = fs.readFileSync(path.join(langDirectory, `${name}.out`), "latin1");
@@ -73,6 +87,9 @@ test("a Crt program's output starts with the alternate screen and ends on the no
   const { session, text } = run(program("crt_program"));
   assert.ok(text().startsWith(ENTER_SCREEN));
   await session.ended;
+  assert.equal(session.screenHeld, true);
+  session.showEnd();
+  assert.equal(session.screenHeld, false);
   const all = text();
   assert.ok(all.indexOf("\x1b[?1049l") > all.indexOf("Hello"));
   assert.ok(all.endsWith("\r\nexit code 0\r\n"), JSON.stringify(all.slice(-40)));
@@ -144,10 +161,30 @@ test("stop ends a Crt program that spins and leaves the alternate screen", async
   await until("a frame", () => text().includes("\x1b[?25l"));
   session.stop();
   assert.deepEqual(await session.ended, { kind: "stopped" });
+  session.showEnd();
   const all = text();
   assert.ok(all.endsWith("\r\nstopped\r\n"));
   const terminal = new AnsiScreen();
   terminal.feed(all);
   assert.equal(terminal.onAlternate, false);
   assert.equal(terminal.cursorVisible, true);
+});
+
+test("the final picture stays on the alternate screen until showEnd", async () => {
+  const { session, text } = run(program("crt_idle"));
+  const outcome = await session.ended;
+  assert.deepEqual(outcome, { kind: "exit", code: 0 });
+  const held = new AnsiScreen();
+  held.feed(text());
+  assert.equal(held.onAlternate, true, "still on the alternate screen after the program ended");
+  assert.equal(held.rowText(0), "Hi");
+  assert.equal(held.rowText(1), "late", "the last frame was drawn");
+  assert.ok(!text().includes("exit code"), "no end text yet");
+  session.showEnd();
+  session.showEnd();
+  const left = new AnsiScreen();
+  left.feed(text());
+  assert.equal(left.onAlternate, false);
+  assert.equal(text().split("exit code 0").length, 2, "the end text is written once");
+  assert.ok(text().endsWith("\r\nexit code 0\r\n"));
 });

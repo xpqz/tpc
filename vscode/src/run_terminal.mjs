@@ -10,6 +10,7 @@ export function createRunPty(EventEmitter, { wasm, directory, writeFiles }) {
   const written = new EventEmitter();
   const closed = new EventEmitter();
   let session;
+  let dimensions; // the terminal's size, known before the program starts
   let userClosed = false; // the terminal is gone: nothing more is written
   let closeFired = false;
 
@@ -25,9 +26,19 @@ export function createRunPty(EventEmitter, { wasm, directory, writeFiles }) {
       return session?.running ?? false;
     },
 
-    open() {
+    open(initialDimensions) {
+      dimensions = initialDimensions ?? dimensions;
       session = startRun({ wasm, directory, writeFiles, onOutput: write });
-      session.ended.then(() => write(PRESS_ANY_KEY));
+      if (dimensions) session.resize(dimensions.columns, dimensions.rows);
+      // A Crt program's last picture stays until a key is pressed; the prompt follows it.
+      session.ended.then(() => {
+        if (!session.screenHeld) write(PRESS_ANY_KEY);
+      });
+    },
+
+    setDimensions(newDimensions) {
+      dimensions = newDimensions;
+      session?.resize(newDimensions.columns, newDimensions.rows);
     },
 
     // The terminal was closed by the user: end the program without a word.
@@ -41,10 +52,14 @@ export function createRunPty(EventEmitter, { wasm, directory, writeFiles }) {
     },
 
     // While the program runs, typing is its keyboard and Ctrl+C stops it. Once it has ended
-    // the terminal waits for any key and then closes itself.
+    // the terminal waits for any key (the first one leaves a Crt picture and shows the end
+    // text) and then closes itself.
     handleInput(data) {
       if (session === undefined) return;
-      if (!session.running) {
+      if (!session.running && session.screenHeld) {
+        session.showEnd();
+        write(PRESS_ANY_KEY);
+      } else if (!session.running) {
         if (!closeFired) closed.fire();
         closeFired = true;
       } else if (data.includes(CTRL_C)) {

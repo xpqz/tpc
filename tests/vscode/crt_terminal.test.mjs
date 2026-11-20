@@ -32,7 +32,7 @@ test("the program's picture appears on the alternate screen", async () => {
   await until("the picture", () => screen().onAlternate && screen().rowText(0) === "waiting");
   assert.equal(screen().cursorVisible, true);
   pty.stop();
-  await until("the end", () => text().includes("stopped"));
+  await until("the end", () => !pty.running);
 });
 
 test("an arrow key typed in the terminal is ReadKey's 0 and 72", async () => {
@@ -40,7 +40,12 @@ test("an arrow key typed in the terminal is ReadKey's 0 and 72", async () => {
   pty.open({ columns: 80, rows: 25 });
   await until("the picture", () => screen().rowText(0) === "waiting");
   pty.handleInput("\x1b[A");
-  await until("the end", () => text().includes("exit code 0"));
+  await until("the end", () => !pty.running);
+  await until("the last picture", () => screen().rowText(1) === "got 72");
+  assert.equal(screen().onAlternate, true, "the picture stays after the program ended");
+  assert.ok(!text().includes("exit code"));
+  pty.handleInput(" ");
+  await until("the end text", () => text().includes("exit code 0"));
   const lastFrame = new AnsiScreen();
   lastFrame.feed(text().split("\x1b[?1049l")[0]);
   assert.equal(lastFrame.rowText(1), "got 72");
@@ -48,12 +53,13 @@ test("an arrow key typed in the terminal is ReadKey's 0 and 72", async () => {
 
 test("a function key and an Alt chord reach the program as extended keys", async () => {
   for (const [input, code] of [["\x1bOP", 59], ["\x1bx", 45], ["a", 97]]) {
-    const { pty, text } = openPty(program("crt_key_loop"));
+    const { pty, text, screen } = openPty(program("crt_key_loop"));
     pty.open({ columns: 80, rows: 25 });
     await until("the first frame", () => text().includes("waiting"));
     pty.handleInput(input);
-    await until("the end", () => text().includes("exit code 0"));
-    assert.ok(text().includes(`got ${code}`), `${JSON.stringify(input)} gives ${code}`);
+    await until("the end", () => !pty.running && screen().rowText(1) === `got ${code}`);
+    pty.handleInput(" ");
+    await until("the end text", () => text().includes("exit code 0"));
   }
 });
 
@@ -62,9 +68,14 @@ test("Ctrl+C stops a Crt program, then the screen is the normal one with the end
   pty.open({ columns: 80, rows: 25 });
   await until("a frame", () => text().includes("\x1b[?25l"));
   pty.handleInput("\x03");
-  await until("the end", () => text().includes("stopped"));
-  assert.equal(screen().onAlternate, false);
+  await until("the end", () => !pty.running);
+  assert.equal(screen().onAlternate, true, "the picture stays until a key");
+  assert.ok(!text().includes("stopped"));
+  pty.handleInput("q");
+  assert.ok(text().includes("stopped"));
+  assert.equal(screen().onAlternate, false, "then the normal screen with the end text");
   assert.match(text(), /Press any key to close the terminal/);
+  assert.equal(closed(), 0, "the first key only left the picture");
   pty.handleInput("q");
   assert.equal(closed(), 1);
 });

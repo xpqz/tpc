@@ -162,7 +162,7 @@ test("a write in the last column is followed by a move, never by the terminal's 
   setCell(grid, 0, 1, "S", 0x1e);
   const text = writer.frame(grid);
   assert.ok(text.includes(`R${goto(2, 1)}`), JSON.stringify(text));
-  assert.deepEqual(shown(createScreenWriter().frame(blankGrid()), text).cells.slice(0, 2), [0x20, 7]);
+  assert.equal(shown(createScreenWriter().frame(blankGrid()), text).cells.slice(0, 2).join(), "32,7");
 });
 
 test("changes on several rows give one move per row, in row order", () => {

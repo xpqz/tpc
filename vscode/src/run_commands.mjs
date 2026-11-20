@@ -4,7 +4,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createRunPty } from "./run_terminal.mjs";
-import { CRT_MESSAGE, usesCrt } from "./run_session.mjs";
 
 // NAME.pas -> NAME.wasm, in the same directory.
 export const wasmPathOf = (sourcePath) => sourcePath.replace(/\.pas$/i, ".wasm");
@@ -43,10 +42,6 @@ export function registerRunCommands(vscode, { compileDocument, isCompilable, set
     const document = activeProgram();
     const wasm = document && (await compile(document));
     if (wasm === undefined) return;
-    if (usesCrt(wasm)) {
-      vscode.window.showErrorMessage(CRT_MESSAGE);
-      return;
-    }
     const pty = createRunPty(vscode.EventEmitter, {
       wasm,
       directory: path.dirname(document.fileName),

@@ -75,7 +75,7 @@ test(`${rows.length} terminal sequences give the bytes the browser gives for the
 
 test("function keys are the extended codes of Table C.2", () => {
   assert.deepEqual(inputBytes(`${ESC}OP`), [0, 59]);
-  assert.deepEqual(inputBytes(`${ESC}[21~`), [0, 67]); // F10
+  assert.deepEqual(inputBytes(`${ESC}[21~`), [0, 68]); // F10
   assert.deepEqual(inputBytes(`${ESC}[23~`), [0, 133]); // F11
   assert.deepEqual(inputBytes(`${ESC}[24~`), [0, 134]); // F12
   assert.deepEqual(inputBytes(`${ESC}[1;2P`), [0, 84]); // Shift+F1
