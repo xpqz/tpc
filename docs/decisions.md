@@ -725,3 +725,18 @@ and the driver embeds those copies. Directives, string literals and every newlin
 line numbers are unchanged. The compiler is now 234,407 B. Decision 11 still holds: the
 sources are counted where they live in runtime/. Rejected: reading KB as 1,024 B to pass
 without a change, and trimming comments in runtime/ itself, which would cost readability.
+
+## 58. A VS Code extension outside the budget
+
+User direction: the compiler should also be usable from a modern editor. The extension lives in
+`vscode/` and does not count toward the 15,000 lines. Like `tools/` and the tests, it is
+tooling around the product. It reuses `host/*.js` and the WebAssembly compiler unchanged, and
+any change it needs in a counted path (`compiler/src`, `host/`) is counted as usual. The one
+planned change is an ffi export of the error message from `diag.rs`. That gives the compiler's
+messages a single source, instead of a third copy beside `diag.rs` and `ide/errors.pas`.
+Programs run in a worker thread, never on the extension host's thread. Their files are the
+program's directory, written through to disk as TP did, so `Rewrite`, `Erase` and `Rename` act
+on real files. A setting turns the writes off and keeps them in memory, the way the test
+runner works. Rejected: a Language Server Protocol server, which needs a separate process and
+protocol code for what diagnostics on the WASM compiler already give; in-memory writes by
+default, which would surprise a program that writes a data file.
