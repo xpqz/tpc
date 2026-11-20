@@ -3,8 +3,7 @@
 // Crt draws on a grid shared with the worker; the session turns it into frames (screen_ansi.mjs)
 // on a timer.
 import { Worker } from "node:worker_threads";
-import { newKeyQueue, pushKeys } from "../../host/keys.js";
-import { GRID_BYTES, clearScreen } from "../../host/terminal.js";
+import { newKeyQueue, pushKeys, GRID_BYTES, clearScreen } from "./host.mjs";
 import { ENTER_SCREEN, LEAVE_SCREEN, createScreenWriter } from "./screen_ansi.mjs";
 import { newOutputRing, readOutput } from "./output_ring.mjs";
 import { diskWriter, readSnapshot } from "./program_files.mjs";

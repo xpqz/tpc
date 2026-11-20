@@ -1,8 +1,7 @@
 // Terminal text and key bytes. A program writes CP437 bytes with LF line ends (or CR LF) and
 // reads ReadKey bytes; a terminal shows Unicode with CR LF line ends and types characters and
 // escape sequences.
-import { CP437 } from "../../host/terminal.js";
-import { keyBytes } from "../../host/keys.js";
+import { CP437, keyBytes } from "./host.mjs";
 
 const FIRST_NON_ASCII = 128;
 const CR = 13;

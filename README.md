@@ -144,8 +144,17 @@ exist; the bar has no Edit menu.
 ## VS Code
 
 `vscode/` is an extension: Pascal highlighting, the compiler's errors as you type, and
-compile and run commands. It has no dependencies and is not packaged; try it from the
-repository with a throw-away profile, so that your own settings are left alone:
+compile and run commands. It has no dependencies. `make vscode` builds `tmp/vscode-ext/` (the
+extension with the host modules and the compiler inside it) and `tmp/tp5-pascal-0.1.0.vsix`;
+install that into your VS Code with:
+
+```
+make vscode
+code --install-extension tmp/tp5-pascal-0.1.0.vsix
+```
+
+To try it from the repository instead, with a throw-away profile so that your own settings are
+left alone:
 
 ```
 make wasm                              # builds the compiler the extension loads
@@ -179,6 +188,15 @@ case. Names that are not 8.3, directories and symbolic links are never read or c
 Turbo Pascal, a program may overwrite its own source file. The setting `tp5.run.writeFiles`
 (default on) turns this off: the program still sees the files, but its changes are kept in
 memory and are gone when it ends.
+
+The extension's own tests: `make test` runs its unit tests (they use a fake of the VS Code
+API). `make test-vscode` runs the extension inside the installed VS Code, opens a window and
+checks it through the real API: activation, diagnostics, Compile, Run and Stop. It is not part
+of `make check`. `VSCODE_BIN` names the VS Code executable if it is not in a standard place
+(on macOS, `/Applications/Visual Studio Code.app/Contents/MacOS/Electron`), and
+`TP5_EXTENSION_DIR=tmp/vscode-ext` tests the packaged extension instead of `vscode/`. The test
+profile is a directory under the system temp directory, not under `tmp/`, because VS Code
+listens on a socket in it and a Unix socket path is limited to about 100 characters.
 
 ## Units and routines
 

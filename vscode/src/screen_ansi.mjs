@@ -1,7 +1,7 @@
 // The Crt screen as terminal text. The program draws on a grid (the layout of host/terminal.js:
 // a character and an attribute byte per cell, then the cursor column and row). A frame is the
 // ANSI text that makes the terminal show what changed since the previous frame.
-import { COLS, ROWS, CURSOR, CP437, cellOffset } from "../../host/terminal.js";
+import { COLS, ROWS, CURSOR, CP437, cellOffset } from "./host.mjs";
 
 const ESC = "\x1b";
 const HIDE_CURSOR = `${ESC}[?25l`;

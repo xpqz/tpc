@@ -11,9 +11,7 @@
 // The thread ends only when the extension terminates it, which also ends a program that is
 // blocked in ReadKey or spinning.
 import { parentPort, workerData } from "node:worker_threads";
-import { Host } from "../../host/runtime.js";
-import { keyPressed, readKey } from "../../host/keys.js";
-import { Screen } from "../../host/screen.js";
+import { Host, keyPressed, readKey, Screen } from "./host.mjs";
 import { writeOutput } from "./output_ring.mjs";
 
 const { bytes, files, keys, output, grid } = workerData;
