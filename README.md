@@ -21,10 +21,11 @@ Where the program and the real TP 5.0 differ, the difference is listed in
 make build
 ```
 
-Build output goes to a per-checkout directory chosen by `scripts/cargo-target.sh`
-(`/Volumes/Space2/tpa/<checkout name>` when that disk is mounted, else `target-shared` in the
-checkout), never to `target/`. The Makefile exports it as `CARGO_TARGET_DIR`. To run `cargo`
-directly, set it first:
+Build output goes to the directory `scripts/cargo-target.sh` chooses: `target/` in the
+checkout, unless `TPA_TARGET_ROOT` (or a one-line, git-ignored `.target-root` file at the top of
+the checkout) names another directory, such as one on a faster disk; builds then go to
+`<that directory>/<checkout name>`. The Makefile exports the choice as `CARGO_TARGET_DIR`. To
+run `cargo` directly, set it first:
 
 ```
 export CARGO_TARGET_DIR=$(scripts/cargo-target.sh)
@@ -168,8 +169,8 @@ Message.` and exit code 1. `make oracle` re-derives every corpus expectation wit
 reports differences.
 
 Setup: install DOSBox-X (`dosbox-x` on the path), then extract `TPC.EXE` and `TURBO.TPL` from
-Borland Turbo Pascal 5.0 disk 1 into one directory and point `TP5_HOME` at it (the default is
-`/Users/stefan/work/crust/tp5-oracle/c`). The files are not in the repository; see
+Borland Turbo Pascal 5.0 disk 1 into `tp5/` at the top of the checkout (git-ignored; a symbolic link to the directory
+that holds them will do), or point `TP5_HOME` at them. The files are not in the repository; see
 `docs/references.md` for where to get them. Free Pascal (`fpc -Mtp`) is only a secondary check.
 
 ## Where to read next
@@ -181,3 +182,8 @@ Borland Turbo Pascal 5.0 disk 1 into one directory and point `TP5_HOME` at it (t
 - `docs/decisions.md`: numbered design decisions with their reasons.
 - `docs/size.md`: output sizes and line counts at each phase.
 - `docs/references.md`, `docs/tp-errors.md`: sources and the error-number table.
+
+## Licence
+
+Apache License 2.0; see `LICENSE`. Turbo Pascal 5.0 itself is Borland's and is not part of this
+repository.

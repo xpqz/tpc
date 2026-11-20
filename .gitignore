@@ -3,5 +3,6 @@ target/
 tmp/
 *.wasm
 .DS_Store
-target-shared/
+/.target-root
+/tp5
 worktrees/

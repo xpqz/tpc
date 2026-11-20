@@ -1,10 +1,10 @@
 # SWAG validation sweep
 
-Every `.pas` file of the SWAG archive (4,188 files; cloned at `~/work/crust/swag`, never
-committed here, referred to by path relative to the archive) is compiled and run by the real
+Every `.pas` file of the SWAG archive (4,188 files; a clone beside the repository, or
+`SWAG_DIR`; never committed here, referred to by path relative to the archive) is compiled and run by the real
 TP 5.0 (`tools/tp5.sh`) and by `tp5c` (debug build, `node tests/run.mjs`) and the results are
 classified. Tool: `tools/swag.sh` (`tools/swag.py`, stdlib only). Results: one line per file in
-`~/work/crust/swag-results/results.tsv` (path, content hash, class, TP result, ours, note,
+`swag-results/results.tsv` beside the repository (or `SWAG_RESULTS`) (path, content hash, class, TP result, ours, note,
 tags), outputs of both sides in `swag-results/out/HASH.{tp,ours}`. `tools/swag.sh run` is
 resumable (a file is skipped when its path and hash are cached; `--redo CLASS` repeats a
 class, `--sample N` runs a stratified sample); `tools/swag.sh report` prints the tables below.
