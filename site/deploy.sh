@@ -16,7 +16,7 @@ else
   git -C "$clone" checkout --quiet --orphan gh-pages
 fi
 # Replace the whole tree: files the site no longer has must go.
-git -C "$clone" rm -rq --ignore-unmatch . >/dev/null
+git -C "$clone" rm -rfq --ignore-unmatch . >/dev/null
 cp -R "$site"/. "$clone"/
 touch "$clone/.nojekyll"
 git -C "$clone" add -A
