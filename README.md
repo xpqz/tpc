@@ -163,7 +163,13 @@ Commands (Command Palette, category TP5), with the Turbo Pascal keys in Pascal f
   or **TP5: Stop** ends it. When it ends the terminal prints `exit code N` (after the
   `Runtime error N` line, if there was one) and stays until you press a key.
 
-Programs that use Crt are not supported in the terminal yet.
+Programs that use `Crt` draw in the terminal's alternate screen: the 80x25 text screen with the
+16 DOS colours (blink is shown as a bright background), the CP437 characters and the cursor, at
+about 30 frames a second and only when the screen changed. Typed keys, arrows, Home/End,
+PgUp/PgDn, Ins/Del, F1-F12, Shift/Ctrl/Alt variants and Alt+letter reach `ReadKey` as in
+Turbo Pascal. A terminal smaller than 80x25 shows a request to enlarge it and redraws when it
+grows. `Delay` waits; `Sound` and `NoSound` do nothing. When the program ends its last picture
+stays until you press a key; then the terminal shows `exit code N` and waits for a second key.
 
 The program's directory is its file system. When the program starts, the 8.3-named files in
 it (the directory of the `.pas` file) are its files. By default what it does to them is done

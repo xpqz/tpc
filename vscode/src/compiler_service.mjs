@@ -10,8 +10,10 @@ export class CompilerService {
     this.module = module;
   }
 
+  // Compiled synchronously: the asynchronous WebAssembly.compile hands the work to V8's
+  // background threads, and on Node 23 it sometimes never completes (see tests/run.mjs).
   static async fromFile(path) {
-    return new CompilerService(await WebAssembly.compile(fs.readFileSync(path)));
+    return new CompilerService(new WebAssembly.Module(fs.readFileSync(path)));
   }
 
   // Compiles `main` (bytes) as the file `mainName`, with `files` (Map name -> bytes) as the
