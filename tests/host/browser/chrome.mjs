@@ -97,7 +97,7 @@ async function startChrome(profile) {
 
 // A browser backend: { navigate(url), run(expression) -> JSON text, key(spec), stop() }.
 // Chrome speaks CDP, Firefox WebDriver BiDi; both over Node's WebSocket.
-async function chromeBackend(profile) {
+export async function chromeBackend(profile) {
   const chrome = await startChrome(profile);
   const targets = await (await fetch(`http://localhost:${chrome.port}/json/list`)).json();
   const cdp = connect(targets.find((t) => t.type === "page").webSocketDebuggerUrl);
@@ -118,6 +118,12 @@ async function chromeBackend(profile) {
       await press("rawKeyDown", base);
       if (event.text) await press("char", base);
       await press("keyUp", base);
+    },
+    // PNG bytes of a page rectangle { x, y, width, height } (Chrome only).
+    async screenshot(clip) {
+      const { data } = await cdp.send("Page.captureScreenshot",
+        { format: "png", clip: { ...clip, scale: 1 } });
+      return Buffer.from(data, "base64");
     },
     async contexts() {
       return (await (await fetch(`http://localhost:${chrome.port}/json/list`)).json())

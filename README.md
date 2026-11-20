@@ -6,6 +6,14 @@ the IDE are written in Pascal and compiled by this compiler. The compiler itself
 WASM module, so the whole system runs in a browser: edit, compile and run Pascal on a
 80x25 text screen.
 
+[![The IDE in a browser: open a program, a compile error, the fix, the run](docs/images/ide-demo.gif)](https://xpqz.github.io/tpc/)
+
+Try it in your browser: <https://xpqz.github.io/tpc/>. The first load registers a service
+worker (it adds the headers the page needs for shared memory) and then opens the IDE. Press
+F3 and open `DEMO`, a short Crt program; F9 compiles, Ctrl-F9 runs. `make site` builds the
+site into `tmp/site/`, `make deploy-site` publishes it to the `gh-pages` branch, and
+`make demo-gif` records the animation.
+
 The compiler, runtime, IDE and host glue together are limited to 15,000 lines (counted by
 `tools/loc.sh`; tests are free). The limit is there so that the code stays small enough to
 read: the source is meant to be studied as a worked example of a one-pass-per-stage compiler
