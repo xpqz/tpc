@@ -1,7 +1,7 @@
 CARGO_TARGET_DIR := $(shell scripts/cargo-target.sh)
 export CARGO_TARGET_DIR
 
-.PHONY: no-conflict-markers build test test-browser fmt clippy check wasm loc hooks oracle oracle-tables ide
+.PHONY: no-conflict-markers build test test-browser fmt clippy check wasm loc hooks oracle oracle-tables ide site deploy-site test-site demo-gif
 
 build:
 	cargo build
@@ -48,6 +48,29 @@ ide: build wasm
 	@echo "IDE: $(IDE_URL)"
 	@(sleep 1; command -v open >/dev/null && open "$(IDE_URL)") &
 	node tools/serve.mjs $(PORT)
+
+# The static site for GitHub Pages in tmp/site/: the host page, both WASM modules, a sample
+# program and the service worker that adds COOP/COEP (site/). The site is the `ide` build
+# with different files around it.
+site: build wasm
+	rm -rf tmp/site
+	mkdir -p tmp/site/host
+	cp host/*.js host/index.html tmp/site/host/
+	cp site/index.html site/coi-sw.js site/demo.pas tmp/site/
+	$(CARGO_TARGET_DIR)/debug/tp5c ide/ide.pas -o tmp/site/ide.wasm
+	cp $(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/tp5c.wasm tmp/site/tp5c.wasm
+
+# Pushes tmp/site/ to the gh-pages branch of origin (see site/deploy.sh).
+deploy-site: site
+	site/deploy.sh
+
+# Opens Chrome headless against a server without COOP/COEP headers, at / and at /tpc/.
+test-site: site
+	node tests/host/browser/site.mjs
+
+# Records docs/images/ide-demo.gif from the IDE in headless Chrome; needs ffmpeg.
+demo-gif: site
+	node tools/demo_gif.mjs
 
 hooks:
 	install -m 755 scripts/pre-commit "$$(git rev-parse --git-path hooks)/pre-commit"
