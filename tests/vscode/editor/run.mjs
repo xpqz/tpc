@@ -51,9 +51,9 @@ const result = spawnSync(
   ],
   { env, encoding: "utf8", timeout: 180000 },
 );
-// VS Code's agent host logs a line per second to stderr; the test results are on stdout.
+// VS Code's agent host logs to stderr; the test results are on stdout.
 process.stdout.write(result.stdout);
-process.stderr.write(result.stderr.split("\n").filter((line) => !line.includes("[AgentHost]")).join("\n"));
+process.stderr.write(result.stderr.split("\n").filter((line) => !line.includes("AgentHost")).join("\n"));
 fs.rmSync(profile, { recursive: true, force: true });
 if (result.error) console.error(result.error.message);
 process.exit(result.status ?? 1);
