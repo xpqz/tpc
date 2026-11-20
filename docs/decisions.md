@@ -740,3 +740,14 @@ on real files. A setting turns the writes off and keeps them in memory, the way 
 runner works. Rejected: a Language Server Protocol server, which needs a separate process and
 protocol code for what diagnostics on the WASM compiler already give; in-memory writes by
 default, which would surprise a program that writes a data file.
+
+## 59. A live demo on GitHub Pages
+
+User direction: the README shows the running IDE, as an animated GIF and as a live demo. GitHub
+Pages cannot send the COOP/COEP headers that SharedArrayBuffer needs, so the demo site adds a
+small service worker of our own. It refetches each request and returns the response with
+those two headers; the first visit reloads once when the worker takes control. The worker and
+the site assembly (`make site`) are deployment tooling in `site/`, outside the budget like
+`tools/`. The product's host code is served unchanged. The site is built locally and pushed
+to the `gh-pages` branch. Rejected: a third-party service-worker script (a dependency); a CI
+workflow that builds Rust on every push (more machinery than one manual deploy step).
