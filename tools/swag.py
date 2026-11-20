@@ -3,8 +3,9 @@
 usage: python3 -I tools/swag.py run [--sample N] [--jobs J] [--only PREFIX] [--redo CLASS]
        python3 -I tools/swag.py report
 
-Environment: SWAG_DIR (archive, default ~/work/crust/swag), SWAG_RESULTS (default
-~/work/crust/swag-results), TP5C (compiler binary, default: the debug build of this checkout).
+Environment: SWAG_DIR (a clone of the archive, default: swag/ beside the main checkout),
+SWAG_RESULTS (default: swag-results/ beside it), TP5C (compiler binary, default: the debug
+build of this checkout).
 
 `run` is resumable: results.tsv in SWAG_RESULTS holds one line per file, keyed by path and
 content hash; files already there are skipped. Each line:
@@ -23,9 +24,12 @@ import threading
 from collections import Counter, defaultdict
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HOME = os.path.expanduser("~")
-SWAG = os.environ.get("SWAG_DIR", HOME + "/work/crust/swag")
-RESULTS = os.environ.get("SWAG_RESULTS", HOME + "/work/crust/swag-results")
+# The directory that holds the main checkout (a worktree's git common dir names it).
+BESIDE = os.path.dirname(os.path.dirname(subprocess.run(
+    ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+    cwd=ROOT, capture_output=True, text=True).stdout.strip()))
+SWAG = os.environ.get("SWAG_DIR", BESIDE + "/swag")
+RESULTS = os.environ.get("SWAG_RESULTS", BESIDE + "/swag-results")
 TSV = RESULTS + "/results.tsv"
 TP5C = os.environ.get("TP5C") or subprocess.run(
     [ROOT + "/scripts/cargo-target.sh"], capture_output=True, text=True).stdout.strip() + "/debug/tp5c"

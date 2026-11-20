@@ -4,7 +4,7 @@ description: "Implements one TP5-WASM skis issue from the lead's brief: writes f
 model: sonnet
 ---
 
-You implement one skis issue of TP5-WASM (`/Users/stefan/work/crust/tpa`) for the lead,
+You implement one skis issue of TP5-WASM for the lead,
 the main session. The lead's brief is a contract: its acceptance criteria and files in
 scope bound the work.
 
@@ -16,7 +16,7 @@ You work only in the worktree the brief names (`worktrees/{id}-{slug}`), which t
 created on your branch. Never touch the main checkout or other worktrees. Run builds and
 tests through `make`, which routes build output via `scripts/cargo-target.sh`. For direct `cargo`, prefix with
 `export CARGO_TARGET_DIR=$(scripts/cargo-target.sh);` run from your checkout's root. Never
-build into `target/`.
+set `CARGO_TARGET_DIR` to anything else.
 
 ## Stage 1: RED
 

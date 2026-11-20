@@ -28,11 +28,13 @@
 # prints the screen dump (tools/crt/SCRDUMP.PAS): the 25 text rows with trailing blanks cut,
 # `cursor COL ROW`, `exit CODE` and `attr ROW COL LEN HEX` runs for cells whose attribute is
 # not 07. Files the program creates are discarded. The TP 5.0 files are not in the repo;
-# see docs/references.md. TP5_HOME overrides their location. A run is killed after
-# TP5_TIMEOUT seconds (default 60) and reported as a timeout (exit 3).
+# see docs/references.md. They are looked for in tp5/ at the top of the main checkout
+# (git-ignored; a symbolic link to the directory that holds them will do); TP5_HOME overrides
+# that. A run is killed after TP5_TIMEOUT seconds (default 60) and reported as a timeout (exit 3).
 set -e
 export LC_ALL=C
-home=${TP5_HOME:-/Users/stefan/work/crust/tp5-oracle/c}
+main=$(cd "$(dirname "$0")/.." && cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && pwd)
+home=${TP5_HOME:-$main/tp5}
 [ -f "$home/TPC.EXE" ] || { echo "tools/tp5.sh: no TPC.EXE in $home" >&2; exit 2; }
 w=$(mktemp -d "${TMPDIR:-/tmp}/tp5.XXXXXX")
 trap 'rm -rf "$w"' EXIT

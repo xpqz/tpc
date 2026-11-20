@@ -120,11 +120,12 @@ two files' worth of knowledge is split, not placed in the nearer one.
     intermediate overflow and on error numbers; never use it for expected output.
 - Target `wasm32-unknown-unknown` is installed.
 - Scratch files go in `tmp/` in the repo (git-ignored), never `/tmp`.
-- Build artefacts go to `/Volumes/Space2/tpa/<checkout name>` (or `<checkout>/target-shared`
-  when the SSD is absent), never `target/`. `scripts/cargo-target.sh` decides. The Makefile
-  exports `CARGO_TARGET_DIR` from it, so run builds and tests through `make`. For direct
-  `cargo` use, `scripts/zshenv.zsh` (to be appended to `~/.zshenv` by the user) exports it;
-  if `$CARGO_TARGET_DIR` is empty, prefix with `export CARGO_TARGET_DIR=$(scripts/cargo-target.sh);`.
+- Build artefacts go where `scripts/cargo-target.sh` says: `<checkout>/target`, or
+  `<root>/<checkout name>` when `TPA_TARGET_ROOT` or the git-ignored `.target-root` file of the
+  main checkout names a root. The Makefile exports `CARGO_TARGET_DIR` from it, so run builds
+  and tests through `make`. For direct `cargo` use, prefix with
+  `export CARGO_TARGET_DIR=$(scripts/cargo-target.sh);`.
+- The TP 5.0 files live in `tp5/` at the top of the main checkout (git-ignored), or `TP5_HOME`.
 
 ## Testing
 
