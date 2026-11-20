@@ -5,55 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { buildWasm, root } from "./build.mjs";
-
-function fakeVscode(documents, compilerPath) {
-  const shown = new Map();
-  const handlers = {};
-  const event = (name) => (handler) => ((handlers[name] = handler), { dispose() {} });
-  return {
-    shown,
-    handlers,
-    api: {
-      languages: {
-        createDiagnosticCollection: () => ({
-          set: (uri, list) => shown.set(uri.fsPath, list),
-          delete: (uri) => shown.delete(uri.fsPath),
-          dispose() {},
-        }),
-      },
-      workspace: {
-        textDocuments: documents,
-        getConfiguration: () => ({
-          get: (key) => ({ compilerPath, "diagnostics.onType": true })[key],
-        }),
-        onDidOpenTextDocument: event("open"),
-        onDidSaveTextDocument: event("save"),
-        onDidChangeTextDocument: event("change"),
-        onDidCloseTextDocument: event("close"),
-        onDidChangeConfiguration: event("config"),
-      },
-      Uri: { file: (fsPath) => ({ fsPath }) },
-      Range: class {
-        constructor(line, start, endLine, end) {
-          Object.assign(this, { line, start, endLine, end });
-        }
-      },
-      Diagnostic: class {
-        constructor(range, message, severity) {
-          Object.assign(this, { range, message, severity });
-        }
-      },
-      DiagnosticSeverity: { Error: 0 },
-    },
-  };
-}
-
-const document = (fileName, text) => ({
-  fileName,
-  languageId: "tp5pascal",
-  uri: { scheme: "file" },
-  getText: () => text,
-});
+import { fakeDocument as document, fakeVscode } from "./fake_vscode.mjs";
 
 test("an error in a document is published, and a fix clears it", async () => {
   const dir = fs.mkdtempSync(path.join(root, "tmp/vscode-glue-"));
