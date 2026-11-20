@@ -193,6 +193,11 @@ pub fn message(code: u16) -> Option<&'static str> {
     Some(TABLE[i].1)
 }
 
+/// The message of `code`, or "Unknown error" for a number without a table entry.
+pub fn text(code: u16) -> &'static str {
+    message(code).unwrap_or("Unknown error")
+}
+
 /// Appends the decimal form of `n` to `out`.
 pub fn push_dec(out: &mut String, n: i64) {
     if n < 0 {
@@ -222,6 +227,6 @@ pub fn render(name: &str, d: &Diag) -> String {
     s.push_str("): Error ");
     push_dec(&mut s, d.code as i64);
     s.push_str(": ");
-    s.push_str(message(d.code).unwrap_or("Unknown error"));
+    s.push_str(text(d.code));
     s
 }

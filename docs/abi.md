@@ -184,7 +184,8 @@ a nested routine are error 200 in the runtime source. Currently: `write` is `Hos
 
 Compiler API exported from `compiler.wasm` (`plan.md` §3): `alloc(n) -> ptr`,
 `compile(src_ptr, src_len, flags) -> status`, `out_ptr()`, `out_len()`, `err_line()`,
-`err_col()`, `err_code()`, `err_file()`, `add_file(name_ptr, name_len, src_ptr, src_len) -> status`.
+`err_col()`, `err_code()`, `err_file()`, `err_message_ptr()` and `err_message_len()` (the TP message
+of the last error, static text in the module's memory), `add_file(name_ptr, name_len, src_ptr, src_len) -> status`.
 
 Units (decision 27): the host registers every unit source before `compile`, and the compiler
 never calls back. `alloc` hands out one buffer that the next `alloc` invalidates, so the host

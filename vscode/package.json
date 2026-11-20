@@ -1,0 +1,44 @@
+{
+  "name": "tp5-pascal",
+  "displayName": "Turbo Pascal 5.0 (TP5-WASM)",
+  "description": "Turbo Pascal 5.0 language support and compiler diagnostics, from the TP5-WASM compiler.",
+  "version": "0.1.0",
+  "publisher": "tp5-wasm",
+  "license": "Apache-2.0",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Programming Languages"],
+  "main": "./extension.cjs",
+  "activationEvents": ["onLanguage:tp5pascal"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "tp5pascal",
+        "aliases": ["Turbo Pascal", "tp5pascal"],
+        "extensions": [".pas", ".inc"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "tp5pascal",
+        "scopeName": "source.tp5pascal",
+        "path": "./syntaxes/tp5pascal.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Turbo Pascal 5.0",
+      "properties": {
+        "tp5.diagnostics.onType": {
+          "type": "boolean",
+          "default": true,
+          "description": "Compile while typing (after a short pause). When off, files are compiled when opened and saved."
+        },
+        "tp5.compilerPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path of tp5c.wasm. Empty: the release build of the repository this extension is in."
+        }
+      }
+    }
+  }
+}
