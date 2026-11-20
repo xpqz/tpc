@@ -126,3 +126,14 @@ pub extern "C" fn err_col() -> u32 {
 pub extern "C" fn err_file() -> u32 {
     with(|s| s.err.file)
 }
+
+/// The message text of the last error: static text, so the pointer stays valid.
+#[no_mangle]
+pub extern "C" fn err_message_ptr() -> *const u8 {
+    with(|s| crate::diag::text(s.err.code).as_ptr())
+}
+
+#[no_mangle]
+pub extern "C" fn err_message_len() -> usize {
+    with(|s| crate::diag::text(s.err.code).len())
+}

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Turbo Pascal 5.0",
+  "scopeName": "source.tp5pascal",
+  "patterns": [
+    { "include": "#directive" },
+    { "include": "#brace-comment" },
+    { "include": "#paren-comment" },
+    { "include": "#string" },
+    { "include": "#char-literal" },
+    { "include": "#number" },
+    { "include": "#control-keyword" },
+    { "include": "#declaration-keyword" },
+    { "include": "#word-operator" },
+    { "include": "#type-keyword" },
+    { "include": "#constant" },
+    { "include": "#standard-type" },
+    { "include": "#standard-routine" }
+  ],
+  "repository": {
+    "directive": {
+      "patterns": [
+        { "name": "meta.preprocessor.tp5pascal", "begin": "\\{\\$", "end": "\\}" },
+        { "name": "meta.preprocessor.tp5pascal", "begin": "\\(\\*\\$", "end": "\\*\\)" }
+      ]
+    },
+    "brace-comment": {
+      "name": "comment.block.brace.tp5pascal",
+      "begin": "\\{",
+      "end": "\\}"
+    },
+    "paren-comment": {
+      "name": "comment.block.paren.tp5pascal",
+      "begin": "\\(\\*",
+      "end": "\\*\\)"
+    },
+    "string": {
+      "name": "string.quoted.single.tp5pascal",
+      "match": "'(?:[^']|'')*'"
+    },
+    "char-literal": {
+      "name": "constant.character.tp5pascal",
+      "match": "#(?:\\$[0-9A-Fa-f]+|[0-9]+)"
+    },
+    "number": {
+      "patterns": [
+        { "name": "constant.numeric.hex.tp5pascal", "match": "\\$[0-9A-Fa-f]+" },
+        {
+          "name": "constant.numeric.float.tp5pascal",
+          "match": "\\b[0-9]+(?:\\.[0-9]+(?:[eE][+-]?[0-9]+)?|[eE][+-]?[0-9]+)(?![0-9A-Za-z_])"
+        },
+        { "name": "constant.numeric.integer.tp5pascal", "match": "\\b[0-9]+\\b" }
+      ]
+    },
+    "control-keyword": {
+      "name": "keyword.control.tp5pascal",
+      "match": "(?i)\\b(?:begin|end|if|then|else|case|of|while|do|for|to|downto|repeat|until|with|goto)\\b"
+    },
+    "declaration-keyword": {
+      "name": "keyword.other.tp5pascal",
+      "match": "(?i)\\b(?:program|unit|uses|interface|implementation|label|const|type|var|procedure|function|forward|external|inline|interrupt|absolute)\\b"
+    },
+    "word-operator": {
+      "name": "keyword.operator.word.tp5pascal",
+      "match": "(?i)\\b(?:and|or|not|xor|div|mod|shl|shr|in)\\b"
+    },
+    "type-keyword": {
+      "name": "storage.type.tp5pascal",
+      "match": "(?i)\\b(?:array|record|set|file|packed|string)\\b"
+    },
+    "constant": {
+      "name": "constant.language.tp5pascal",
+      "match": "(?i)\\b(?:nil|true|false|maxint)\\b"
+    },
+    "standard-type": {
+      "name": "support.type.tp5pascal",
+      "match": "(?i)\\b(?:integer|byte|word|shortint|longint|boolean|char|real|single|double|extended|comp|pointer|text)\\b"
+    },
+    "standard-routine": {
+      "name": "support.function.tp5pascal",
+      "match": "(?i)\\b(?:write|writeln|read|readln|abs|sqr|sqrt|sin|cos|arctan|ln|exp|round|trunc|frac|int|odd|chr|ord|succ|pred|length|copy|concat|pos|delete|insert|str|val|upcase|inc|dec|new|dispose|getmem|freemem|halt|exit|assign|reset|rewrite|append|close|eof|eoln|seek|filepos|filesize|blockread|blockwrite|erase|rename|ioresult|fillchar|move|sizeof|addr|ptr|random|randomize|paramcount|paramstr|include|exclude|low|high|swap|hi|lo|keypressed|readkey|clrscr|gotoxy|delay)\\b"
+    }
+  }
+}
