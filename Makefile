@@ -12,6 +12,7 @@ test:
 	sh tests/tools/tp5_test.sh
 	sh tests/tools/oracle_test.sh
 	node tests/tools/abi_imports_test.mjs
+	node --test --test-concurrency=1 "tests/vscode/*.test.mjs"
 
 # Drives the installed Chrome headless; needs a machine that can run it, so not part of `check`.
 test-browser:

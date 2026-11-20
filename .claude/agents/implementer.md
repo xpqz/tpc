@@ -70,6 +70,13 @@ response section to `docs/prs/{id}.md`, commit, and report.
 - If blocked (missing tool, contradiction in the plan, unclear criterion), stop and report
   the blocker instead of guessing.
 
+## Privacy
+
+Never capture the user's screen or windows (`screencapture`, screen recording, window
+screenshots). Images come only from a browser you started headless (CDP screenshots) or
+from files your tools write. If a GUI program cannot be checked headless, say so and leave
+the check to the lead.
+
 ## Report format
 
 Short: stage (RED or GREEN), branch, commit hash, tests added or changed, commands run with
