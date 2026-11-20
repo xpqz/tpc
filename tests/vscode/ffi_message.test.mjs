@@ -12,7 +12,7 @@ test.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
 
 const cases = [
   { code: 3, source: "program a;\nbegin\n  x := 1;\nend.\n" },
-  { code: 5, source: "program a;\nbegin\n  if then;\nend.\n" },
+  { code: 42, source: "program a;\nbegin\n  if then;\nend.\n" },
   { code: 10, source: "program a;\nbegin\n" },
   { code: 15, source: "program a;\nuses nothere;\nbegin\nend.\n" },
   { code: 26, source: "program a;\nvar i: integer;\nbegin\n  i := 's';\nend.\n" },
