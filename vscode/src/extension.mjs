@@ -8,6 +8,7 @@ import { decodeLatin1, encodeLatin1 } from "./latin1.mjs";
 import { compilerPath } from "./locate.mjs";
 import { splitLines } from "./positions.mjs";
 import { buildReport } from "./report.mjs";
+import { registerRunCommands } from "./run_commands.mjs";
 import { debouncer } from "./scheduler.mjs";
 import { selectSources } from "./sources.mjs";
 
@@ -72,6 +73,7 @@ export function activate(vscode, context) {
       return files.has(name) ? splitLines(decodeLatin1(files.get(name))) : undefined;
     };
     publish(mainPath, directory, buildReport(result, fileName, linesOf));
+    return result;
   }
 
   // Sets the diagnostics of this compile and clears those it set on other files last time.
@@ -108,6 +110,7 @@ export function activate(vscode, context) {
 
   disposables = [
     diagnostics,
+    ...registerRunCommands(vscode, { compileDocument: check, isCompilable, settings }),
     vscode.workspace.onDidOpenTextDocument((d) => isCompilable(d) && check(d)),
     vscode.workspace.onDidSaveTextDocument((d) => isCompilable(d) && check(d)),
     vscode.workspace.onDidChangeTextDocument(({ document }) => {

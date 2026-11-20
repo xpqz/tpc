@@ -84,19 +84,20 @@ test("stop ends a program blocked in ReadLn", async () => {
   assert.match(text(), /stopped/);
 });
 
-test("stop ends a program that spins, and the calling thread stays responsive", async () => {
+test("a spinning program does not block the calling thread, and stop ends it", async () => {
   const { session, text } = run(program("spin"));
   await until("the output", () => text().includes("spinning"));
   let ticks = 0;
   const timer = setInterval(() => ticks++, 10);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  clearInterval(timer);
+  assert.ok(ticks >= 3, `only ${ticks} ticks while the program spun`);
   session.stop();
   const outcome = await Promise.race([
     session.ended,
     new Promise((resolve) => setTimeout(() => resolve("hung"), 3000)),
   ]);
-  clearInterval(timer);
   assert.deepEqual(outcome, { kind: "stopped" });
-  assert.ok(ticks >= 1);
 });
 
 test("stop twice, and after the end, does nothing", async () => {

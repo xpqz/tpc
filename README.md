@@ -133,6 +133,39 @@ in their place: `Alt-K B` is `^K B`, `Alt-Q F` is `^Q F` (decision 41). Every co
 the menus, so none depends on F9 or F10. Only the Alt-letter menu keys in the table above
 exist; the bar has no Edit menu.
 
+## VS Code
+
+`vscode/` is an extension: Pascal highlighting, the compiler's errors as you type, and
+compile and run commands. It has no dependencies and is not packaged; try it from the
+repository with a throw-away profile, so that your own settings are left alone:
+
+```
+make wasm                              # builds the compiler the extension loads
+code --extensionDevelopmentPath=$PWD/vscode --user-data-dir=$PWD/tmp/vscode-profile .
+```
+
+Commands (Command Palette, category TP5), with the Turbo Pascal keys in Pascal files:
+
+- **TP5: Compile** (`F9`) writes `NAME.wasm` beside `NAME.pas`; an error is shown in the editor
+  and as a message with the file, line and error number. `F9` replaces "toggle breakpoint" in
+  Pascal files only.
+- **TP5: Run** (`Ctrl+F9`, and the play button in the editor's title bar) compiles and runs the
+  program in a terminal. The program runs in a worker thread, never in the editor. `WriteLn`
+  output streams to the terminal, `ReadLn` reads what you type. `Ctrl+C`, closing the terminal
+  or **TP5: Stop** ends it. When it ends the terminal prints `exit code N` (after the
+  `Runtime error N` line, if there was one) and stays until you press a key.
+
+Programs that use Crt are not supported in the terminal yet.
+
+The program's directory is its file system. When the program starts, the 8.3-named files in
+it (the directory of the `.pas` file) are its files. By default what it does to them is done
+on disk: a file it writes is saved when it is closed, `Erase` and `Rename` delete and rename the
+real file. A file that is already there keeps its spelling, a new one is written in upper
+case. Names that are not 8.3, directories and symbolic links are never read or changed. As in
+Turbo Pascal, a program may overwrite its own source file. The setting `tp5.run.writeFiles`
+(default on) turns this off: the program still sees the files, but its changes are kept in
+memory and are gone when it ends.
+
 ## Units and routines
 
 `System` (always present), `Crt`, `Dos` and `Utils` are built in. `Utils` is not part of TP 5.0:

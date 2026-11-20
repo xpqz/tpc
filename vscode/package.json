@@ -5,16 +5,28 @@
   "version": "0.1.0",
   "publisher": "tp5-wasm",
   "license": "Apache-2.0",
-  "engines": { "vscode": "^1.90.0" },
-  "categories": ["Programming Languages"],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
   "main": "./extension.cjs",
-  "activationEvents": ["onLanguage:tp5pascal"],
+  "activationEvents": [
+    "onLanguage:tp5pascal"
+  ],
   "contributes": {
     "languages": [
       {
         "id": "tp5pascal",
-        "aliases": ["Turbo Pascal", "tp5pascal"],
-        "extensions": [".pas", ".inc"],
+        "aliases": [
+          "Turbo Pascal",
+          "tp5pascal"
+        ],
+        "extensions": [
+          ".pas",
+          ".inc"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -37,8 +49,62 @@
           "type": "string",
           "default": "",
           "description": "Path of tp5c.wasm. Empty: the release build of the repository this extension is in."
+        },
+        "tp5.run.writeFiles": {
+          "type": "boolean",
+          "default": true,
+          "description": "Write the files a program creates, changes, erases or renames to its directory. When off, a program's file changes stay in memory and are gone when it ends."
         }
       }
+    },
+    "commands": [
+      {
+        "command": "tp5.compile",
+        "title": "Compile",
+        "category": "TP5"
+      },
+      {
+        "command": "tp5.run",
+        "title": "Run",
+        "category": "TP5",
+        "icon": "$(play)"
+      },
+      {
+        "command": "tp5.stop",
+        "title": "Stop",
+        "category": "TP5"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "tp5.compile",
+        "key": "f9",
+        "when": "editorLangId == tp5pascal"
+      },
+      {
+        "command": "tp5.run",
+        "key": "ctrl+f9",
+        "when": "editorLangId == tp5pascal"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "tp5.run",
+          "when": "resourceLangId == tp5pascal",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "tp5.compile",
+          "when": "editorLangId == tp5pascal"
+        },
+        {
+          "command": "tp5.run",
+          "when": "editorLangId == tp5pascal"
+        }
+      ]
     }
   }
 }
