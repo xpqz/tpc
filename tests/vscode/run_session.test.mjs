@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { startRun, usesCrt, CRT_MESSAGE } from "../../vscode/src/run_session.mjs";
+import { startRun, usesCrt } from "../../vscode/src/run_session.mjs";
 import { program, askProgram, scratchDirectory, until } from "./programs.mjs";
 
 function run(wasm, options = {}) {
@@ -215,5 +215,4 @@ test("usesCrt: a program that imports screen is detected, a plain one is not", (
   assert.equal(usesCrt(program("hello")), false);
   assert.equal(usesCrt(askProgram()), false);
   assert.equal(usesCrt(program("crt_program")), true);
-  assert.match(CRT_MESSAGE, /^Programs that use Crt are not supported in the terminal yet\.$/);
 });

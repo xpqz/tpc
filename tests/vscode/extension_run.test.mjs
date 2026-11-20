@@ -119,13 +119,17 @@ test("run with a compile error opens no terminal", async () => {
   });
 });
 
-test("run of a program that uses Crt says so and opens no terminal", async () => {
+test("run of a program that uses Crt opens a terminal and draws on the alternate screen", async () => {
   await withExtension(CRT, {}, async ({ vscode, run }) => {
     await run("tp5.run");
-    assert.equal(vscode.terminals.length, 0);
-    assert.deepEqual(vscode.messages.error, [
-      "Programs that use Crt are not supported in the terminal yet.",
-    ]);
+    assert.deepEqual(vscode.messages.error, []);
+    assert.equal(vscode.terminals.length, 1);
+    const written = [];
+    const { pty } = vscode.terminals[0].options;
+    pty.onDidWrite((text) => written.push(text));
+    pty.open({ columns: 80, rows: 25 });
+    await until("the end", () => written.join("").includes("exit code 0"));
+    assert.ok(written.join("").startsWith("\x1b[?1049h"));
   });
 });
 
