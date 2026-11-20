@@ -1,7 +1,7 @@
 CARGO_TARGET_DIR := $(shell scripts/cargo-target.sh)
 export CARGO_TARGET_DIR
 
-.PHONY: no-conflict-markers build test test-browser fmt clippy check wasm loc hooks oracle oracle-tables
+.PHONY: no-conflict-markers build test test-browser fmt clippy check wasm loc hooks oracle oracle-tables ide
 
 build:
 	cargo build
@@ -35,6 +35,19 @@ wasm:
 
 loc:
 	tools/loc.sh
+
+# Builds the IDE and the in-browser compiler into tmp/, serves the repository with the
+# COOP/COEP headers the page needs, and opens the IDE in the default browser (macOS `open`).
+# Ctrl-C stops the server. PORT=n picks another port.
+PORT ?= 8080
+IDE_URL = http://localhost:$(PORT)/host/index.html?wasm=/tmp/ide.wasm&compiler=/tmp/tp5c.wasm
+ide: build wasm
+	mkdir -p tmp
+	$(CARGO_TARGET_DIR)/debug/tp5c ide/ide.pas -o tmp/ide.wasm
+	cp $(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/tp5c.wasm tmp/tp5c.wasm
+	@echo "IDE: $(IDE_URL)"
+	@(sleep 1; command -v open >/dev/null && open "$(IDE_URL)") &
+	node tools/serve.mjs $(PORT)
 
 hooks:
 	install -m 755 scripts/pre-commit "$$(git rev-parse --git-path hooks)/pre-commit"

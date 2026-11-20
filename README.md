@@ -90,7 +90,14 @@ node tools/serve.mjs 8080
 # http://localhost:8080/host/index.html?wasm=/tmp/h.wasm   (the repository's tmp/ directory)
 ```
 
-To run the IDE, compile `ide/ide.pas` and pass the compiler module too (copy it where the
+To run the IDE in one step:
+
+```
+make ide            # PORT=8081 make ide for another port; Ctrl-C stops the server
+```
+
+It builds the IDE and the in-browser compiler into `tmp/`, starts `tools/serve.mjs` and opens
+the IDE in the default browser. By hand, the same steps are: compile `ide/ide.pas` and pass the compiler module too (copy it where the
 server can reach it):
 
 ```
